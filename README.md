@@ -15,3 +15,8 @@
 # Connect Wifi
 
 This project has built-in Wifi manager, once startup is complete, connect to SSID: `esp32Project` Password: `12345678` to connect Wifi.
+
+<p align="center">
+  <img src="img/wifi.jpg" alt="wifi" width="45%"/>
+  <img src="img/autoConnect.jpg" alt="autoConnect" width="16%"/>
+</p>
