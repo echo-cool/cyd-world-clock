@@ -12,6 +12,8 @@ TFT_eSprite sprite = TFT_eSprite(&tft); // Sprite class
 #define CLK_PIN  25
 #define CS_PIN   33
 
+int MARKET_STATUS_MESSAGE_MIN = 10;
+
 XPT2046_Bitbang touchscreen(MOSI_PIN, MISO_PIN, CLK_PIN, CS_PIN);
 
 int clockFont = 4;  // Changed to font 4 for better readability 
@@ -38,7 +40,7 @@ struct TradingSession {
 struct MarketInfo {
     String exchange;
     bool hasMarket;
-    TradingSession sessions[4]; // Support up to 4 trading sessions per market
+    TradingSession sessions[5]; // Support up to 5 trading sessions per market
     int sessionCount;
 };
 
@@ -82,11 +84,28 @@ WorldClockZone worldZones[4] = {
      }, 4}, ""}
 };
 
+// Include serial commands after WorldClockZone is defined
+#include "serialCommands.h"
+
 // Global variables for touch and backlight control
 bool firstDraw = true;
 bool backlightOn = true;
 int backlightLevel = 80; // PWM value (0-255)
 uint16_t touchX, touchY;
+
+// Global variables for flashing market status messages
+unsigned long lastFlashTime = 0;
+bool flashState = true;
+const unsigned long flashInterval = 1000; // 1 second
+bool flashJustChanged = false;
+
+// Function declarations for flashing functionality
+bool shouldMessageFlash(String message);
+void updateFlashState();
+void resetFlashChangeFlag();
+void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex);
+bool needsFlashOnlyUpdate(WorldClockZone &zone);
+void adjustBrightnessBasedOnHomeTime();
 
 void SetupCYD()
 {
@@ -334,8 +353,8 @@ String getMarketStatus(WorldClockZone &zone)
                     // For overnight sessions that span from Friday to Sunday
                     if (sessionEnd < sessionStart && currentTotalMinutes < sessionEnd) {
                         int minutesToClose = sessionEnd - currentTotalMinutes;
-                        if (minutesToClose <= 30) {
-                            return zone.market.exchange + " " + session.sessionName + " CLOSE " + String(minutesToClose) + "MIN";
+                        if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
+                            return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + "MIN";
                         }
                         return zone.market.exchange + " " + session.sessionName + " OPEN";
                     }
@@ -345,10 +364,10 @@ String getMarketStatus(WorldClockZone &zone)
                 if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 18 * 60) { // After 6 PM Sunday
                     // Sunday 6 PM ET is when futures markets typically open for the week
                     int minutesToClose = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
-                    if (minutesToClose <= 30 && currentTotalMinutes >= 18 * 60) {
-                        return zone.market.exchange + " WEEKEND CLOSE " + String(minutesToClose) + "MIN";
+                    if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN && currentTotalMinutes >= 18 * 60) {
+                        return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + "MIN";
                     }
-                    return zone.market.exchange + " WEEKEND OPEN";
+                    return zone.market.exchange + " OPEN";
                 }
                 
                 // Also check if pre-market is starting late Sunday (some brokers start at 1 AM Monday)
@@ -356,8 +375,8 @@ String getMarketStatus(WorldClockZone &zone)
                     int sessionStart = session.openHour * 60 + session.openMinute;
                     if (currentTotalMinutes >= sessionStart) {
                         return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    } else if (sessionStart - currentTotalMinutes <= 30) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN " + String(sessionStart - currentTotalMinutes) + "MIN";
+                    } else if (sessionStart - currentTotalMinutes <= MARKET_STATUS_MESSAGE_MIN) {
+                        return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(sessionStart - currentTotalMinutes) + "MIN";
                     }
                 }
             }
@@ -370,7 +389,7 @@ String getMarketStatus(WorldClockZone &zone)
                 TradingSession session = zone.market.sessions[i];
                 if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 20 * 60) { // After 8 PM Friday
                     // Overnight session continues into weekend (Friday 8 PM to Sunday)
-                    return zone.market.exchange + " WEEKEND TRADING";
+                    return zone.market.exchange + " OVERNIGHT OPEN";
                 }
             }
         }
@@ -405,11 +424,11 @@ String getMarketStatus(WorldClockZone &zone)
                 minutesToClose = sessionEnd - currentTotalMinutes;
             }
             
-            if (minutesToClose <= 30) {
+            if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
                 if (session.sessionName == "REGULAR") {
-                    return zone.market.exchange + " CLOSE " + String(minutesToClose) + "MIN";
+                    return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + "MIN";
                 } else {
-                    return zone.market.exchange + " " + session.sessionName + " CLOSE " + String(minutesToClose) + "MIN";
+                    return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + "MIN";
                 }
             }
             
@@ -439,11 +458,11 @@ String getMarketStatus(WorldClockZone &zone)
             }
         }
         
-        if (minutesToOpen <= 30) {
+        if (minutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
             if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN " + String(minutesToOpen) + "MIN";
+                return zone.market.exchange + " OPEN IN " + String(minutesToOpen) + "MIN";
             } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN " + String(minutesToOpen) + "MIN";
+                return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(minutesToOpen) + "MIN";
             }
         }
     }
@@ -460,14 +479,6 @@ uint16_t getMarketStatusColor(String status)
         return TFT_BLUE;    // Blue for overnight/pre-market
     } else if (status.indexOf("CLOSING OPEN") != -1) {
         return TFT_YELLOW;  // Yellow for closing auction period
-    } else if (status.indexOf("AFTER-MKT OPEN") != -1) {
-        return TFT_MAGENTA; // Magenta for after-market
-    } else if (status.indexOf("WEEKEND OPEN") != -1 || status.indexOf("WEEKEND TRADING") != -1) {
-        return TFT_PURPLE;  // Purple for weekend trading
-    } else if (status.indexOf("WEEKEND CLOSE") != -1) {
-        return TFT_ORANGE;  // Orange for weekend session closing soon
-    } else if (status.indexOf("WEEKEND") != -1) {
-        return TFT_PURPLE;  // Purple for general weekend status
     } else if (status.indexOf("CLOSED") != -1) {
         return TFT_RED;     // Red for closed market
     } else if (status.indexOf(" OPEN") != -1 && status.indexOf("OPEN ") == -1) {
@@ -551,8 +562,26 @@ void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
         uint16_t marketColor = getMarketStatusColor(marketStatus);
         tft.setTextFont(1);
         tft.setTextSize(1);  // Smaller text for market status
-        tft.setTextColor(marketColor, clockBackgroundColor);
-        tft.drawString(marketStatus, quad.centerX, quad.y + quadrantHeight - 10);
+        
+        // Check if this message should flash and apply flashing effect
+        if (shouldMessageFlash(marketStatus)) {
+            if (flashState) {
+                // Flash-on state: display the message normally
+                tft.setTextColor(marketColor, clockBackgroundColor);
+                tft.drawString(marketStatus, quad.centerX, quad.y + quadrantHeight - 10);
+            } else {
+                // Flash-off state: clear the text area by drawing a filled rectangle
+                int textWidth = tft.textWidth(marketStatus);
+                int textHeight = tft.fontHeight();
+                int textX = quad.centerX - textWidth / 2;  // Center the text
+                int textY = quad.y + quadrantHeight - 10;
+                tft.fillRect(textX, textY, textWidth, textHeight, clockBackgroundColor);
+            }
+        } else {
+            // Non-flashing messages display normally
+            tft.setTextColor(marketColor, clockBackgroundColor);
+            tft.drawString(marketStatus, quad.centerX, quad.y + quadrantHeight - 10);
+        }
     }
 }
 
@@ -574,6 +603,53 @@ void DrawQuadrantBorders()
     // for (int i = 0; i < 3; i++) {
     //     tft.drawRect(i, i, 320-i*2, 240-i*2, gridColor);     // Thick outer border
     // }
+}
+
+bool shouldMessageFlash(String message)
+{
+    return (message.indexOf("CLOSE IN") != -1 || message.indexOf("OPEN IN") != -1);
+}
+
+void updateFlashState()
+{
+    unsigned long currentTime = millis();
+    if (currentTime - lastFlashTime >= flashInterval) {
+        flashState = !flashState;
+        lastFlashTime = currentTime;
+        flashJustChanged = true;
+    }
+}
+
+void resetFlashChangeFlag()
+{
+    flashJustChanged = false;
+}
+
+void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
+{
+    QuadrantPos quad = quadrants[quadrantIndex];
+    String marketStatus = getMarketStatus(zone);
+    
+    if (marketStatus.length() > 0 && shouldMessageFlash(marketStatus)) {
+        // Calculate the exact area where market status is displayed
+        tft.setTextFont(1);
+        tft.setTextSize(1);
+        int textWidth = tft.textWidth(marketStatus);
+        int textHeight = tft.fontHeight();
+        int textX = quad.centerX - textWidth / 2;
+        int textY = quad.y + quadrantHeight - 10;
+        
+        // Clear only the market status area
+        tft.fillRect(textX - 2, textY - 1, textWidth + 4, textHeight + 2, clockBackgroundColor);
+        
+        // Redraw the market status with current flash state
+        if (flashState) {
+            uint16_t marketColor = getMarketStatusColor(marketStatus);
+            tft.setTextColor(marketColor, clockBackgroundColor);
+            tft.drawString(marketStatus, quad.centerX, textY);
+        }
+        // If flashState is false, we just leave the cleared area empty (invisible)
+    }
 }
 
 bool hasTimeChanged(WorldClockZone &zone)
@@ -607,6 +683,60 @@ bool hasTimeChanged(WorldClockZone &zone)
     }
     return false;
 }
+
+bool needsFlashOnlyUpdate(WorldClockZone &zone)
+{
+    if (flashJustChanged && zone.market.hasMarket) {
+        String status = getMarketStatus(zone);
+        return shouldMessageFlash(status);
+    }
+    return false;
+}
+
+void adjustBrightnessBasedOnHomeTime()
+{
+    static int lastHourChecked = -1;
+    static unsigned long lastBrightnessAdjustment = 0;
+    
+    // Only check brightness adjustment every 30 seconds to avoid excessive updates
+    unsigned long currentTime = millis();
+    if (currentTime - lastBrightnessAdjustment < 30000) {
+        return;
+    }
+    
+    // Get current hour from Santa Clara (home location - worldZones[0])
+    if (worldZones[0].initialized) {
+        time_t santaClaraTime = worldZones[0].tz.now();
+        int currentHour = hour(santaClaraTime);
+        
+        // Only adjust if the hour has changed to avoid constant adjustments
+        if (currentHour != lastHourChecked) {
+            lastHourChecked = currentHour;
+            lastBrightnessAdjustment = currentTime;
+            
+            int targetBrightness;
+            if (currentHour >= 0 && currentHour < 7) {
+                // Night time (0-6 AM): dim brightness
+                targetBrightness = 5;
+            } else {
+                // Day time (7 AM - 11:59 PM): normal brightness
+                targetBrightness = 80;
+            }
+            
+            // Only adjust if brightness level is different
+            if (backlightLevel != targetBrightness) {
+                backlightLevel = targetBrightness;
+                analogWrite(21, backlightLevel);
+                
+                Serial.print("Auto brightness adjusted for Santa Clara time ");
+                Serial.print(currentHour);
+                Serial.print(":xx - Brightness set to ");
+                Serial.println(backlightLevel);
+            }
+        }
+    }
+}
+
 
 void DrawQuadrantBackground(int quadrantIndex)
 {
@@ -871,6 +1001,9 @@ void rollingClockSetup(bool is24Hour, bool notUsDate)
     
     // Show ready status
     showWiFiStatus("World Clock Ready!", TFT_GREEN);
+    
+    // Show available serial commands
+    showStartupCommands();
 }
 
 void handleTouch()
@@ -886,14 +1019,14 @@ void handleTouch()
     {
         unsigned long currentTime = millis();
         
-        // Debounce - only allow one touch every 300ms for brightness control
-        if (currentTime - lastTouchTime > 200 && touch.zRaw > 800) 
+        // Debounce - only allow one touch every 50ms for brightness control
+        if (currentTime - lastTouchTime > 50 && touch.zRaw > 800) 
         {
             // Determine touch location (left vs right half of screen)
             // Screen is 320px wide, so divide at 160px
             if (touch.x < 160) // Left half - make dimmer (touch coordinates are usually 0-4095)
             {
-                backlightLevel -= 10; // Decrease brightness
+                backlightLevel -= 5; // Decrease brightness
                 if (backlightLevel <= 5) backlightLevel = 5; // Minimum brightness
                 
                 Serial.print("LEFT touch - Dimmer: ");
@@ -901,7 +1034,7 @@ void handleTouch()
             }
             else // Right half - make brighter
             {
-                backlightLevel += 10; // Increase brightness
+                backlightLevel += 5; // Increase brightness
                 if (backlightLevel > 255) backlightLevel = 255; // Maximum brightness
                 
                 Serial.print("RIGHT touch - Brighter: ");
@@ -930,9 +1063,11 @@ void handleTouch()
     }
     
     // Hide brightness bar after 2 seconds
-    if (brightnessBarVisible && (millis() - brightnessBarShownTime > 2000)) {
+    if (brightnessBarVisible && (millis() - brightnessBarShownTime > 1000)) {
         brightnessBarVisible = false;
-        // Force a full screen redraw by marking all zones as needing update
+        // Clear the brightness bar area and force a full screen redraw
+        tft.fillScreen(clockBackgroundColor);
+        firstDraw = true; // This will force a complete redraw in the next cycle
         for (int i = 0; i < 4; i++) {
             worldZones[i].initialized = false;
         }
@@ -941,8 +1076,17 @@ void handleTouch()
 
 void drawRollingClock()
 {
+    // Handle serial commands
+    handleSerialCommands();
+    
     // Handle touch input for backlight control
     handleTouch();
+    
+    // Update flash state for market status messages
+    updateFlashState();
+    
+    // Adjust brightness based on Santa Clara time
+    adjustBrightnessBasedOnHomeTime();
     
     // Only clear screen and draw borders on first draw
     if (firstDraw) {
@@ -955,9 +1099,18 @@ void drawRollingClock()
             DrawSingleTimeZone(worldZones[i], i, true);
         }
     } else {
-        // Only update changed timezones for smooth refresh
+        // Check each timezone for updates
         for (int i = 0; i < 4; i++) {
-            DrawSingleTimeZone(worldZones[i], i, false);
+            if (hasTimeChanged(worldZones[i])) {
+                // Full redraw needed (time, date, or market status changed)
+                DrawSingleTimeZone(worldZones[i], i, false);
+            } else if (needsFlashOnlyUpdate(worldZones[i])) {
+                // Only market status flashing update needed
+                updateMarketStatusOnly(worldZones[i], i);
+            }
         }
     }
+    
+    // Reset flash change flag after all zones have been processed
+    resetFlashChangeFlag();
 }

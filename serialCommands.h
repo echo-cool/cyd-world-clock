@@ -1,0 +1,98 @@
+#ifndef SERIAL_COMMANDS_H
+#define SERIAL_COMMANDS_H
+
+#include <WiFi.h>
+#include <ezTime.h>
+
+// Forward declarations - these will be defined in ClockLogic.h
+extern int backlightLevel;
+extern WorldClockZone worldZones[4];
+
+void handleSerialCommands()
+{
+    if (Serial.available()) {
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        command.toUpperCase();
+        
+        if (command.startsWith("BRIGHTNESS ")) {
+            // Extract brightness value from command (e.g., "BRIGHTNESS 128")
+            int spaceIndex = command.indexOf(' ');
+            if (spaceIndex > 0) {
+                String valueStr = command.substring(spaceIndex + 1);
+                int newBrightness = valueStr.toInt();
+                
+                if (newBrightness >= 5 && newBrightness <= 255) {
+                    backlightLevel = newBrightness;
+                    analogWrite(21, backlightLevel);
+                    Serial.print("Brightness set to: ");
+                    Serial.println(backlightLevel);
+                } else {
+                    Serial.println("Error: Brightness must be between 5 and 255");
+                }
+            } else {
+                Serial.println("Error: Usage: BRIGHTNESS <value>");
+            }
+        }
+        else if (command == "SYNC") {
+            Serial.println("Forcing NTP time synchronization...");
+            // Force immediate sync by calling updateNTP manually
+            if (waitForSync(10)) { // Wait up to 10 seconds for sync
+                Serial.println("Time sync successful!");
+                Serial.println("UTC: " + UTC.dateTime());
+                Serial.println("Santa Clara: " + worldZones[0].tz.dateTime());
+            } else {
+                Serial.println("Time sync failed or timed out");
+            }
+        }
+        else if (command == "WIFI" || command == "IP") {
+            Serial.println("=== WiFi Information ===");
+            Serial.print("SSID: ");
+            Serial.println(WiFi.SSID());
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
+            Serial.print("Gateway: ");
+            Serial.println(WiFi.gatewayIP());
+            Serial.print("Subnet: ");
+            Serial.println(WiFi.subnetMask());
+            Serial.print("DNS: ");
+            Serial.println(WiFi.dnsIP());
+            Serial.print("Signal Strength (RSSI): ");
+            Serial.print(WiFi.RSSI());
+            Serial.println(" dBm");
+            Serial.print("MAC Address: ");
+            Serial.println(WiFi.macAddress());
+            Serial.print("Connection Status: ");
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.println("Connected");
+            } else {
+                Serial.println("Disconnected");
+            }
+        }
+        else if (command == "HELP" || command == "?") {
+            Serial.println("=== Available Commands ===");
+            Serial.println("BRIGHTNESS <5-255>  - Set display brightness");
+            Serial.println("SYNC                - Force NTP time synchronization");
+            Serial.println("WIFI or IP          - Show WiFi connection info");
+            Serial.println("HELP or ?           - Show this help message");
+        }
+        else if (command.length() > 0) {
+            Serial.println("Unknown command. Type HELP for available commands.");
+        }
+    }
+}
+
+void showStartupCommands()
+{
+    Serial.println();
+    Serial.println("=== World Clock Ready ===");
+    Serial.println("Serial commands available:");
+    Serial.println("- BRIGHTNESS <5-255> : Set display brightness");
+    Serial.println("- SYNC               : Force time synchronization");
+    Serial.println("- WIFI or IP         : Show network information");
+    Serial.println("- HELP or ?          : Show command help");
+    Serial.println("Type any command and press Enter");
+    Serial.println();
+}
+
+#endif // SERIAL_COMMANDS_H
