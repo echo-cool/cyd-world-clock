@@ -46,10 +46,4 @@ void loop()
     time_t now = UTC.now();
     int currentMinute = minute(now);
     drawRollingClock();
-    if (first || currentMinute != lastMinute)
-    {
-        
-        lastMinute = currentMinute;
-        first = false;
-    }
 }

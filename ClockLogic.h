@@ -84,7 +84,7 @@ WorldClockZone worldZones[4] = {
      }, 4}, ""}
 };
 
-// Include serial commands after WorldClockZone is defined
+// Include serial commands and web config after WorldClockZone is defined
 #include "serialCommands.h"
 
 // Global variables for touch and backlight control
@@ -354,7 +354,7 @@ String getMarketStatus(WorldClockZone &zone)
                     if (sessionEnd < sessionStart && currentTotalMinutes < sessionEnd) {
                         int minutesToClose = sessionEnd - currentTotalMinutes;
                         if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
-                            return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + "MIN";
+                            return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
                         }
                         return zone.market.exchange + " " + session.sessionName + " OPEN";
                     }
@@ -365,7 +365,7 @@ String getMarketStatus(WorldClockZone &zone)
                     // Sunday 6 PM ET is when futures markets typically open for the week
                     int minutesToClose = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
                     if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN && currentTotalMinutes >= 18 * 60) {
-                        return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + "MIN";
+                        return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
                     }
                     return zone.market.exchange + " OPEN";
                 }
@@ -376,7 +376,7 @@ String getMarketStatus(WorldClockZone &zone)
                     if (currentTotalMinutes >= sessionStart) {
                         return zone.market.exchange + " " + session.sessionName + " OPEN";
                     } else if (sessionStart - currentTotalMinutes <= MARKET_STATUS_MESSAGE_MIN) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(sessionStart - currentTotalMinutes) + "MIN";
+                        return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(sessionStart - currentTotalMinutes) + " MIN";
                     }
                 }
             }
@@ -426,9 +426,9 @@ String getMarketStatus(WorldClockZone &zone)
             
             if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
                 if (session.sessionName == "REGULAR") {
-                    return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + "MIN";
+                    return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
                 } else {
-                    return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + "MIN";
+                    return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
                 }
             }
             
@@ -460,9 +460,9 @@ String getMarketStatus(WorldClockZone &zone)
         
         if (minutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
             if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN IN " + String(minutesToOpen) + "MIN";
+                return zone.market.exchange + " OPEN IN " + String(minutesToOpen) + " MIN";
             } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(minutesToOpen) + "MIN";
+                return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(minutesToOpen) + " MIN";
             }
         }
     }
@@ -640,7 +640,7 @@ void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
         int textY = quad.y + quadrantHeight - 10;
         
         // Clear only the market status area
-        tft.fillRect(textX - 2, textY - 1, textWidth + 4, textHeight + 2, clockBackgroundColor);
+        tft.fillRect(textX - 2, textY - 1, textWidth + 8, textHeight + 2, clockBackgroundColor);
         
         // Redraw the market status with current flash state
         if (flashState) {
@@ -655,9 +655,37 @@ void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
 bool hasTimeChanged(WorldClockZone &zone)
 {
     time_t local = zone.tz.now();
+    static unsigned long lastDebugOutput = 0;
+    unsigned long currentMillis = millis();
+    
+    // Check if timezone is returning valid time
+    if (local < 1000000000) { // Before year 2001 - invalid timestamp
+        // Force reinitialize timezone if it's giving invalid time
+        if (zone.timezone.length() > 0) {
+            Serial.println("Invalid time detected for " + zone.name + ", reinitializing timezone...");
+            zone.tz.setLocation(zone.timezone);
+            local = zone.tz.now();
+        }
+        
+        // If still invalid, force update anyway to show something
+        if (local < 1000000000) {
+            Serial.println("Still invalid time for " + zone.name + ", forcing update");
+            zone.initialized = false; // Force redraw
+            return true;
+        }
+    }
+    
     int currentHour = hour(local); // Always use 24-hour format
     int currentMinute = minute(local);
     int currentDay = day(local);
+    
+    // Debug output every 10 seconds for the first zone only to avoid spam
+    if (zone.name == "SANTA CLARA" && currentMillis - lastDebugOutput >= 10000) {
+        Serial.println("Zone " + zone.name + " - Current: " + String(currentHour) + ":" + 
+                      String(currentMinute) + ", Last: " + String(zone.lastHour) + ":" + 
+                      String(zone.lastMinute) + ", Initialized: " + String(zone.initialized));
+        lastDebugOutput = currentMillis;
+    }
     
     // Check if market status has actually changed
     bool marketStatusChanged = false;
@@ -666,22 +694,32 @@ bool hasTimeChanged(WorldClockZone &zone)
         if (currentMarketStatus != zone.lastMarketStatus) {
             zone.lastMarketStatus = currentMarketStatus;
             marketStatusChanged = true;
+            if (zone.name == "SANTA CLARA") {
+                Serial.println("Market status changed for " + zone.name + ": " + currentMarketStatus);
+            }
         }
     }
     
-    if (!zone.initialized || 
-        zone.lastHour != currentHour || 
-        zone.lastMinute != currentMinute || 
-        zone.lastDay != currentDay ||
-        marketStatusChanged)
-    {
+    bool timeChanged = (!zone.initialized || 
+                       zone.lastHour != currentHour || 
+                       zone.lastMinute != currentMinute || 
+                       zone.lastDay != currentDay ||
+                       marketStatusChanged);
+    
+    if (timeChanged) {
+        if (zone.name == "SANTA CLARA" && zone.initialized) {
+            Serial.println("Time changed for " + zone.name + " from " + 
+                          String(zone.lastHour) + ":" + String(zone.lastMinute) + 
+                          " to " + String(currentHour) + ":" + String(currentMinute));
+        }
+        
         zone.lastHour = currentHour;
         zone.lastMinute = currentMinute;
         zone.lastDay = currentDay;
         zone.initialized = true;
-        return true;
     }
-    return false;
+    
+    return timeChanged;
 }
 
 bool needsFlashOnlyUpdate(WorldClockZone &zone)
@@ -790,17 +828,19 @@ void DrawQuadrantBackground(int quadrantIndex)
 
 void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedraw = false)
 {
-    // Check if we need to update this timezone
-    bool needsUpdate = forceRedraw || hasTimeChanged(zone);
-    
-    if (!needsUpdate) {
-        return; // No change, skip drawing
+    // When called from drawRollingClock with forceRedraw=false, 
+    // we already know the time has changed, so don't check again
+    if (!forceRedraw) {
+        Serial.println("Drawing " + zone.name + " - time already confirmed to have changed");
+    } else {
+        Serial.println("Drawing " + zone.name + " - force redraw requested");
     }
     
     // Clear only this quadrant to avoid flashing
     DrawQuadrantBackground(quadrantIndex);
     
     // Calculate digit positions for this quadrant
+    Serial.println("Calculating digit offsets for quadrant " + String(quadrantIndex));
     CalculateDigitOffsetsForQuadrant(quadrantIndex);
     
     // Parse time for this timezone
@@ -813,6 +853,7 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedra
     DrawTimeZoneLabel(zone.name, quadrantIndex);
     
     // Draw time digits without animation for smooth display
+    Serial.println("Drawing digits for " + zone.name + " at position (" + String(quadrantIndex) + ")");
     for (size_t di = 0; di < 4; di++)
     {
         Digit *dig = digs[di];
@@ -823,6 +864,7 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedra
         sprite.setTextColor(timeColor, clockBackgroundColor);
         sprite.drawNumber(dig->NewValue(), 0, 0);
         sprite.pushSprite(dig->X(), dig->Y());
+        Serial.println("Drew digit " + String(di) + " value " + String(dig->NewValue()) + " at (" + String(dig->X()) + "," + String(dig->Y()) + ")");
     }
     
     // Draw colon with day/night color - use the calculated position
@@ -839,11 +881,11 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedra
     DrawDateAndDay(zone, quadrantIndex);
 }
 
-void showWiFiStatus(String message, uint16_t color = TFT_WHITE)
+void showWiFiStatus(String message, uint16_t color = TFT_WHITE, int fontsize = 1)
 {
     tft.fillScreen(clockBackgroundColor);
     tft.setTextFont(1);
-    tft.setTextSize(1);
+    tft.setTextSize(fontsize);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(color, clockBackgroundColor);
     tft.drawString(message, 160, 120);
@@ -920,6 +962,13 @@ void rollingClockSetup(bool is24Hour, bool notUsDate)
     
     // Show WiFi connected status
     showWiFiStatus("WiFi Connected!", TFT_GREEN);
+    
+    // Show IP address on screen for web configuration
+    String ipAddress = WiFi.localIP().toString();
+    // showWiFiStatus("Web Config:", TFT_WHITE);
+    // delay(1000);
+    // showWiFiStatus("http://" + ipAddress, TFT_CYAN, 2);
+    // delay(2000); // Show IP for 4 seconds so user can note it down
     
     // Show timezone setup status
     showWiFiStatus("Setting up zones...", TFT_CYAN);
@@ -1002,8 +1051,12 @@ void rollingClockSetup(bool is24Hour, bool notUsDate)
     // Show ready status
     showWiFiStatus("World Clock Ready!", TFT_GREEN);
     
-    // Show available serial commands
+    // Show available serial commands and web interface info
     showStartupCommands();
+    Serial.println("=== Web Configuration Available ===");
+    Serial.println("Open http://" + WiFi.localIP().toString() + " in your browser");
+    Serial.println("to configure timezones and market settings");
+    Serial.println();
 }
 
 void handleTouch()
@@ -1076,6 +1129,8 @@ void handleTouch()
 
 void drawRollingClock()
 {
+    unsigned long currentTime = millis();
+    
     // Handle serial commands
     handleSerialCommands();
     
@@ -1103,6 +1158,7 @@ void drawRollingClock()
         for (int i = 0; i < 4; i++) {
             if (hasTimeChanged(worldZones[i])) {
                 // Full redraw needed (time, date, or market status changed)
+                Serial.println("Calling DrawSingleTimeZone for " + worldZones[i].name);
                 DrawSingleTimeZone(worldZones[i], i, false);
             } else if (needsFlashOnlyUpdate(worldZones[i])) {
                 // Only market status flashing update needed
