@@ -17,7 +17,9 @@ void configModeCallback(WiFiManager *myWiFiManager)
   wm_Display->drawWifiManagerMessage(myWiFiManager);
 }
 
-void setupWiFiManager(bool forceConfig, ProjectConfig config, ProjectDisplay *theDisplay)
+// config is passed by reference so that values entered in the captive portal
+// update the live, in-memory projectConfig (not just a throwaway copy).
+void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *theDisplay)
 {
   wm_Display = theDisplay;
   WiFiManager wm;

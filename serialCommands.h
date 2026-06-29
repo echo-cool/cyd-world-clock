@@ -7,6 +7,8 @@
 // Forward declarations - these will be defined in ClockLogic.h
 extern int backlightLevel;
 extern WorldClockZone worldZones[4];
+extern unsigned long manualBrightnessUntil;
+extern const unsigned long MANUAL_BRIGHTNESS_HOLD_MS;
 
 void handleSerialCommands()
 {
@@ -24,7 +26,9 @@ void handleSerialCommands()
                 
                 if (newBrightness >= 5 && newBrightness <= 255) {
                     backlightLevel = newBrightness;
-                    analogWrite(21, backlightLevel);
+                    analogWrite(BACKLIGHT_PIN, backlightLevel);
+                    // Respect this manual setting before auto-brightness resumes
+                    manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
                     Serial.print("Brightness set to: ");
                     Serial.println(backlightLevel);
                 } else {

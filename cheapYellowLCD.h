@@ -30,16 +30,6 @@ public:
     tft.drawString("System initializing...", 160, 120);
   }
 
-  // void showMessage(String message, uint16_t color = TFT_WHITE)
-  // {
-  //   tft.fillScreen(clockBackgroundColor);
-  //   tft.setTextFont(1);
-  //   tft.setTextSize(1);
-  //   tft.setTextDatum(MC_DATUM);
-
-  //   delay(100); // Show message for 1 second
-  // }
-
   void drawWifiManagerMessage(WiFiManager *myWiFiManager)
   {
     tft.setTextFont(1);

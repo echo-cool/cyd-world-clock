@@ -12,7 +12,18 @@ TFT_eSprite sprite = TFT_eSprite(&tft); // Sprite class
 #define CLK_PIN  25
 #define CS_PIN   33
 
-int MARKET_STATUS_MESSAGE_MIN = 10;
+// Set to 1 to enable verbose per-frame draw/debug logging on the serial port.
+// Kept at 0 for normal use so the hot draw path isn't flooded with Serial output.
+#ifndef DEBUG_CLOCK
+#define DEBUG_CLOCK 0
+#endif
+#if DEBUG_CLOCK
+#define CLOCK_DEBUG_PRINTLN(x) Serial.println(x)
+#else
+#define CLOCK_DEBUG_PRINTLN(x) do {} while (0)
+#endif
+
+const int MARKET_STATUS_MESSAGE_MIN = 10;
 
 XPT2046_Bitbang touchscreen(MOSI_PIN, MISO_PIN, CLK_PIN, CS_PIN);
 
@@ -24,7 +35,6 @@ uint16_t clockFontColor = TFT_WHITE;  // Changed to white for better contrast
 int prevDay = 0;
 
 bool SHOW_24HOUR = true;
-bool SHOW_AMPM = false;
 
 bool NOT_US_DATE = true;
 
@@ -89,9 +99,15 @@ WorldClockZone worldZones[4] = {
 
 // Global variables for touch and backlight control
 bool firstDraw = true;
-bool backlightOn = true;
 int backlightLevel = 80; // PWM value (0-255)
-uint16_t touchX, touchY;
+
+// Manual brightness override: when the user changes brightness (touch or serial),
+// auto-brightness is suspended until this timestamp so the two don't fight.
+unsigned long manualBrightnessUntil = 0;
+const unsigned long MANUAL_BRIGHTNESS_HOLD_MS = 2UL * 60UL * 60UL * 1000UL; // 2 hours
+
+// How long the on-screen brightness bar stays visible after the last touch.
+const unsigned long BRIGHTNESS_BAR_TIMEOUT_MS = 2000; // 2 seconds
 
 // Global variables for flashing market status messages
 unsigned long lastFlashTime = 0;
@@ -150,8 +166,7 @@ QuadrantPos quadrants[4] = {
     {160, 120, 240, 180}      // Bottom-right
 };
 
-int ampm[2]; // X, Y of the AM or PM indicator
-bool ispm;
+bool ispm; // set by ParseDigits; drives the AM/PM indicator in 12-hour mode
 
 void CalculateDigitOffsetsForQuadrant(int quadrantIndex)
 {
@@ -288,7 +303,18 @@ void DrawDigitsOneByOne()
 void ParseDigits(Timezone &tz)
 {
     time_t local = tz.now();
-    int hr = hour(local); // Always use 24-hour format
+    int hr = hour(local); // 24-hour value from ezTime
+
+    // Track AM/PM (used by the indicator in 12-hour mode)
+    ispm = (hr >= 12);
+
+    // Honor the 12/24-hour user setting
+    if (!SHOW_24HOUR)
+    {
+        hr = hr % 12;
+        if (hr == 0) hr = 12; // midnight / noon shown as 12, not 0
+    }
+
     digs[0]->NewValue(hr / 10);
     digs[1]->NewValue(hr % 10);
     digs[2]->NewValue(minute(local) / 10);
@@ -322,6 +348,19 @@ uint16_t getDayNightLabelColor(Timezone &tz)
     }
 }
 
+
+// Days since 1970-01-01 for a given civil date (Howard Hinnant's algorithm).
+// Used to compare calendar dates between timezones robustly across month/year
+// boundaries instead of comparing bare day-of-month numbers.
+long daysFromCivil(int y, int m, int d)
+{
+    y -= m <= 2;
+    long era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long)doe - 719468;
+}
 
 String getMarketStatus(WorldClockZone &zone)
 {
@@ -473,8 +512,8 @@ String getMarketStatus(WorldClockZone &zone)
 uint16_t getMarketStatusColor(String status)
 {
     // Check for specific session types first (before generic OPEN check)
-    if (status.indexOf("AFTER-HRS OPEN") != -1 || status.indexOf("MORNING OPEN") != -1 || status.indexOf("AFTERNOON OPEN") != -1) {
-        return TFT_CYAN;    // Cyan for extended/session trading
+    if (status.indexOf("AFTER-HRS OPEN") != -1) {
+        return TFT_CYAN;    // Cyan for extended/after-hours trading
     } else if (status.indexOf("OVERNIGHT OPEN") != -1 || status.indexOf("PRE-MARKET OPEN") != -1) {
         return TFT_BLUE;    // Blue for overnight/pre-market
     } else if (status.indexOf("CLOSING OPEN") != -1) {
@@ -532,15 +571,18 @@ void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
     // Use day/night color for date/day text
     uint16_t dateColor = getDayNightLabelColor(zone.tz);
     
-    // For all timezones, add relative date indication compared to home (top-left)
+    // For all timezones, add relative date indication compared to home (top-left).
+    // Compare actual calendar dates (not bare day-of-month) so it stays correct
+    // across month and year boundaries.
     String dayText = dayNames[dow];
     time_t homeTime = worldZones[0].tz.now();
-    int homeDay = day(homeTime);
-    
-    if (dd > homeDay || (dd == 1 && homeDay > 20)) { // Tomorrow relative to home (or next month)
-        dayText += " (+1)";
-    } else if (dd < homeDay || (dd > 20 && homeDay == 1)) { // Yesterday relative to home (or prev month)  
-        dayText += " (-1)";
+    long dayDiff = daysFromCivil(yr, mth, dd) -
+                   daysFromCivil(year(homeTime), month(homeTime), day(homeTime));
+
+    if (dayDiff >= 1) {
+        dayText += " (+1)"; // Ahead of home (tomorrow)
+    } else if (dayDiff <= -1) {
+        dayText += " (-1)"; // Behind home (yesterday)
     }
     // If same day as home, no indicator needed
     
@@ -556,8 +598,10 @@ void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
     tft.setTextSize(2);  // Back to size 2 for date
     tft.drawString(dateBuffer, quad.centerX, quad.y + quadrantHeight - 30);
     
-    // Draw market status if this zone has a market
-    String marketStatus = getMarketStatus(zone);
+    // Draw market status if this zone has a market.
+    // Use the cached status (refreshed once per minute in hasTimeChanged) rather
+    // than recomputing the String here on every redraw.
+    String marketStatus = zone.lastMarketStatus;
     if (marketStatus.length() > 0) {
         uint16_t marketColor = getMarketStatusColor(marketStatus);
         tft.setTextFont(1);
@@ -587,22 +631,8 @@ void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
 
 void DrawQuadrantBorders()
 {
-    // Draw grid lines to separate quadrants with more visible color
-    uint16_t gridColor = TFT_WHITE;  // Changed to white for better visibility
-    
-    // // Main grid lines (thicker and more visible)
-    // for (int i = 158; i <= 162; i++) {
-    //     tft.drawLine(i, 0, i, 240, gridColor);   // Thicker vertical center line
-    // }
-    
-    // for (int i = 118; i <= 122; i++) {
-    //     tft.drawLine(0, i, 320, i, gridColor);   // Thicker horizontal center line
-    // }
-    
-    // // Outer border frame (thicker)
-    // for (int i = 0; i < 3; i++) {
-    //     tft.drawRect(i, i, 320-i*2, 240-i*2, gridColor);     // Thick outer border
-    // }
+    // Grid lines between quadrants are intentionally disabled for a cleaner look.
+    // Kept as a hook in case borders are wanted again.
 }
 
 bool shouldMessageFlash(String message)
@@ -628,8 +658,8 @@ void resetFlashChangeFlag()
 void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
-    String marketStatus = getMarketStatus(zone);
-    
+    String marketStatus = zone.lastMarketStatus; // cached, refreshed per minute
+
     if (marketStatus.length() > 0 && shouldMessageFlash(marketStatus)) {
         // Calculate the exact area where market status is displayed
         tft.setTextFont(1);
@@ -678,41 +708,44 @@ bool hasTimeChanged(WorldClockZone &zone)
     int currentHour = hour(local); // Always use 24-hour format
     int currentMinute = minute(local);
     int currentDay = day(local);
-    
+
     // Debug output every 10 seconds for the first zone only to avoid spam
-    if (zone.name == "SANTA CLARA" && currentMillis - lastDebugOutput >= 10000) {
-        Serial.println("Zone " + zone.name + " - Current: " + String(currentHour) + ":" + 
-                      String(currentMinute) + ", Last: " + String(zone.lastHour) + ":" + 
+    if (DEBUG_CLOCK && zone.name == "SANTA CLARA" && currentMillis - lastDebugOutput >= 10000) {
+        CLOCK_DEBUG_PRINTLN("Zone " + zone.name + " - Current: " + String(currentHour) + ":" +
+                      String(currentMinute) + ", Last: " + String(zone.lastHour) + ":" +
                       String(zone.lastMinute) + ", Initialized: " + String(zone.initialized));
         lastDebugOutput = currentMillis;
     }
-    
-    // Check if market status has actually changed
+
+    // Recompute the market status at most once per minute. getMarketStatus() does
+    // heavy String work, and session transitions only happen on minute
+    // boundaries, so there is no need to rebuild it on every loop iteration.
+    bool minuteChanged = (!zone.initialized ||
+                          zone.lastMinute != currentMinute ||
+                          zone.lastDay != currentDay);
     bool marketStatusChanged = false;
-    if (zone.market.hasMarket) {
+    if (zone.market.hasMarket && minuteChanged) {
         String currentMarketStatus = getMarketStatus(zone);
         if (currentMarketStatus != zone.lastMarketStatus) {
             zone.lastMarketStatus = currentMarketStatus;
             marketStatusChanged = true;
-            if (zone.name == "SANTA CLARA") {
-                Serial.println("Market status changed for " + zone.name + ": " + currentMarketStatus);
-            }
+            CLOCK_DEBUG_PRINTLN("Market status changed for " + zone.name + ": " + currentMarketStatus);
         }
     }
-    
-    bool timeChanged = (!zone.initialized || 
-                       zone.lastHour != currentHour || 
-                       zone.lastMinute != currentMinute || 
+
+    bool timeChanged = (!zone.initialized ||
+                       zone.lastHour != currentHour ||
+                       zone.lastMinute != currentMinute ||
                        zone.lastDay != currentDay ||
                        marketStatusChanged);
-    
+
     if (timeChanged) {
-        if (zone.name == "SANTA CLARA" && zone.initialized) {
-            Serial.println("Time changed for " + zone.name + " from " + 
-                          String(zone.lastHour) + ":" + String(zone.lastMinute) + 
+        if (DEBUG_CLOCK && zone.name == "SANTA CLARA" && zone.initialized) {
+            CLOCK_DEBUG_PRINTLN("Time changed for " + zone.name + " from " +
+                          String(zone.lastHour) + ":" + String(zone.lastMinute) +
                           " to " + String(currentHour) + ":" + String(currentMinute));
         }
-        
+
         zone.lastHour = currentHour;
         zone.lastMinute = currentMinute;
         zone.lastDay = currentDay;
@@ -725,8 +758,7 @@ bool hasTimeChanged(WorldClockZone &zone)
 bool needsFlashOnlyUpdate(WorldClockZone &zone)
 {
     if (flashJustChanged && zone.market.hasMarket) {
-        String status = getMarketStatus(zone);
-        return shouldMessageFlash(status);
+        return shouldMessageFlash(zone.lastMarketStatus); // cached status
     }
     return false;
 }
@@ -736,12 +768,17 @@ void adjustBrightnessBasedOnHomeTime()
     static int lastHourChecked = -1;
     static unsigned long lastBrightnessAdjustment = 0;
     
-    // Only check brightness adjustment every 30 seconds to avoid excessive updates
+    // Don't fight a manual brightness change (touch / serial) - let it hold first
     unsigned long currentTime = millis();
+    if (currentTime < manualBrightnessUntil) {
+        return;
+    }
+
+    // Only check brightness adjustment every 30 seconds to avoid excessive updates
     if (currentTime - lastBrightnessAdjustment < 30000) {
         return;
     }
-    
+
     // Get current hour from Santa Clara (home location - worldZones[0])
     if (worldZones[0].initialized) {
         time_t santaClaraTime = worldZones[0].tz.now();
@@ -764,8 +801,8 @@ void adjustBrightnessBasedOnHomeTime()
             // Only adjust if brightness level is different
             if (backlightLevel != targetBrightness) {
                 backlightLevel = targetBrightness;
-                analogWrite(21, backlightLevel);
-                
+                analogWrite(BACKLIGHT_PIN, backlightLevel);
+
                 Serial.print("Auto brightness adjusted for Santa Clara time ");
                 Serial.print(currentHour);
                 Serial.print(":xx - Brightness set to ");
@@ -779,68 +816,25 @@ void adjustBrightnessBasedOnHomeTime()
 void DrawQuadrantBackground(int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
-    // Clear only this quadrant
+    // Clear only this quadrant (grid lines are disabled - see DrawQuadrantBorders)
     tft.fillRect(quad.x, quad.y, quadrantWidth, quadrantHeight, clockBackgroundColor);
-    
-    // Redraw grid lines that intersect this quadrant
-    uint16_t gridColor = TFT_WHITE;
-    
-    // // Redraw vertical grid line if this quadrant is on the left
-    // if (quadrantIndex == 0 || quadrantIndex == 2) { // Left quadrants
-    //     for (int i = 158; i <= 162; i++) {
-    //         tft.drawLine(i, quad.y, i, quad.y + quadrantHeight, gridColor);
-    //     }
-    // }
-    
-    // // Redraw horizontal grid line if this quadrant is on top
-    // if (quadrantIndex == 0 || quadrantIndex == 1) { // Top quadrants
-    //     for (int i = 118; i <= 122; i++) {
-    //         tft.drawLine(quad.x, i, quad.x + quadrantWidth, i, gridColor);
-    //     }
-    // }
-    
-    // // Always redraw the outer borders for this quadrant
-    // if (quadrantIndex == 0) { // Top-left
-    //     for (int i = 0; i < 3; i++) {
-    //         tft.drawLine(i, quad.y, i, quad.y + quadrantHeight, gridColor); // Left border
-    //         tft.drawLine(quad.x, i, quad.x + quadrantWidth, i, gridColor);   // Top border
-    //     }
-    // }
-    // if (quadrantIndex == 1) { // Top-right
-    //     for (int i = 0; i < 3; i++) {
-    //         tft.drawLine(319-i, quad.y, 319-i, quad.y + quadrantHeight, gridColor); // Right border
-    //         tft.drawLine(quad.x, i, quad.x + quadrantWidth, i, gridColor);          // Top border
-    //     }
-    // }
-    // if (quadrantIndex == 2) { // Bottom-left
-    //     for (int i = 0; i < 3; i++) {
-    //         tft.drawLine(i, quad.y, i, quad.y + quadrantHeight, gridColor);         // Left border
-    //         tft.drawLine(quad.x, 239-i, quad.x + quadrantWidth, 239-i, gridColor); // Bottom border
-    //     }
-    // }
-    // if (quadrantIndex == 3) { // Bottom-right
-    //     for (int i = 0; i < 3; i++) {
-    //         tft.drawLine(319-i, quad.y, 319-i, quad.y + quadrantHeight, gridColor); // Right border
-    //         tft.drawLine(quad.x, 239-i, quad.x + quadrantWidth, 239-i, gridColor); // Bottom border
-    //     }
-    // }
 }
 
 void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedraw = false)
 {
-    // When called from drawRollingClock with forceRedraw=false, 
+    // When called from drawRollingClock with forceRedraw=false,
     // we already know the time has changed, so don't check again
     if (!forceRedraw) {
-        Serial.println("Drawing " + zone.name + " - time already confirmed to have changed");
+        CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " - time already confirmed to have changed");
     } else {
-        Serial.println("Drawing " + zone.name + " - force redraw requested");
+        CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " - force redraw requested");
     }
-    
+
     // Clear only this quadrant to avoid flashing
     DrawQuadrantBackground(quadrantIndex);
-    
+
     // Calculate digit positions for this quadrant
-    Serial.println("Calculating digit offsets for quadrant " + String(quadrantIndex));
+    CLOCK_DEBUG_PRINTLN("Calculating digit offsets for quadrant " + String(quadrantIndex));
     CalculateDigitOffsetsForQuadrant(quadrantIndex);
     
     // Parse time for this timezone
@@ -853,18 +847,18 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedra
     DrawTimeZoneLabel(zone.name, quadrantIndex);
     
     // Draw time digits without animation for smooth display
-    Serial.println("Drawing digits for " + zone.name + " at position (" + String(quadrantIndex) + ")");
+    CLOCK_DEBUG_PRINTLN("Drawing digits for " + zone.name + " at position (" + String(quadrantIndex) + ")");
     for (size_t di = 0; di < 4; di++)
     {
         Digit *dig = digs[di];
         dig->Value(dig->NewValue());
         dig->Frame(0);
-        
+
         // Set color for this timezone
         sprite.setTextColor(timeColor, clockBackgroundColor);
         sprite.drawNumber(dig->NewValue(), 0, 0);
         sprite.pushSprite(dig->X(), dig->Y());
-        Serial.println("Drew digit " + String(di) + " value " + String(dig->NewValue()) + " at (" + String(dig->X()) + "," + String(dig->Y()) + ")");
+        CLOCK_DEBUG_PRINTLN("Drew digit " + String(di) + " value " + String(dig->NewValue()) + " at (" + String(dig->X()) + "," + String(dig->Y()) + ")");
     }
     
     // Draw colon with day/night color - use the calculated position
@@ -876,7 +870,18 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedra
     // Get the Y position from the first digit (they're all aligned)
     int colonY = digs[0]->Y();
     tft.drawChar(':', colons[0], colonY);
-    
+
+    // In 12-hour mode, show an AM/PM indicator in the top-right of the quadrant
+    // (ispm was set by ParseDigits above).
+    if (!SHOW_24HOUR) {
+        QuadrantPos ampmQuad = quadrants[quadrantIndex];
+        tft.setTextFont(1);
+        tft.setTextSize(1);
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextColor(timeColor, clockBackgroundColor);
+        tft.drawString(ispm ? "PM" : "AM", ampmQuad.x + quadrantWidth - 4, ampmQuad.y + 6);
+    }
+
     // Draw date and day name below the time
     DrawDateAndDay(zone, quadrantIndex);
 }
@@ -889,7 +894,7 @@ void showWiFiStatus(String message, uint16_t color = TFT_WHITE, int fontsize = 1
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(color, clockBackgroundColor);
     tft.drawString(message, 160, 120);
-    delay(100); // Show message for 1 second
+    delay(100); // Brief pause so the status message is legible
 }
 
 void showBrightnessBar(int brightness)
@@ -939,12 +944,12 @@ void showBrightnessBar(int brightness)
     tft.drawString(String(percentage) + "%", 160, barY + barHeight + 10);
 }
 
-void rollingClockSetup(bool is24Hour, bool notUsDate)
+void rollingClockSetup(bool is24Hour, bool usDate)
 {
     Serial.println("World Clock Setup");
     SHOW_24HOUR = is24Hour;
-    SHOW_AMPM = !is24Hour;
-    NOT_US_DATE = notUsDate;
+    // usDate == true  -> MM/DD/YY (US),  usDate == false -> DD/MM/YY (rest of world)
+    NOT_US_DATE = !usDate;
     SetupCYD();
     
     // Show WiFi connection status
@@ -957,8 +962,8 @@ void rollingClockSetup(bool is24Hour, bool notUsDate)
     Serial.println("Touch screen initialized");
     
     // Initialize backlight pin with PWM
-    pinMode(21, OUTPUT);
-    analogWrite(21, backlightLevel);
+    pinMode(BACKLIGHT_PIN, OUTPUT);
+    analogWrite(BACKLIGHT_PIN, backlightLevel);
     
     // Show WiFi connected status
     showWiFiStatus("WiFi Connected!", TFT_GREEN);
@@ -1041,13 +1046,19 @@ void rollingClockSetup(bool is24Hour, bool notUsDate)
             // Show error on screen
             String errorMsg = worldZones[i].name + " - FAILED!";
             showWiFiStatus(errorMsg, TFT_RED);
-            
+
             Serial.print("ERROR: Failed to set timezone for ");
             Serial.print(worldZones[i].name);
             Serial.println(" after all retries!");
         }
+
+        // Seed the market-status cache so the first frame shows it immediately
+        // (it is refreshed once per minute afterwards in hasTimeChanged).
+        if (worldZones[i].market.hasMarket) {
+            worldZones[i].lastMarketStatus = getMarketStatus(worldZones[i]);
+        }
     }
-    
+
     // Show ready status
     showWiFiStatus("World Clock Ready!", TFT_GREEN);
     
@@ -1073,11 +1084,12 @@ void handleTouch()
         unsigned long currentTime = millis();
         
         // Debounce - only allow one touch every 50ms for brightness control
-        if (currentTime - lastTouchTime > 50 && touch.zRaw > 800) 
+        if (currentTime - lastTouchTime > 50 && touch.zRaw > 800)
         {
-            // Determine touch location (left vs right half of screen)
-            // Screen is 320px wide, so divide at 160px
-            if (touch.x < 160) // Left half - make dimmer (touch coordinates are usually 0-4095)
+            // Determine touch location (left vs right half of screen).
+            // getTouch() already maps touch.x into screen pixels (0..screenWidth),
+            // so the screen is 320px wide and we split at the 160px midpoint.
+            if (touch.x < 160) // Left half - make dimmer
             {
                 backlightLevel -= 5; // Decrease brightness
                 if (backlightLevel <= 5) backlightLevel = 5; // Minimum brightness
@@ -1095,13 +1107,16 @@ void handleTouch()
             }
             
             // Apply PWM to backlight pin
-            analogWrite(21, backlightLevel);
-            
+            analogWrite(BACKLIGHT_PIN, backlightLevel);
+
+            // Hold this manual setting before auto-brightness resumes
+            manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
+
             // Show brightness bar
             showBrightnessBar(backlightLevel);
             brightnessBarVisible = true;
             brightnessBarShownTime = currentTime;
-            
+
             lastTouchTime = currentTime;
             
             Serial.print("Touch at X: ");
@@ -1115,8 +1130,8 @@ void handleTouch()
         }
     }
     
-    // Hide brightness bar after 2 seconds
-    if (brightnessBarVisible && (millis() - brightnessBarShownTime > 1000)) {
+    // Hide brightness bar after the configured timeout
+    if (brightnessBarVisible && (millis() - brightnessBarShownTime > BRIGHTNESS_BAR_TIMEOUT_MS)) {
         brightnessBarVisible = false;
         // Clear the brightness bar area and force a full screen redraw
         tft.fillScreen(clockBackgroundColor);
@@ -1158,7 +1173,7 @@ void drawRollingClock()
         for (int i = 0; i < 4; i++) {
             if (hasTimeChanged(worldZones[i])) {
                 // Full redraw needed (time, date, or market status changed)
-                Serial.println("Calling DrawSingleTimeZone for " + worldZones[i].name);
+                CLOCK_DEBUG_PRINTLN("Calling DrawSingleTimeZone for " + worldZones[i].name);
                 DrawSingleTimeZone(worldZones[i], i, false);
             } else if (needsFlashOnlyUpdate(worldZones[i])) {
                 // Only market status flashing update needed

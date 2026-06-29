@@ -36,14 +36,13 @@ void setup()
     Serial.println("Setup complete. Main loop will run on core " + String(xPortGetCoreID()));
 }
 
-bool first = true;
-int lastMinute = -1;
-
 void loop()
 {
     baseProjectLoop();
-
-    time_t now = UTC.now();
-    int currentMinute = minute(now);
     drawRollingClock();
+
+    // Small pause to avoid busy-spinning the CPU. Touch debounce (50ms) and the
+    // market-status flash (1s) are all coarser than this, so responsiveness is
+    // unaffected while CPU load and heat are reduced.
+    delay(20);
 }
