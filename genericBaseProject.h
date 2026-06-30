@@ -65,6 +65,10 @@ bool ntpSyncStatus = false;
 // Search for "Arduino Json" in the Arduino Library manager
 // https://github.com/bblanchon/ArduinoJson
 
+#include <ArduinoOTA.h>
+// Over-the-air firmware updates. Part of the ESP32 Arduino core (no extra
+// install needed).
+
 // ----------------------------
 // Internal includes
 // ----------------------------
@@ -86,10 +90,74 @@ bool ntpSyncStatus = false;
 
 ProjectConfig projectConfig;
 
+// Runtime web config server (needs projectConfig to be declared first)
+#include "webConfig.h"
+
 CheapYellowDisplay cyd;
 ProjectDisplay *projectDisplay = &cyd;
 
 Timezone myTZ;
+
+// Track WiFi connectivity so the loop can attempt reconnects and the display
+// can show a status indicator.
+bool wifiWasConnected = true;
+
+void setupOTA()
+{
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    // Only set a password if one is configured in secrets.h (blank = open on LAN)
+    if (strlen(OTA_PASSWORD) > 0)
+    {
+        ArduinoOTA.setPassword(OTA_PASSWORD);
+    }
+
+    ArduinoOTA.onStart([]() {
+        Serial.println("OTA update starting...");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("OTA progress: %u%%\r", (progress * 100) / total);
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nOTA update complete");
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("OTA error [%u]\n", error);
+    });
+
+    ArduinoOTA.begin();
+    Serial.println("OTA ready (hostname: " + String(OTA_HOSTNAME) + ")");
+}
+
+// Keep WiFi alive at runtime. If the connection drops, attempt to reconnect
+// periodically without blocking the display.
+void handleWifiResilience()
+{
+    static unsigned long lastReconnectAttempt = 0;
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        if (!wifiWasConnected)
+        {
+            wifiWasConnected = true;
+            Serial.println("WiFi reconnected. IP: " + WiFi.localIP().toString());
+        }
+        return;
+    }
+
+    // Disconnected - try to reconnect at most once every 10 seconds
+    if (wifiWasConnected)
+    {
+        wifiWasConnected = false;
+        Serial.println("WiFi connection lost - attempting to reconnect...");
+    }
+
+    unsigned long now = millis();
+    if (now - lastReconnectAttempt >= 10000)
+    {
+        lastReconnectAttempt = now;
+        WiFi.reconnect();
+    }
+}
 
 // Handle ezTime NTP synchronization and sync monitoring.
 //
@@ -220,6 +288,10 @@ void baseProjectSetup()
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
 
+    // Keep WiFi alive automatically; handleWifiResilience() backs this up
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
+
     Serial.println("Waiting for time sync");
 
     // Configure NTP sync frequency for production
@@ -240,6 +312,10 @@ void baseProjectSetup()
     Serial.print(F(":     "));
     Serial.println(myTZ.dateTime());
     Serial.println("-------------------------");
+
+    // Start OTA updates and the runtime web config server
+    setupOTA();
+    setupWebServer();
 }
 
 void baseProjectLoop()
@@ -247,4 +323,8 @@ void baseProjectLoop()
     drd->loop();
     // Handle ezTime NTP events on the main core (ezTime is not thread-safe).
     handleTimeSync();
+    // Service OTA updates, the web config server, and WiFi reconnection
+    ArduinoOTA.handle();
+    handleWebServer();
+    handleWifiResilience();
 }

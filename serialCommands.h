@@ -7,6 +7,7 @@
 // Forward declarations - these will be defined in ClockLogic.h
 extern int backlightLevel;
 extern WorldClockZone worldZones[4];
+extern int homeZoneIndex;
 extern unsigned long manualBrightnessUntil;
 extern const unsigned long MANUAL_BRIGHTNESS_HOLD_MS;
 
@@ -44,7 +45,7 @@ void handleSerialCommands()
             if (waitForSync(10)) { // Wait up to 10 seconds for sync
                 Serial.println("Time sync successful!");
                 Serial.println("UTC: " + UTC.dateTime());
-                Serial.println("Santa Clara: " + worldZones[0].tz.dateTime());
+                Serial.println(worldZones[homeZoneIndex].name + ": " + worldZones[homeZoneIndex].tz.dateTime());
             } else {
                 Serial.println("Time sync failed or timed out");
             }

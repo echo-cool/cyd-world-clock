@@ -32,3 +32,40 @@ There are two ways to get the clock online:
   <img src="img/wifi.jpg" alt="wifi" width="45%"/>
   <img src="img/autoConnect.jpg" alt="autoConnect" width="16%"/>
 </p>
+
+# Web Configuration
+
+Once online, the device runs a small web page for changing settings without
+re-flashing. Browse to `http://<device-ip>/` (the IP is shown on screen at
+startup and via the `WIFI` serial command). From there you can set, for each of
+the four quadrants:
+
+- **Label** – the name shown above the clock
+- **Timezone** – any IANA tz database name (e.g. `Asia/Tokyo`)
+- **Market** – optional exchange status (NYSE / SSE / LSE / None)
+- **Home zone** – drives auto-brightness and the +1/-1 relative-date hint
+
+plus the 12/24-hour and US/non-US date-format toggles. Saving writes the
+settings to flash and reboots to apply them.
+
+# Market Status
+
+Zones assigned a market show that exchange's live trading status (open,
+pre-market, after-hours, closing, opening/closing countdown, closed, or
+holiday) in its local time. Weekends and public holidays are treated as closed.
+The bundled holiday tables cover 2025–2026 and should be updated annually
+(`*_HOLIDAYS` in `ClockLogic.h`); the Chinese (SSE) calendar is lunar and only
+approximate.
+
+# Status Indicator
+
+A small dot at the centre of the screen shows connectivity: **green** = online
+and time synced, **yellow** = online but NTP needs a refresh, **red** = WiFi
+down or time not yet set. If WiFi drops, the device reconnects automatically.
+
+# OTA Updates
+
+Over-the-air firmware updates are enabled (hostname `esp32worldclock`). After the
+first USB flash you can upload wirelessly from the Arduino IDE (the device
+appears as a network port). Set `OTA_PASSWORD` in `secrets.h` to require a
+password; leave it blank to allow updates from anyone on your LAN.

@@ -52,6 +52,7 @@ struct MarketInfo {
     bool hasMarket;
     TradingSession sessions[5]; // Support up to 5 trading sessions per market
     int sessionCount;
+    int marketId; // MARKET_* id (used for holiday lookup)
 };
 
 // World Clock Configuration
@@ -68,31 +69,109 @@ struct WorldClockZone {
     String lastMarketStatus;
 };
 
-WorldClockZone worldZones[4] = {
-    {"SANTA CLARA", "America/Los_Angeles", Timezone(), -1, -1, false, -1, false, 
-     {"", false, {}, 0}, ""},
-    {"NEW YORK", "America/New_York", Timezone(), -1, -1, false, -1, false, 
-     {"NYSE", true, {
-         {9, 30, 16, 0, "REGULAR"},      // Regular trading Mon-Fri
-         {16, 0, 20, 0, "AFTER-HRS"},    // After-hours trading Mon-Fri
-         {20, 0, 4, 0, "OVERNIGHT"},     // Overnight trading (spans midnight, Fri-Sun)
-         {4, 0, 9, 30, "PRE-MARKET"}     // Pre-market trading (Sun 6PM = Mon 4AM equiv)
-     }, 4}, ""},
-    {"BEIJING", "Asia/Shanghai", Timezone(), -1, -1, false, -1, false, 
-     {"SSE", true, {
-         {9, 0, 9, 30, "PRE-MARKET"},     // PRE-MARKET session
-         {9, 30, 11, 30, "REGULAR"},     // Morning session
-         {13, 0, 15, 0, "REGULAR"},    // Afternoon session
-         {15, 0, 15, 30, "AFTER-HRS"}   // After-hours session
-     }, 4}, ""},
-    {"LONDON", "Europe/London", Timezone(), -1, -1, false, -1, false, 
-     {"LSE", true, {
-         {7, 15, 8, 0, "PRE-MARKET"},    // Pre-market trading (order input)
-         {8, 0, 16, 30, "REGULAR"},      // Regular trading hours
-         {16, 30, 17, 0, "CLOSING"},     // Closing auction period
-         {17, 0, 17, 30, "AFTER-HRS"}    // After-hours reporting/settlement
-     }, 4}, ""}
+// The four on-screen zones. Populated from projectConfig at startup by
+// initWorldZonesFromConfig().
+WorldClockZone worldZones[4];
+
+// Index of the "home" zone (drives auto-brightness and the +1/-1 relative-date
+// hint). Set from projectConfig at startup.
+int homeZoneIndex = 0;
+
+// ---- Market catalog -------------------------------------------------------
+// Trading sessions are defined in each exchange's LOCAL time. The session
+// engine treats Saturday/Sunday and listed holidays as closed.
+MarketInfo makeMarket(int id)
+{
+    MarketInfo m;
+    m.marketId = id;
+    switch (id)
+    {
+    case MARKET_NYSE:
+        m.exchange = "NYSE"; m.hasMarket = true; m.sessionCount = 3;
+        m.sessions[0] = {4, 0, 9, 30, "PRE-MARKET"};
+        m.sessions[1] = {9, 30, 16, 0, "REGULAR"};
+        m.sessions[2] = {16, 0, 20, 0, "AFTER-HRS"};
+        break;
+    case MARKET_SSE:
+        m.exchange = "SSE"; m.hasMarket = true; m.sessionCount = 4;
+        m.sessions[0] = {9, 0, 9, 30, "PRE-MARKET"};
+        m.sessions[1] = {9, 30, 11, 30, "REGULAR"};   // Morning session
+        m.sessions[2] = {13, 0, 15, 0, "REGULAR"};    // Afternoon session
+        m.sessions[3] = {15, 0, 15, 30, "AFTER-HRS"};
+        break;
+    case MARKET_LSE:
+        m.exchange = "LSE"; m.hasMarket = true; m.sessionCount = 4;
+        m.sessions[0] = {7, 15, 8, 0, "PRE-MARKET"};
+        m.sessions[1] = {8, 0, 16, 30, "REGULAR"};
+        m.sessions[2] = {16, 30, 17, 0, "CLOSING"};
+        m.sessions[3] = {17, 0, 17, 30, "AFTER-HRS"};
+        break;
+    default: // MARKET_NONE
+        m.exchange = ""; m.hasMarket = false; m.sessionCount = 0;
+        break;
+    }
+    return m;
+}
+
+// ---- Market holidays ------------------------------------------------------
+// Exchanges close on public holidays in addition to weekends. These tables list
+// full-day closures for 2025-2026 and SHOULD BE UPDATED ANNUALLY. The Chinese
+// (SSE) calendar is lunar/government-set and only approximate here.
+struct Holiday { int y, m, d; };
+
+const Holiday NYSE_HOLIDAYS[] = {
+    {2025,1,1},{2025,1,20},{2025,2,17},{2025,4,18},{2025,5,26},{2025,6,19},
+    {2025,7,4},{2025,9,1},{2025,11,27},{2025,12,25},
+    {2026,1,1},{2026,1,19},{2026,2,16},{2026,4,3},{2026,5,25},{2026,6,19},
+    {2026,7,3},{2026,9,7},{2026,11,26},{2026,12,25},
 };
+const Holiday LSE_HOLIDAYS[] = {
+    {2025,1,1},{2025,4,18},{2025,4,21},{2025,5,5},{2025,5,26},{2025,8,25},
+    {2025,12,25},{2025,12,26},
+    {2026,1,1},{2026,4,3},{2026,4,6},{2026,5,4},{2026,5,25},{2026,8,31},
+    {2026,12,25},{2026,12,28},
+};
+const Holiday SSE_HOLIDAYS[] = { // Approximate - lunar dates, verify each year
+    {2025,1,1},{2025,1,28},{2025,1,29},{2025,1,30},{2025,1,31},{2025,2,3},{2025,2,4},
+    {2025,4,4},{2025,5,1},{2025,5,2},{2025,5,5},{2025,6,2},
+    {2025,10,1},{2025,10,2},{2025,10,3},{2025,10,6},{2025,10,7},{2025,10,8},
+    {2026,1,1},{2026,2,16},{2026,2,17},{2026,2,18},{2026,2,19},{2026,2,20},
+    {2026,5,1},{2026,10,1},{2026,10,2},
+};
+
+bool isMarketHoliday(int marketId, int y, int mth, int d)
+{
+    const Holiday *table = nullptr;
+    int count = 0;
+    if (marketId == MARKET_NYSE) { table = NYSE_HOLIDAYS; count = sizeof(NYSE_HOLIDAYS) / sizeof(Holiday); }
+    else if (marketId == MARKET_LSE) { table = LSE_HOLIDAYS; count = sizeof(LSE_HOLIDAYS) / sizeof(Holiday); }
+    else if (marketId == MARKET_SSE) { table = SSE_HOLIDAYS; count = sizeof(SSE_HOLIDAYS) / sizeof(Holiday); }
+    for (int i = 0; i < count; i++)
+    {
+        if (table[i].y == y && table[i].m == mth && table[i].d == d) return true;
+    }
+    return false;
+}
+
+// Build the worldZones array from the saved/edited configuration.
+void initWorldZonesFromConfig()
+{
+    homeZoneIndex = projectConfig.homeZoneIndex;
+    if (homeZoneIndex < 0 || homeZoneIndex >= PROJECT_NUM_ZONES) homeZoneIndex = 0;
+
+    for (int i = 0; i < PROJECT_NUM_ZONES; i++)
+    {
+        worldZones[i].name = projectConfig.zoneLabels[i];
+        worldZones[i].timezone = projectConfig.zoneTimezones[i];
+        worldZones[i].lastHour = -1;
+        worldZones[i].lastMinute = -1;
+        worldZones[i].lastIspm = false;
+        worldZones[i].lastDay = -1;
+        worldZones[i].initialized = false;
+        worldZones[i].market = makeMarket(projectConfig.zoneMarketId[i]);
+        worldZones[i].lastMarketStatus = "";
+    }
+}
 
 // Include serial commands and web config after WorldClockZone is defined
 #include "serialCommands.h"
@@ -362,151 +441,73 @@ long daysFromCivil(int y, int m, int d)
     return era * 146097 + (long)doe - 719468;
 }
 
+// Determine the trading status of a zone's exchange in its local time.
+// Returns strings like "NYSE OPEN", "NYSE PRE-MARKET OPEN",
+// "NYSE CLOSE IN 5 MIN", "NYSE OPEN IN 3 MIN", "NYSE CLOSED", "NYSE HOLIDAY".
+// Weekends and listed holidays are treated as closed; sessions that wrap past
+// midnight are handled within the same weekday.
 String getMarketStatus(WorldClockZone &zone)
 {
     if (!zone.market.hasMarket) {
         return ""; // No market for this zone
     }
-    
+
     time_t local = zone.tz.now();
-    int currentHour = hour(local);
-    int currentMinute = minute(local);
-    int currentDayOfWeek = weekday(local); // 1=Sunday, 2=Monday, ..., 7=Saturday
-    int currentTotalMinutes = currentHour * 60 + currentMinute;
-    
-    // Weekend logic with special cases for Sunday evening and Friday evening
-    if (currentDayOfWeek == 7) { // Saturday
-        // Saturday is generally closed for all markets
-        return zone.market.exchange + " CLOSED";
-    } else if (currentDayOfWeek == 1) { // Sunday
-        // Sunday evening trading - check if any sessions are active
-        // US markets may have overnight sessions continuing from Friday or starting Sunday evening
-        if (zone.market.exchange == "NYSE") {
-            // Check if we're in an overnight session that started Friday night
-            for (int i = 0; i < zone.market.sessionCount; i++) {
-                TradingSession session = zone.market.sessions[i];
-                if (session.sessionName == "OVERNIGHT" && session.sessionName.length() > 0) {
-                    int sessionStart = session.openHour * 60 + session.openMinute;
-                    int sessionEnd = session.closeHour * 60 + session.closeMinute;
-                    
-                    // For overnight sessions that span from Friday to Sunday
-                    if (sessionEnd < sessionStart && currentTotalMinutes < sessionEnd) {
-                        int minutesToClose = sessionEnd - currentTotalMinutes;
-                        if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
-                            return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
-                        }
-                        return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    }
-                }
-                
-                // Check for Sunday evening trading (futures/forex start around 6 PM ET Sunday)
-                if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 18 * 60) { // After 6 PM Sunday
-                    // Sunday 6 PM ET is when futures markets typically open for the week
-                    int minutesToClose = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
-                    if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN && currentTotalMinutes >= 18 * 60) {
-                        return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
-                    }
-                    return zone.market.exchange + " OPEN";
-                }
-                
-                // Also check if pre-market is starting late Sunday (some brokers start at 1 AM Monday)
-                if (session.sessionName == "PRE-MARKET" && currentTotalMinutes >= 1 * 60) { // After 1 AM Sunday night
-                    int sessionStart = session.openHour * 60 + session.openMinute;
-                    if (currentTotalMinutes >= sessionStart) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    } else if (sessionStart - currentTotalMinutes <= MARKET_STATUS_MESSAGE_MIN) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(sessionStart - currentTotalMinutes) + " MIN";
-                    }
-                }
-            }
-        }
-        return zone.market.exchange + " CLOSED";
-    } else if (currentDayOfWeek == 6) { // Friday
-        // Friday may have extended evening hours - check if overnight sessions extend into weekend
-        if (zone.market.exchange == "NYSE") {
-            for (int i = 0; i < zone.market.sessionCount; i++) {
-                TradingSession session = zone.market.sessions[i];
-                if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 20 * 60) { // After 8 PM Friday
-                    // Overnight session continues into weekend (Friday 8 PM to Sunday)
-                    return zone.market.exchange + " OVERNIGHT OPEN";
-                }
-            }
-        }
-        // Otherwise check normal sessions below
+    int dow = weekday(local); // 1=Sunday ... 7=Saturday
+    int nowMin = hour(local) * 60 + minute(local);
+    const String &ex = zone.market.exchange;
+
+    // Weekend
+    if (dow == 1 || dow == 7) {
+        return ex + " CLOSED";
     }
-    
-    // Check each trading session
+
+    // Holiday
+    if (isMarketHoliday(zone.market.marketId, year(local), month(local), day(local))) {
+        return ex + " HOLIDAY";
+    }
+
+    // Currently inside a session?
     for (int i = 0; i < zone.market.sessionCount; i++) {
-        TradingSession session = zone.market.sessions[i];
-        if (session.sessionName.length() == 0) continue; // Skip empty sessions
-        
-        int sessionStart = session.openHour * 60 + session.openMinute;
-        int sessionEnd = session.closeHour * 60 + session.closeMinute;
-        
-        // Handle sessions that span midnight (like overnight trading)
-        bool isCurrentlyInSession = false;
-        if (sessionEnd < sessionStart) {
-            // Session spans midnight (e.g., 20:00 to 04:00)
-            isCurrentlyInSession = (currentTotalMinutes >= sessionStart || currentTotalMinutes < sessionEnd);
-        } else {
-            // Normal session within same day
-            isCurrentlyInSession = (currentTotalMinutes >= sessionStart && currentTotalMinutes < sessionEnd);
-        }
-        
-        if (isCurrentlyInSession) {
-            // Currently in this session - check if closing soon
-            int minutesToClose;
-            if (sessionEnd < sessionStart && currentTotalMinutes >= sessionStart) {
-                // We're in the first part of a midnight-spanning session
-                minutesToClose = (24 * 60) - currentTotalMinutes + sessionEnd;
-            } else {
-                minutesToClose = sessionEnd - currentTotalMinutes;
-            }
-            
+        TradingSession &s = zone.market.sessions[i];
+        int start = s.openHour * 60 + s.openMinute;
+        int end = s.closeHour * 60 + s.closeMinute;
+        bool inSession = (end < start)
+            ? (nowMin >= start || nowMin < end)   // wraps past midnight
+            : (nowMin >= start && nowMin < end);
+
+        if (inSession) {
+            int minutesToClose = (end < start && nowMin >= start)
+                ? (24 * 60 - nowMin + end)
+                : (end - nowMin);
+            String prefix = (s.sessionName == "REGULAR") ? "" : s.sessionName + " ";
             if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
-                if (session.sessionName == "REGULAR") {
-                    return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
-                } else {
-                    return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
-                }
+                return ex + " " + prefix + "CLOSE IN " + String(minutesToClose) + " MIN";
             }
-            
-            if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN";
-            } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN";
-            }
+            return ex + " " + prefix + "OPEN";
         }
-        
-        // Check if next session is opening soon
-        int minutesToOpen;
-        if (sessionEnd < sessionStart) {
-            // Next session spans midnight
-            if (currentTotalMinutes < sessionStart) {
-                minutesToOpen = sessionStart - currentTotalMinutes;
-            } else {
-                minutesToOpen = (24 * 60) - currentTotalMinutes + sessionStart;
-            }
-        } else {
-            // Normal next session
-            if (currentTotalMinutes < sessionStart) {
-                minutesToOpen = sessionStart - currentTotalMinutes;
-            } else {
-                // Check next day's first session
-                continue;
-            }
-        }
-        
-        if (minutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
-            if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN IN " + String(minutesToOpen) + " MIN";
-            } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(minutesToOpen) + " MIN";
+    }
+
+    // Not in a session - is the next one opening soon (later today)?
+    int bestMinutesToOpen = -1;
+    String bestName = "";
+    for (int i = 0; i < zone.market.sessionCount; i++) {
+        TradingSession &s = zone.market.sessions[i];
+        int start = s.openHour * 60 + s.openMinute;
+        if (start > nowMin) {
+            int delta = start - nowMin;
+            if (bestMinutesToOpen < 0 || delta < bestMinutesToOpen) {
+                bestMinutesToOpen = delta;
+                bestName = s.sessionName;
             }
         }
     }
-    
-    return zone.market.exchange + " CLOSED";
+    if (bestMinutesToOpen >= 0 && bestMinutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
+        String prefix = (bestName == "REGULAR") ? "" : bestName + " ";
+        return ex + " " + prefix + "OPEN IN " + String(bestMinutesToOpen) + " MIN";
+    }
+
+    return ex + " CLOSED";
 }
 
 uint16_t getMarketStatusColor(String status)
@@ -514,12 +515,12 @@ uint16_t getMarketStatusColor(String status)
     // Check for specific session types first (before generic OPEN check)
     if (status.indexOf("AFTER-HRS OPEN") != -1) {
         return TFT_CYAN;    // Cyan for extended/after-hours trading
-    } else if (status.indexOf("OVERNIGHT OPEN") != -1 || status.indexOf("PRE-MARKET OPEN") != -1) {
-        return TFT_BLUE;    // Blue for overnight/pre-market
+    } else if (status.indexOf("PRE-MARKET OPEN") != -1) {
+        return TFT_BLUE;    // Blue for pre-market
     } else if (status.indexOf("CLOSING OPEN") != -1) {
         return TFT_YELLOW;  // Yellow for closing auction period
-    } else if (status.indexOf("CLOSED") != -1) {
-        return TFT_RED;     // Red for closed market
+    } else if (status.indexOf("CLOSED") != -1 || status.indexOf("HOLIDAY") != -1) {
+        return TFT_RED;     // Red for closed market / holiday
     } else if (status.indexOf(" OPEN") != -1 && status.indexOf("OPEN ") == -1) {
         return TFT_GREEN;   // Bright green for regular trading (e.g. "NYSE OPEN")
     } else if (status.indexOf("OPEN ") != -1) {
@@ -575,7 +576,7 @@ void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
     // Compare actual calendar dates (not bare day-of-month) so it stays correct
     // across month and year boundaries.
     String dayText = dayNames[dow];
-    time_t homeTime = worldZones[0].tz.now();
+    time_t homeTime = worldZones[homeZoneIndex].tz.now();
     long dayDiff = daysFromCivil(yr, mth, dd) -
                    daysFromCivil(year(homeTime), month(homeTime), day(homeTime));
 
@@ -709,8 +710,10 @@ bool hasTimeChanged(WorldClockZone &zone)
     int currentMinute = minute(local);
     int currentDay = day(local);
 
-    // Debug output every 10 seconds for the first zone only to avoid spam
-    if (DEBUG_CLOCK && zone.name == "SANTA CLARA" && currentMillis - lastDebugOutput >= 10000) {
+    bool isHomeZone = (&zone == &worldZones[homeZoneIndex]);
+
+    // Debug output every 10 seconds for the home zone only to avoid spam
+    if (DEBUG_CLOCK && isHomeZone && currentMillis - lastDebugOutput >= 10000) {
         CLOCK_DEBUG_PRINTLN("Zone " + zone.name + " - Current: " + String(currentHour) + ":" +
                       String(currentMinute) + ", Last: " + String(zone.lastHour) + ":" +
                       String(zone.lastMinute) + ", Initialized: " + String(zone.initialized));
@@ -740,7 +743,7 @@ bool hasTimeChanged(WorldClockZone &zone)
                        marketStatusChanged);
 
     if (timeChanged) {
-        if (DEBUG_CLOCK && zone.name == "SANTA CLARA" && zone.initialized) {
+        if (DEBUG_CLOCK && isHomeZone && zone.initialized) {
             CLOCK_DEBUG_PRINTLN("Time changed for " + zone.name + " from " +
                           String(zone.lastHour) + ":" + String(zone.lastMinute) +
                           " to " + String(currentHour) + ":" + String(currentMinute));
@@ -779,10 +782,10 @@ void adjustBrightnessBasedOnHomeTime()
         return;
     }
 
-    // Get current hour from Santa Clara (home location - worldZones[0])
-    if (worldZones[0].initialized) {
-        time_t santaClaraTime = worldZones[0].tz.now();
-        int currentHour = hour(santaClaraTime);
+    // Get current hour from the configured home zone
+    if (worldZones[homeZoneIndex].initialized) {
+        time_t homeTime = worldZones[homeZoneIndex].tz.now();
+        int currentHour = hour(homeTime);
         
         // Only adjust if the hour has changed to avoid constant adjustments
         if (currentHour != lastHourChecked) {
@@ -803,7 +806,7 @@ void adjustBrightnessBasedOnHomeTime()
                 backlightLevel = targetBrightness;
                 analogWrite(BACKLIGHT_PIN, backlightLevel);
 
-                Serial.print("Auto brightness adjusted for Santa Clara time ");
+                Serial.print("Auto brightness adjusted for home zone time ");
                 Serial.print(currentHour);
                 Serial.print(":xx - Brightness set to ");
                 Serial.println(backlightLevel);
@@ -968,16 +971,17 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // Show WiFi connected status
     showWiFiStatus("WiFi Connected!", TFT_GREEN);
     
-    // Show IP address on screen for web configuration
+    // Show the web config URL on screen so the user can note it down
     String ipAddress = WiFi.localIP().toString();
-    // showWiFiStatus("Web Config:", TFT_WHITE);
-    // delay(1000);
-    // showWiFiStatus("http://" + ipAddress, TFT_CYAN, 2);
-    // delay(2000); // Show IP for 4 seconds so user can note it down
-    
+    showWiFiStatus("Config: http://" + ipAddress, TFT_CYAN, 2);
+    delay(1500);
+
+    // Build the zones from saved/edited configuration
+    initWorldZonesFromConfig();
+
     // Show timezone setup status
     showWiFiStatus("Setting up zones...", TFT_CYAN);
-    
+
     // Initialize all timezones with retry mechanism
     for (int i = 0; i < 4; i++) {
         bool tzSuccess = false;
@@ -1142,20 +1146,37 @@ void handleTouch()
     }
 }
 
+// Small status dot at the centre of the screen (where the four quadrants meet):
+//   green  = WiFi up and time synced
+//   yellow = WiFi up but NTP needs a refresh
+//   red    = WiFi down or time never set
+void drawConnectionIndicator()
+{
+    uint16_t color;
+    if (WiFi.status() != WL_CONNECTED) {
+        color = TFT_RED;
+    } else if (timeStatus() == timeNotSet) {
+        color = TFT_RED;
+    } else if (timeStatus() == timeNeedsSync) {
+        color = TFT_YELLOW;
+    } else {
+        color = TFT_GREEN;
+    }
+    tft.fillCircle(160, 120, 3, color);
+}
+
 void drawRollingClock()
 {
-    unsigned long currentTime = millis();
-    
     // Handle serial commands
     handleSerialCommands();
-    
+
     // Handle touch input for backlight control
     handleTouch();
-    
+
     // Update flash state for market status messages
     updateFlashState();
-    
-    // Adjust brightness based on Santa Clara time
+
+    // Adjust brightness based on the home zone time
     adjustBrightnessBasedOnHomeTime();
     
     // Only clear screen and draw borders on first draw
@@ -1184,4 +1205,7 @@ void drawRollingClock()
     
     // Reset flash change flag after all zones have been processed
     resetFlashChangeFlag();
+
+    // Draw the WiFi/NTP status dot on top of everything
+    drawConnectionIndicator();
 }
