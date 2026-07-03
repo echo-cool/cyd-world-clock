@@ -434,7 +434,11 @@ namespace ezt {
 			buffer[14]  = 'Z';
 			buffer[15]  = 'T';	
 	
-			udp.flush();
+			#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+		udp.clear();	// flush() is a deprecated alias of clear() on ESP32 core 3.x
+#else
+		udp.flush();
+#endif
 			udp.begin(NTP_LOCAL_PORT);
 			unsigned long started = millis();
 			udp.beginPacket(server.c_str(), 123); //NTP requests are to port 123
@@ -803,7 +807,11 @@ String Timezone::getPosix() { return _posix; }
 			EthernetUDP udp;
 		#endif
 		
+		#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+		udp.clear();	// flush() is a deprecated alias of clear() on ESP32 core 3.x
+#else
 		udp.flush();
+#endif
 		udp.begin(TIMEZONED_LOCAL_PORT);
 		unsigned long started = millis();
 		udp.beginPacket(TIMEZONED_REMOTE_HOST, TIMEZONED_REMOTE_PORT);

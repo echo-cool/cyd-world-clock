@@ -12,7 +12,9 @@
 #define USER_SETUP_INFO "User_Setup"
 
 // Define to disable all #warnings in library (can be put in User_Setup_Select.h)
-//#define DISABLE_ALL_LIBRARY_WARNINGS
+// Enabled for this project: the CYD touch panel is driven by XPT2046_Bitbang on
+// separate pins, so TFT_eSPI's "TOUCH_CS pin not defined" warning is expected.
+#define DISABLE_ALL_LIBRARY_WARNINGS
 
 // ##################################################################################
 //
