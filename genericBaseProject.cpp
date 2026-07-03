@@ -109,7 +109,7 @@ static void handleTimeSync() {
             lastSyncTime = millis();
             ntpSyncStatus = true;
 
-            Serial.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
+            Log.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
         }
         lastKnownTime = timeAfter;
     }
@@ -118,7 +118,7 @@ static void handleTimeSync() {
     if (millis() - lastStatusReport > 1800000) { // 30 minutes
         lastStatusReport = millis();
 
-        Serial.println("NTP Status: " + String(syncCount) + " syncs, Last: " + String((millis() - lastSyncTime)/1000/60) + "min ago");
+        Log.println("NTP Status: " + String(syncCount) + " syncs, Last: " + String((millis() - lastSyncTime)/1000/60) + "min ago");
     }
 }
 
@@ -133,7 +133,7 @@ void baseProjectSetup()
     drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
     if (drd->detectDoubleReset())
     {
-        Serial.println(F("Forcing config mode as there was a Double reset detected"));
+        Log.println(F("Forcing config mode as there was a Double reset detected"));
         forceConfig = true;
     }
 
@@ -141,16 +141,16 @@ void baseProjectSetup()
     bool spiffsInitSuccess = SPIFFS.begin(false) || SPIFFS.begin(true);
     if (!spiffsInitSuccess)
     {
-        Serial.println("SPIFFS initialisation failed!");
+        Log.println("SPIFFS initialisation failed!");
         while (1)
             yield(); // Stay here twiddling thumbs waiting
     }
-    Serial.println("\r\nInitialisation done.");
+    Log.println("\r\nInitialisation done.");
 
     // Try to load existing config first
     if (!projectConfig.fetchConfigFile())
     {
-        Serial.println("No saved config found, will use defaults or WiFiManager");
+        Log.println("No saved config found, will use defaults or WiFiManager");
     }
 
     // Load the cached market holiday calendars (SPIFFS is up); the weekly
@@ -162,16 +162,16 @@ void baseProjectSetup()
     // retry several times before falling back to the config portal.
     if (!forceConfig)
     {
-        Serial.println("Attempting to connect with preconfigured WiFi...");
+        Log.println("Attempting to connect with preconfigured WiFi...");
         WiFi.mode(WIFI_STA);
 
         for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected; attempt++)
         {
-            Serial.print("WiFi connect attempt ");
-            Serial.print(attempt);
-            Serial.print("/");
-            Serial.print(WIFI_CONNECT_ATTEMPTS);
-            Serial.print(" ");
+            Log.print("WiFi connect attempt ");
+            Log.print(attempt);
+            Log.print("/");
+            Log.print(WIFI_CONNECT_ATTEMPTS);
+            Log.print(" ");
 
             // Reset any half-finished connection state from the previous attempt
             WiFi.disconnect();
@@ -182,9 +182,9 @@ void baseProjectSetup()
             while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT)
             {
                 delay(500);
-                Serial.print(".");
+                Log.print(".");
             }
-            Serial.println();
+            Log.println();
 
             if (WiFi.status() == WL_CONNECTED)
             {
@@ -194,9 +194,9 @@ void baseProjectSetup()
 
         if (wifiConnected)
         {
-            Serial.println("Connected with preconfigured WiFi!");
-            Serial.print("IP address: ");
-            Serial.println(WiFi.localIP());
+            Log.println("Connected with preconfigured WiFi!");
+            Log.print("IP address: ");
+            Log.println(WiFi.localIP());
 
             // Use preconfigured settings if no saved config
             if (projectConfig.timeZone.length() == 0)
@@ -204,12 +204,12 @@ void baseProjectSetup()
                 projectConfig.timeZone = PRECONFIGURED_TIMEZONE;
                 projectConfig.twentyFourHour = false;
                 projectConfig.usDateFormat = true;
-                Serial.println("Using preconfigured timezone and settings");
+                Log.println("Using preconfigured timezone and settings");
             }
         }
         else
         {
-            Serial.println("All preconfigured WiFi attempts failed, falling back to WiFiManager");
+            Log.println("All preconfigured WiFi attempts failed, falling back to WiFiManager");
             forceConfig = true;
         }
     }
@@ -229,37 +229,37 @@ void baseProjectSetup()
     {
         if (millis() - wifiWaitStart > 30000UL)
         {
-            Serial.println("\nStill no WiFi after portal/connect - rebooting to retry");
+            Log.println("\nStill no WiFi after portal/connect - rebooting to retry");
             drd->stop(); // avoid the reboot registering as a double reset
             delay(1000);
             ESP.restart();
         }
-        Serial.print(".");
+        Log.print(".");
         delay(500);
     }
 
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    Log.println("");
+    Log.println("WiFi connected");
+    Log.print("IP address: ");
+    Log.println(WiFi.localIP());
 
     // Enable over-the-air firmware updates now that the network is up
     setupOTA();
 
-    Serial.println("Waiting for time sync");
+    Log.println("Waiting for time sync");
 
     // Configure NTP sync frequency for production
     setInterval(1800); // Sync every 30 minutes (production setting)
     setDebug(ERROR); // Only show errors, not all debug info
 
-    Serial.println("Performing initial NTP sync...");
+    Log.println("Performing initial NTP sync...");
 
     waitForSync();
 
-    Serial.println("Initial NTP sync complete!");
+    Log.println("Initial NTP sync complete!");
 
-    Serial.println();
-    Serial.println("UTC:             " + UTC.dateTime());
+    Log.println();
+    Log.println("UTC:             " + UTC.dateTime());
 
     // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in
     // ClockLogic.cpp), so this zone survives timezone-server outages too. The
@@ -275,14 +275,14 @@ void baseProjectSetup()
             if (posix)
             {
                 myTZ.setPosix(posix);
-                Serial.println("Timezone server unreachable - using built-in POSIX rules");
+                Log.println("Timezone server unreachable - using built-in POSIX rules");
             }
         }
     }
-    Serial.print(projectConfig.timeZone);
-    Serial.print(F(":     "));
-    Serial.println(myTZ.dateTime());
-    Serial.println("-------------------------");
+    Log.print(projectConfig.timeZone);
+    Log.print(F(":     "));
+    Log.println(myTZ.dateTime());
+    Log.println("-------------------------");
 }
 
 void baseProjectLoop()

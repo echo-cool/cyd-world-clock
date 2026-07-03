@@ -5,6 +5,7 @@
 #include <ESP_DoubleResetDetector.h>
 
 #include "wifiManagerHandler.h"
+#include "logBuffer.h"
 #include "projectConfig.h"
 #include "projectDisplay.h"
 
@@ -17,7 +18,7 @@ bool shouldSaveConfig = false;
 // callback notifying us of the need to save config
 void saveConfigCallback()
 {
-  Serial.println("Should save config");
+  Log.println("Should save config");
   shouldSaveConfig = true;
 }
 
@@ -81,7 +82,7 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
     drd->stop();
     if (!wm.startConfigPortal("esp32Project", "12345678"))
     {
-      Serial.println("Config portal timed out with no WiFi - rebooting to retry");
+      Log.println("Config portal timed out with no WiFi - rebooting to retry");
       delay(3000);
       // reset and try again (preconfigured credentials get retried first)
       ESP.restart();
@@ -92,7 +93,7 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   {
     if (!wm.autoConnect("esp32Project", "12345678"))
     {
-      Serial.println("Config portal timed out with no WiFi - rebooting to retry");
+      Log.println("Config portal timed out with no WiFi - rebooting to retry");
       delay(3000);
       // Stop the double-reset detector first: its RTC flag is still armed
       // (drd->loop() never ran during setup), so restarting without this

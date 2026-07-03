@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 
+#include "logBuffer.h"
 #include "projectDisplay.h"
 
 class SerialDisplay : public ProjectDisplay
@@ -10,12 +11,12 @@ class SerialDisplay : public ProjectDisplay
 public:
   void displaySetup()
   {
-    Serial.println("Serial Display Setup");
+    Log.println("Serial Display Setup");
   }
 
   void drawWifiManagerMessage(WiFiManager *myWiFiManager)
   {
-    Serial.println("Entered Conf Mode");
+    Log.println("Entered Conf Mode");
   }
 };
 

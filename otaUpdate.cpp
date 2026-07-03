@@ -6,6 +6,7 @@
 #include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED
 
 #include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
 #include "clockFaces.h"         // FACE_COUNT, clockFaceName
@@ -107,7 +108,7 @@ static void setupArduinoOTA()
                           : error == OTA_CONNECT_ERROR ? "connect failed"
                           : error == OTA_RECEIVE_ERROR ? "receive failed"
                                                        : "end failed";
-        Serial.println(String("OTA error: ") + msg);
+        Log.println(String("OTA error: ") + msg);
         otaFailScreen(String("OTA update failed (") + msg + ")");
     });
 
@@ -216,7 +217,7 @@ static void handleUpdateUpload()
         // percentage is accurate (multipart Content-Length would overshoot).
         webUpdateExpectedSize = (size_t)webServer.arg("size").toInt();
 
-        Serial.println("Web update started: " + up.filename);
+        Log.println("Web update started: " + up.filename);
         drawOtaScreen("Web update: receiving firmware...", TFT_CYAN);
         drawOtaProgressFrame();
 
@@ -243,7 +244,7 @@ static void handleUpdateUpload()
         if (webUpdateError.length() == 0 && Update.end(true))
         {
             webUpdateOk = true;
-            Serial.println("Web update received: " + String(up.totalSize) + " bytes");
+            Log.println("Web update received: " + String(up.totalSize) + " bytes");
         }
         else if (webUpdateError.length() == 0)
         {
@@ -278,7 +279,7 @@ static void handleUpdateResult()
     {
         String err = webUpdateError.length() > 0 ? webUpdateError : "update failed";
         webServer.send(500, "text/plain", err);
-        Serial.println("Web update failed: " + err);
+        Log.println("Web update failed: " + err);
         otaFailScreen("Web update failed");
     }
 }
@@ -336,6 +337,7 @@ static void handleSettingsPage()
     page += FPSTR(SETTINGS_PAGE_HEAD);
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
             " &middot; <a href=\"/update\">Firmware update</a>"
+            " &middot; <a href=\"/logs\">Logs</a>"
             " &middot; <a href=\"/api/status\">Status JSON</a></p>";
     page += "<form method=\"POST\" action=\"/settings\">";
 
@@ -429,7 +431,7 @@ static void handleSettingsPost()
     // Repaint the home screen with the new settings, whatever page the
     // on-device UI was showing.
     switchToScreen(SCREEN_HOME);
-    Serial.println("Settings applied from the web page");
+    Log.println("Settings applied from the web page");
 
     webServer.sendHeader("Location", "/");
     webServer.send(303, "text/plain", "Saved");
@@ -440,14 +442,24 @@ static void handleApiStatus()
 {
     if (!webAuthenticate()) return;
 
-    StaticJsonDocument<1536> doc;
+    DynamicJsonDocument doc(2048);
     doc["hostname"] = "esp32worldclock";
     doc["ip"] = WiFi.localIP().toString();
     doc["ssid"] = WiFi.SSID();
     doc["rssiDbm"] = WiFi.RSSI();
     doc["mac"] = WiFi.macAddress();
+    doc["chip"] = String(ESP.getChipModel()) + " r" + String(ESP.getChipRevision());
+    doc["cpuMhz"] = ESP.getCpuFreqMHz();
+#if SOC_TEMP_SENSOR_SUPPORTED
+    doc["cpuTempC"] = temperatureRead();
+#endif
+    doc["flashSizeBytes"] = ESP.getFlashChipSize();
+    doc["sketchSizeBytes"] = ESP.getSketchSize();
+    doc["sketchSlotBytes"] = ESP.getSketchSize() + ESP.getFreeSketchSpace();
     doc["uptimeSec"] = millis() / 1000UL;
     doc["freeHeapBytes"] = ESP.getFreeHeap();
+    doc["minFreeHeapBytes"] = ESP.getMinFreeHeap();
+    doc["maxAllocHeapBytes"] = ESP.getMaxAllocHeap();
     doc["ntpSyncs"] = syncCount;
     doc["lastSyncAgoMin"] = (syncCount > 0)
                                 ? (long)((millis() - lastSyncTime) / 60000UL)
@@ -474,11 +486,58 @@ static void handleApiStatus()
     webServer.send(200, "application/json", out);
 }
 
+/*-------- Log viewer ----------*/
+// The tail of the in-RAM log ring (logBuffer.h) in the browser: /api/logs
+// returns it as plain text, /logs is a small auto-refreshing viewer.
+
+static const char LOGS_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>World Clock logs</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;background:#111;color:#ddd;margin:0;padding:1rem}
+h1{font-size:1rem;font-family:system-ui,sans-serif;margin:0 .0 .4rem}
+a{color:#0a84ff;font-family:system-ui,sans-serif;font-size:.85rem;font-weight:normal}
+label{font-family:system-ui,sans-serif;font-size:.8rem;color:#aaa}
+pre{white-space:pre-wrap;word-break:break-all;font-size:.78rem;line-height:1.4;margin:.6rem 0 0}
+</style></head><body>
+<h1>ESP32 World Clock logs &middot; <a href="/">settings</a></h1>
+<label><input type="checkbox" id="auto" checked> auto-refresh (2s), timestamps are uptime</label>
+<pre id="l">loading...</pre>
+<script>
+var l=document.getElementById('l'),auto=document.getElementById('auto');
+async function load(){
+  try{
+    var r=await fetch('/api/logs');
+    var nearBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-60);
+    l.textContent=await r.text();
+    if(nearBottom)window.scrollTo(0,document.body.scrollHeight);
+  }catch(e){}
+}
+load();
+setInterval(function(){if(auto.checked)load();},2000);
+</script></body></html>
+)rawliteral";
+
+static void handleLogsPage()
+{
+    if (!webAuthenticate()) return;
+    webServer.send(200, "text/html", FPSTR(LOGS_PAGE));
+}
+
+static void handleApiLogs()
+{
+    if (!webAuthenticate()) return;
+    webServer.send(200, "text/plain", logTail(6144));
+}
+
 static void setupWebUpdater()
 {
     webServer.on("/", HTTP_GET, handleSettingsPage);
     webServer.on("/settings", HTTP_POST, handleSettingsPost);
     webServer.on("/api/status", HTTP_GET, handleApiStatus);
+    webServer.on("/logs", HTTP_GET, handleLogsPage);
+    webServer.on("/api/logs", HTTP_GET, handleApiLogs);
     webServer.on("/update", HTTP_GET, handleUpdatePage);
     webServer.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
     webServer.onNotFound([]() {
@@ -498,8 +557,8 @@ void setupOTA()
 {
     setupArduinoOTA();
     setupWebUpdater();
-    Serial.println("OTA updates enabled (hostname: esp32worldclock, espota port 3232)");
-    Serial.println("Web settings + updater: http://" + WiFi.localIP().toString() +
+    Log.println("OTA updates enabled (hostname: esp32worldclock, espota port 3232)");
+    Log.println("Web settings + updater: http://" + WiFi.localIP().toString() +
                    "/ (or http://esp32worldclock.local/)");
 }
 

@@ -20,7 +20,8 @@ enum UIScreen
     SCREEN_SETTINGS,
     SCREEN_ZONE_PICK,
     SCREEN_TZ_LIST,
-    SCREEN_STATUS
+    SCREEN_STATUS,
+    SCREEN_LOGS
 };
 
 extern UIScreen uiScreen;

@@ -158,7 +158,7 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
 {
     String url = "https://date.nager.at/api/v3/PublicHolidays/" +
                  String(year) + "/" + country;
-    Serial.println("Fetching public holidays: " + url);
+    Log.println("Fetching public holidays: " + url);
 
     WiFiClientSecure client;
     client.setInsecure(); // public calendar data - certificate pinning not worth the upkeep
@@ -170,7 +170,7 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     int code = http.GET();
     if (code != HTTP_CODE_OK)
     {
-        Serial.println("Holiday fetch failed, HTTP " + String(code));
+        Log.println("Holiday fetch failed, HTTP " + String(code));
         http.end();
         return -1;
     }
@@ -181,7 +181,7 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
-        Serial.println(String("Public holiday JSON parse failed: ") + err.c_str());
+        Log.println(String("Public holiday JSON parse failed: ") + err.c_str());
         return -1;
     }
     JsonArray arr = doc.as<JsonArray>();
@@ -269,13 +269,13 @@ void holidaysTick()
     }
     holDataVersion++;
     holUnlock();
-    Serial.println("Public holidays stored: " + String(country) + " " +
+    Log.println("Public holidays stored: " + String(country) + " " +
                    String(year) + " (" + String(n) + " entries)");
 }
 
 void printPublicHolidaysStatus()
 {
-    Serial.println("=== Public holidays (date.nager.at) ===");
+    Log.println("=== Public holidays (date.nager.at) ===");
     holLock();
     for (int i = 0; i < 4; i++)
     {
@@ -294,7 +294,7 @@ void printPublicHolidaysStatus()
             line += String(z.haveCountry) + " " + String(z.haveYear) + ", " +
                     String(z.count) + " holidays" + (z.stale ? " (refresh due)" : "");
         }
-        Serial.println(line);
+        Log.println(line);
     }
     holUnlock();
 }

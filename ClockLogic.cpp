@@ -89,7 +89,7 @@ void adjustBrightnessAuto();
 
 void SetupCYD()
 {
-    Serial.println("SetupCYD");
+    Log.println("SetupCYD");
     // tft.init();
     tft.fillScreen(clockBackgroundColor);
     tft.setTextColor(clockFontColor, clockBackgroundColor);
@@ -565,14 +565,14 @@ bool hasTimeChanged(WorldClockZone &zone)
     if (local < 1000000000) { // Before year 2001 - invalid timestamp
         // Force reinitialize timezone if it's giving invalid time
         if (zone.timezone.length() > 0) {
-            Serial.println("Invalid time detected for " + zone.name + ", reinitializing timezone...");
+            Log.println("Invalid time detected for " + zone.name + ", reinitializing timezone...");
             zone.tz.setLocation(zone.timezone);
             local = zone.tz.now();
         }
 
         // If still invalid, force update anyway to show something
         if (local < 1000000000) {
-            Serial.println("Still invalid time for " + zone.name + ", forcing update");
+            Log.println("Still invalid time for " + zone.name + ", forcing update");
             zone.initialized = false; // Force redraw
             return true;
         }
@@ -675,10 +675,10 @@ static void ldrSample(unsigned long now)
         int band = (ldrMaxSeen - ldrMinSeen) / 8; // hysteresis, no flapping
         if (!ldrDark && e > mid + band) {
             ldrDark = true;
-            Serial.println("Auto brightness: room went dark (LDR " + String(e) + ")");
+            Log.println("Auto brightness: room went dark (LDR " + String(e) + ")");
         } else if (ldrDark && e < mid - band) {
             ldrDark = false;
-            Serial.println("Auto brightness: room went bright (LDR " + String(e) + ")");
+            Log.println("Auto brightness: room went bright (LDR " + String(e) + ")");
         }
     }
 }
@@ -692,20 +692,20 @@ static bool ldrIsTrusted()
 void printLdrStatus()
 {
 #if USE_LDR_AUTOBRIGHTNESS
-    Serial.println("=== LDR (ambient light sensor, GPIO " + String(LDR_PIN) + ") ===");
-    Serial.println("Raw (normalized, higher = darker): " + String(ldrLastRaw));
-    Serial.println("Smoothed: " + String((int)ldrEma));
-    Serial.println("Range seen since boot: " + String(ldrMinSeen) + " - " + String(ldrMaxSeen));
+    Log.println("=== LDR (ambient light sensor, GPIO " + String(LDR_PIN) + ") ===");
+    Log.println("Raw (normalized, higher = darker): " + String(ldrLastRaw));
+    Log.println("Smoothed: " + String((int)ldrEma));
+    Log.println("Range seen since boot: " + String(ldrMinSeen) + " - " + String(ldrMaxSeen));
     if (ldrIsTrusted()) {
-        Serial.println("Sensor trusted: yes | Room: " + String(ldrDark ? "DARK" : "BRIGHT"));
+        Log.println("Sensor trusted: yes | Room: " + String(ldrDark ? "DARK" : "BRIGHT"));
     } else {
-        Serial.println("Sensor trusted: not yet (swing < " + String(LDR_MIN_SWING) +
+        Log.println("Sensor trusted: not yet (swing < " + String(LDR_MIN_SWING) +
                        " counts; using the 1-7 AM time fallback). Cover the sensor");
-        Serial.println("or shine a light at it - if the value never moves, this board's");
-        Serial.println("LDR circuit is one of the known-bad CYD revisions.");
+        Log.println("or shine a light at it - if the value never moves, this board's");
+        Log.println("LDR circuit is one of the known-bad CYD revisions.");
     }
 #else
-    Serial.println("LDR auto-brightness disabled at compile time (USE_LDR_AUTOBRIGHTNESS=0)");
+    Log.println("LDR auto-brightness disabled at compile time (USE_LDR_AUTOBRIGHTNESS=0)");
 #endif
 }
 
@@ -828,7 +828,7 @@ void showBrightnessBar(int brightness)
 
 void rollingClockSetup(bool is24Hour, bool usDate)
 {
-    Serial.println("World Clock Setup");
+    Log.println("World Clock Setup");
     SHOW_24HOUR = is24Hour;
     // usDate == true  -> MM/DD/YY (US),  usDate == false -> DD/MM/YY (rest of world)
     NOT_US_DATE = !usDate;
@@ -840,12 +840,12 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // Off-screen quadrant buffer for flicker-free updates (see quadSprite)
     quadSpriteOk = (quadSprite.createSprite(quadrantWidth, quadrantHeight) != nullptr);
     if (!quadSpriteOk) {
-        Serial.println("WARNING: quadrant sprite allocation failed - drawing direct to panel");
+        Log.println("WARNING: quadrant sprite allocation failed - drawing direct to panel");
     }
 
     // Initialize touch screen
     touchscreen.begin();
-    Serial.println("Touch screen initialized");
+    Log.println("Touch screen initialized");
 
 #if USE_LDR_AUTOBRIGHTNESS
     // 0 dB attenuation: the CYD's LDR divider only produces small voltages,
@@ -883,7 +883,7 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
             tzSuccess = true;
             showWiFiStatus(worldZones[i].name + " - cached", TFT_GREEN);
-            Serial.println("CACHED: " + worldZones[i].name + " - " + worldZones[i].timezone);
+            Log.println("CACHED: " + worldZones[i].name + " - " + worldZones[i].timezone);
         }
 
         int retryCount = 0;
@@ -895,11 +895,11 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             statusMsg += " (" + String(retryCount + 1) + "/" + String(maxRetries) + ")";
             showWiFiStatus(statusMsg, TFT_CYAN);
 
-            Serial.print("Setting timezone ");
-            Serial.print(worldZones[i].name);
-            Serial.print(" (attempt ");
-            Serial.print(retryCount + 1);
-            Serial.println(")");
+            Log.print("Setting timezone ");
+            Log.print(worldZones[i].name);
+            Log.print(" (attempt ");
+            Log.print(retryCount + 1);
+            Log.println(")");
 
             // setLocation() returning true means the server sent a valid
             // definition and the POSIX rules were applied (and written to this
@@ -914,31 +914,31 @@ void rollingClockSetup(bool is24Hour, bool usDate)
                 showWiFiStatus(successMsg, TFT_GREEN);
 
                 time_t local = worldZones[i].tz.now();
-                Serial.print("SUCCESS: ");
-                Serial.print(worldZones[i].name);
-                Serial.print(" - ");
-                Serial.print(worldZones[i].timezone);
-                Serial.print(" | Time: ");
-                Serial.print(hour(local));
-                Serial.print(":");
-                if (minute(local) < 10) Serial.print("0");
-                Serial.println(minute(local));
+                Log.print("SUCCESS: ");
+                Log.print(worldZones[i].name);
+                Log.print(" - ");
+                Log.print(worldZones[i].timezone);
+                Log.print(" | Time: ");
+                Log.print(hour(local));
+                Log.print(":");
+                if (minute(local) < 10) Log.print("0");
+                Log.println(minute(local));
             } else {
-                Serial.println("FAILED: setLocation returned false");
+                Log.println("FAILED: setLocation returned false");
                 retryCount++;
                 if (retryCount < maxRetries) {
                     // Show retry message on screen
                     showWiFiStatus("Retrying...", TFT_YELLOW);
-                    Serial.println("Retrying in 2 seconds...");
+                    Log.println("Retrying in 2 seconds...");
                     delay(1000); // Additional delay since showWiFiStatus has its own delay
                 }
             }
         }
 
         if (!tzSuccess) {
-            Serial.print("ERROR: Failed to fetch timezone for ");
-            Serial.print(worldZones[i].name);
-            Serial.println(" after all retries!");
+            Log.print("ERROR: Failed to fetch timezone for ");
+            Log.print(worldZones[i].name);
+            Log.println(" after all retries!");
 
             // Timezone server unreachable and nothing usable cached. Preset
             // timezones carry built-in POSIX rules (incl. DST), so the zone
@@ -948,7 +948,7 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             if (posix) {
                 worldZones[i].tz.setPosix(posix);
                 showWiFiStatus(worldZones[i].name + " - built-in rules", TFT_YELLOW);
-                Serial.println("Using built-in POSIX rules: " + String(posix));
+                Log.println("Using built-in POSIX rules: " + String(posix));
             } else if (!worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
                 // The cache slot held a *different* zone (changed while
                 // offline) - don't keep ticking with the wrong rules.
@@ -1001,7 +1001,7 @@ void handleTouch()
         {
             // Center tap opens the settings page. switchToScreen suppresses
             // further touch input until the finger is lifted.
-            Serial.println("CENTER touch - opening settings page");
+            Log.println("CENTER touch - opening settings page");
             switchToScreen(SCREEN_SETTINGS);
             brightnessBarVisible = false;
             return;
@@ -1015,16 +1015,16 @@ void handleTouch()
                 backlightLevel -= 1; // Decrease brightness
                 if (backlightLevel <= 1) backlightLevel = 1; // Minimum brightness
 
-                Serial.print("LEFT touch - Dimmer: ");
-                Serial.println(backlightLevel);
+                Log.print("LEFT touch - Dimmer: ");
+                Log.println(backlightLevel);
             }
             else // Right third - make brighter
             {
                 backlightLevel += 1; // Increase brightness
                 if (backlightLevel > 255) backlightLevel = 255; // Maximum brightness
 
-                Serial.print("RIGHT touch - Brighter: ");
-                Serial.println(backlightLevel);
+                Log.print("RIGHT touch - Brighter: ");
+                Log.println(backlightLevel);
             }
 
             // Apply PWM to backlight pin
@@ -1040,14 +1040,14 @@ void handleTouch()
 
             lastTouchTime = currentTime;
 
-            Serial.print("Touch at X: ");
-            Serial.print(touch.x);
-            Serial.print(", Y: ");
-            Serial.print(touch.y);
-            Serial.print(", Pressure: ");
-            Serial.print(touch.zRaw);
-            Serial.print(", Brightness: ");
-            Serial.println(backlightLevel);
+            Log.print("Touch at X: ");
+            Log.print(touch.x);
+            Log.print(", Y: ");
+            Log.print(touch.y);
+            Log.print(", Pressure: ");
+            Log.print(touch.zRaw);
+            Log.print(", Brightness: ");
+            Log.println(backlightLevel);
         }
     }
 

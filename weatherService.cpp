@@ -133,7 +133,7 @@ static bool performFetch()
 
     String url = "https://api.open-meteo.com/v1/forecast?latitude=" + lats +
                  "&longitude=" + lons + "&current=temperature_2m,weather_code";
-    Serial.println("Fetching weather: " + url);
+    Log.println("Fetching weather: " + url);
 
     WiFiClientSecure client;
     client.setInsecure(); // public weather data - certificate pinning not worth the upkeep
@@ -144,7 +144,7 @@ static bool performFetch()
     int code = http.GET();
     if (code != HTTP_CODE_OK)
     {
-        Serial.println("Weather fetch failed, HTTP " + String(code));
+        Log.println("Weather fetch failed, HTTP " + String(code));
         http.end();
         return false;
     }
@@ -155,7 +155,7 @@ static bool performFetch()
     DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
-        Serial.println(String("Weather JSON parse failed: ") + err.c_str());
+        Log.println(String("Weather JSON parse failed: ") + err.c_str());
         return false;
     }
 
@@ -196,7 +196,7 @@ static bool performFetch()
     dataVersion++;
     weatherUnlock();
 
-    Serial.println("Weather updated for " + String(n) + " zone(s)");
+    Log.println("Weather updated for " + String(n) + " zone(s)");
     return true;
 }
 

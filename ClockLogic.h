@@ -8,13 +8,15 @@
 #include <XPT2046_Bitbang.h>
 #include <ezTime.h>
 
+#include "logBuffer.h" // the Log tee used by CLOCK_DEBUG_PRINTLN and all logging
+
 // Set to 1 to enable verbose per-frame draw/debug logging on the serial port.
 // Kept at 0 for normal use so the hot draw path isn't flooded with Serial output.
 #ifndef DEBUG_CLOCK
 #define DEBUG_CLOCK 0
 #endif
 #if DEBUG_CLOCK
-#define CLOCK_DEBUG_PRINTLN(x) Serial.println(x)
+#define CLOCK_DEBUG_PRINTLN(x) Log.println(x)
 #else
 #define CLOCK_DEBUG_PRINTLN(x) do {} while (0)
 #endif

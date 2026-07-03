@@ -5,13 +5,14 @@
 #include <WiFiManager.h>
 
 #include "cheapYellowLCD.h"
+#include "logBuffer.h"
 
 TFT_eSPI tft = TFT_eSPI();
 
 void CheapYellowDisplay::displaySetup()
 {
 
-  Serial.println("cyd display setup");
+  Log.println("cyd display setup");
   setWidth(320);
   setHeight(240);
 
@@ -32,7 +33,7 @@ void CheapYellowDisplay::drawWifiManagerMessage(WiFiManager *myWiFiManager)
   tft.setTextFont(1);
   tft.setTextSize(1);
   tft.setTextDatum(TL_DATUM);
-  Serial.println("Entered Conf Mode");
+  Log.println("Entered Conf Mode");
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawCentreString("Entered Conf Mode:", screenCenterX, 5, 2);

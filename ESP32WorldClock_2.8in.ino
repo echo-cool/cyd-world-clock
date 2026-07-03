@@ -4,13 +4,13 @@
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("Main setup running on core " + String(xPortGetCoreID()));
+    Log.println("Main setup running on core " + String(xPortGetCoreID()));
 
     baseProjectSetup();
     // You will be fully connected by the time you are here
 
     rollingClockSetup(projectConfig.twentyFourHour, projectConfig.usDateFormat);
-    Serial.println("Setup complete. Main loop will run on core " + String(xPortGetCoreID()));
+    Log.println("Setup complete. Main loop will run on core " + String(xPortGetCoreID()));
 }
 
 void loop()

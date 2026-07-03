@@ -8,7 +8,9 @@
 // System status page):
 //   /            - settings page (timezones, clock face, formats, brightness)
 //   /update      - firmware updater (upload a compiled .bin)
+//   /logs        - recent log lines (auto-refreshing viewer)
 //   /api/status  - diagnostics as JSON
+//   /api/logs    - the log tail as plain text
 //
 // Firmware updates also work over ArduinoOTA / espota - uncomment the espota
 // block in platformio.ini, or use the Arduino IDE's network port

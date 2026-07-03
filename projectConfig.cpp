@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 
 #include "clockFaces.h" // FACE_COUNT - clamp the saved face index
+#include "logBuffer.h"  // Log
 
 ProjectConfig projectConfig;
 
@@ -13,17 +14,17 @@ bool ProjectConfig::fetchConfigFile()
   if (SPIFFS.exists(PROJECT_CONFIG_JSON))
   {
     // file exists, reading and loading
-    Serial.println("reading config file");
+    Log.println("reading config file");
     File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "r");
     if (configFile)
     {
-      Serial.println("opened config file");
+      Log.println("opened config file");
       StaticJsonDocument<2048> json;
       DeserializationError error = deserializeJson(json, configFile);
       serializeJsonPretty(json, Serial);
       if (!error)
       {
-        Serial.println("\nparsed json");
+        Log.println("\nparsed json");
 
         if (json.containsKey(PROJECT_TIME_ZONE_LABEL))
         {
@@ -68,19 +69,19 @@ bool ProjectConfig::fetchConfigFile()
       }
       else
       {
-        Serial.println("failed to load json config");
+        Log.println("failed to load json config");
         return false;
       }
     }
   }
 
-  Serial.println("Config file does not exist");
+  Log.println("Config file does not exist");
   return false;
 }
 
 bool ProjectConfig::saveConfigFile()
 {
-  Serial.println(F("Saving config"));
+  Log.println(F("Saving config"));
   StaticJsonDocument<2048> json;
   json[PROJECT_TIME_ZONE_LABEL] = timeZone;
   json[PROJECT_TIME_TWENTY_FOUR_HOUR] = twentyFourHour;
@@ -98,14 +99,14 @@ bool ProjectConfig::saveConfigFile()
   File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "w");
   if (!configFile)
   {
-    Serial.println("failed to open config file for writing");
+    Log.println("failed to open config file for writing");
     return false;
   }
 
   serializeJsonPretty(json, Serial);
   if (serializeJson(json, configFile) == 0)
   {
-    Serial.println(F("Failed to write to file"));
+    Log.println(F("Failed to write to file"));
     return false;
   }
   configFile.close();

@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
 
+#include "logBuffer.h" // Log
 #include "otaUpdate.h" // otaInProgress - don't fetch mid-update
 
 // MARKET_HOLIDAYS_URL can be overridden in the untracked secrets.h.
@@ -244,14 +245,14 @@ static bool applyHolidayJson(const String &payload)
     DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
-        Serial.println(String("Holiday JSON parse failed: ") + err.c_str());
+        Log.println(String("Holiday JSON parse failed: ") + err.c_str());
         return false;
     }
 
     JsonObject holidays = doc["holidays"];
     if (holidays.isNull())
     {
-        Serial.println("Holiday JSON rejected: no \"holidays\" object");
+        Log.println("Holiday JSON rejected: no \"holidays\" object");
         return false;
     }
 
@@ -295,7 +296,7 @@ static bool applyHolidayJson(const String &payload)
 
     if (stagedCount == 0)
     {
-        Serial.println("Holiday JSON rejected: no usable exchange calendars");
+        Log.println("Holiday JSON rejected: no usable exchange calendars");
         return false;
     }
 
@@ -304,7 +305,7 @@ static bool applyHolidayJson(const String &payload)
     dynTableCount = stagedCount;
     holidayUnlock();
 
-    Serial.println("Holiday calendars applied for " + String(stagedCount) + " exchange(s)");
+    Log.println("Holiday calendars applied for " + String(stagedCount) + " exchange(s)");
     return true;
 }
 
@@ -315,7 +316,7 @@ static void saveHolidayCache(time_t fetchedAt, const String &payload)
     File f = SPIFFS.open(HOLIDAY_CACHE_FILE, "w");
     if (!f)
     {
-        Serial.println("Failed to open holiday cache for writing");
+        Log.println("Failed to open holiday cache for writing");
         return;
     }
     f.println((unsigned long)fetchedAt);
@@ -332,7 +333,7 @@ void marketHolidaysBegin()
     File f = SPIFFS.open(HOLIDAY_CACHE_FILE, "r");
     if (!f)
     {
-        Serial.println("No cached holiday calendars - using compiled-in tables");
+        Log.println("No cached holiday calendars - using compiled-in tables");
         return;
     }
     unsigned long fetchedAt = strtoul(f.readStringUntil('\n').c_str(), nullptr, 10);
@@ -344,7 +345,7 @@ void marketHolidaysBegin()
         holidayLock();
         lastFetchUnix = (time_t)fetchedAt;
         holidayUnlock();
-        Serial.println("Loaded cached holiday calendars");
+        Log.println("Loaded cached holiday calendars");
     }
 }
 
@@ -382,13 +383,13 @@ static bool fetchHolidayCalendars(time_t nowUtc)
     http.setTimeout(8000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-    Serial.println("Fetching holiday calendars: " MARKET_HOLIDAYS_URL);
+    Log.println("Fetching holiday calendars: " MARKET_HOLIDAYS_URL);
     if (!http.begin(client, MARKET_HOLIDAYS_URL))
         return false;
     int code = http.GET();
     if (code != HTTP_CODE_OK)
     {
-        Serial.println("Holiday fetch failed, HTTP " + String(code));
+        Log.println("Holiday fetch failed, HTTP " + String(code));
         http.end();
         return false;
     }
@@ -427,7 +428,7 @@ void marketHolidaysForceRefresh()
     time_t nowUtc = UTC.now(); // MAIN core (serial command handler)
     if (nowUtc < 1000000000)
     {
-        Serial.println("Clock not synced yet - cannot fetch");
+        Log.println("Clock not synced yet - cannot fetch");
         return;
     }
     holidayLock();
@@ -435,13 +436,13 @@ void marketHolidaysForceRefresh()
     scheduledNowUtc = nowUtc;
     lastAttemptMs = 0; // skip the failure backoff
     holidayUnlock();
-    Serial.println("Holiday calendar fetch queued - watch for the result above");
+    Log.println("Holiday calendar fetch queued - watch for the result above");
 }
 
 void printMarketHolidaysStatus()
 {
-    Serial.println("=== Market holiday calendars ===");
-    Serial.println("Source URL: " MARKET_HOLIDAYS_URL);
+    Log.println("=== Market holiday calendars ===");
+    Log.println("Source URL: " MARKET_HOLIDAYS_URL);
 
     holidayLock();
     int count = dynTableCount;
@@ -450,7 +451,7 @@ void printMarketHolidaysStatus()
 
     if (count == 0)
     {
-        Serial.println("Active data: compiled-in tables (no fetched override yet)");
+        Log.println("Active data: compiled-in tables (no fetched override yet)");
     }
     else
     {
@@ -458,14 +459,14 @@ void printMarketHolidaysStatus()
         String age = (fetched > 0 && nowUtc > fetched)
                          ? String((long)((nowUtc - fetched) / 86400)) + " day(s) ago"
                          : "unknown";
-        Serial.println("Active data: fetched calendars (" + age + "), refreshed weekly");
+        Log.println("Active data: fetched calendars (" + age + "), refreshed weekly");
         holidayLock();
         for (int t = 0; t < dynTableCount; t++)
         {
-            Serial.println("  " + String(dynTables[t].exchange) + ": " +
+            Log.println("  " + String(dynTables[t].exchange) + ": " +
                            String(dynTables[t].count) + " closure dates");
         }
         holidayUnlock();
     }
-    Serial.println("Exchanges absent from the fetched data fall back to the compiled tables.");
+    Log.println("Exchanges absent from the fetched data fall back to the compiled tables.");
 }

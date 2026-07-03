@@ -1,6 +1,7 @@
 #include "uiPages.h"
 
 #include <WiFi.h>
+#include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED - CPU temp row
 
 #include "clockFaces.h"         // ClockFace enum, clockFaceName
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
@@ -178,8 +179,9 @@ const UIButton BTN_SET_CLK = {20, 98, 280, 28};
 const UIButton BTN_SET_DATE = {20, 132, 280, 28};
 const UIButton BTN_SET_DIM = {20, 166, 60, 28};
 const UIButton BTN_SET_BRI = {240, 166, 60, 28};
-const UIButton BTN_SET_STAT = {20, 200, 135, 28};
-const UIButton BTN_SET_BACK = {165, 200, 135, 28};
+const UIButton BTN_SET_STAT = {20, 200, 85, 28};
+const UIButton BTN_SET_LOGS = {113, 200, 89, 28};
+const UIButton BTN_SET_BACK = {210, 200, 90, 28};
 
 // Zone-pick page layout (2x2 grid mirroring the clock quadrants)
 const UIButton BTN_ZONE[4] = {
@@ -281,7 +283,7 @@ void adjustBacklightFromUi(int delta)
     projectConfig.brightness = backlightLevel;
     projectConfig.saveConfigFile();
     drawSettingsBrightnessLabel();
-    Serial.println("Brightness set from settings page: " + String(backlightLevel));
+    Log.println("Brightness set from settings page: " + String(backlightLevel));
 }
 
 // Apply a timezone preset to a quadrant, persist it, and re-fetch the zone
@@ -309,7 +311,7 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     {
         // Timezone server unreachable - fall back to the preset's built-in
         // POSIX rules so the quadrant still ticks with correct local time.
-        Serial.println("Failed to fetch timezone " + String(preset.tz) +
+        Log.println("Failed to fetch timezone " + String(preset.tz) +
                        " - using built-in POSIX rules");
         worldZones[slot].tz.setPosix(preset.posix);
     }
@@ -326,7 +328,7 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     weatherInvalidate();
     holidaysInvalidate();
 
-    Serial.println("Quadrant " + String(slot) + " set to " + String(preset.name) +
+    Log.println("Quadrant " + String(slot) + " set to " + String(preset.name) +
                    " (" + String(preset.tz) + ")");
 }
 
@@ -355,7 +357,8 @@ void renderSettingsPage()
     drawButton(BTN_SET_DIM, "-", TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_BRI, "+", TFT_CYAN, TFT_WHITE);
     drawSettingsBrightnessLabel();
-    drawButton(BTN_SET_STAT, "System status", TFT_GREEN, TFT_WHITE);
+    drawButton(BTN_SET_STAT, "Status", TFT_GREEN, TFT_WHITE);
+    drawButton(BTN_SET_LOGS, "Logs", TFT_GREEN, TFT_WHITE);
     drawButton(BTN_SET_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
 }
 
@@ -431,10 +434,10 @@ void renderTzListPage()
 
 /*-------- System status page ----------*/
 
-const int STATUS_ROW_COUNT = 9;
-const int STATUS_VALUE_X = 112;
-const int STATUS_ROW_Y0 = 38;
-const int STATUS_ROW_STEP = 18;
+const int STATUS_ROW_COUNT = 11;
+const int STATUS_VALUE_X = 96;
+const int STATUS_ROW_Y0 = 34;
+const int STATUS_ROW_STEP = 17;
 
 String formatUptime()
 {
@@ -447,18 +450,35 @@ String formatUptime()
 
 void renderStatusValues()
 {
+    String ssid = WiFi.SSID();
+    if (ssid.length() > 14) ssid = ssid.substring(0, 14);
+
+    uint32_t sketch = ESP.getSketchSize();
+    uint32_t slot = sketch + ESP.getFreeSketchSpace();
+
     String values[STATUS_ROW_COUNT];
-    values[0] = WiFi.SSID();
+    values[0] = ssid + " (" + String(WiFi.RSSI()) + " dBm)";
     values[1] = WiFi.localIP().toString();
-    values[2] = String(WiFi.RSSI()) + " dBm";
-    values[3] = WiFi.macAddress();
-    values[4] = formatUptime();
-    values[5] = String(ESP.getFreeHeap() / 1024) + " KB";
-    values[6] = String(syncCount);
-    values[7] = (syncCount > 0)
-                    ? String((millis() - lastSyncTime) / 60000UL) + " min ago"
-                    : "not since boot";
-    values[8] = UTC.dateTime("H:i:s") + " UTC";
+    values[2] = String(ESP.getChipModel()) + " r" + String(ESP.getChipRevision()) +
+                " @" + String(ESP.getCpuFreqMHz()) + "MHz";
+#if SOC_TEMP_SENSOR_SUPPORTED
+    values[3] = String(temperatureRead(), 1) + " C";
+#else
+    values[3] = "no sensor on this chip";
+#endif
+    values[4] = String(ESP.getFlashChipSize() / (1024UL * 1024UL)) + " MB @ " +
+                String(ESP.getFlashChipSpeed() / 1000000UL) + " MHz";
+    values[5] = String(sketch / 1024) + " KB (" +
+                String(slot > 0 ? (sketch * 100UL) / slot : 0) + "% of slot)";
+    values[6] = String(__DATE__) + " " + __TIME__;
+    values[7] = String(ESP.getFreeHeap() / 1024) + " KB (min " +
+                String(ESP.getMinFreeHeap() / 1024) + ")";
+    values[8] = formatUptime();
+    values[9] = (syncCount > 0)
+                    ? String(syncCount) + " (" +
+                          String((millis() - lastSyncTime) / 60000UL) + " min ago)"
+                    : "none since boot";
+    values[10] = UTC.dateTime("H:i:s") + " UTC";
 
     tft.setTextFont(2);
     tft.setTextSize(1);
@@ -470,7 +490,7 @@ void renderStatusValues()
         tft.fillRect(STATUS_VALUE_X, y, 320 - STATUS_VALUE_X, STATUS_ROW_STEP, clockBackgroundColor);
 
         uint16_t color = TFT_WHITE;
-        if (i == 2) // color-code the WiFi signal strength
+        if (i == 0) // color-code the WiFi signal strength
         {
             int rssi = WiFi.RSSI();
             color = (rssi > -60) ? TFT_GREEN : (rssi > -75) ? TFT_YELLOW : TFT_RED;
@@ -488,11 +508,11 @@ void renderStatusPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SYSTEM STATUS", 160, 4);
+    tft.drawString("SYSTEM STATUS", 160, 2);
 
     const char *labels[STATUS_ROW_COUNT] = {
-        "WiFi SSID", "IP address", "Signal", "MAC", "Uptime",
-        "Free heap", "NTP syncs", "Last sync", "UTC time"
+        "WiFi", "IP addr", "CPU", "CPU temp", "Flash", "Firmware",
+        "Build", "Heap", "Uptime", "NTP sync", "UTC time"
     };
 
     tft.setTextFont(2);
@@ -507,9 +527,82 @@ void renderStatusPage()
     tft.setTextFont(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("Tap anywhere to go back", 160, 224);
+    tft.drawString("Tap anywhere to go back", 160, 228);
 
     renderStatusValues();
+}
+
+/*-------- Logs page ----------*/
+// The tail of the in-RAM log ring (see logBuffer.h), newest lines at the
+// bottom, refreshed whenever a new line lands. Tap anywhere to go back.
+
+const int LOGS_TOP = 18;       // first log line y (below the title row)
+const int LOGS_LINE_STEP = 10; // font 1 is 8px tall; +2 leading
+const int LOGS_MAX_LINES = 21;
+const int LOGS_MAX_CHARS = 52; // 320px / 6px per font-1 char, with margin
+
+uint32_t lastShownLogVersion = 0;
+
+static void renderLogsLines()
+{
+    // Grab a bit more than one screenful and keep the last N lines.
+    String text = logTail(2600);
+    struct Seg
+    {
+        uint16_t start;
+        uint16_t len;
+    };
+    Seg segs[LOGS_MAX_LINES];
+    int count = 0, next = 0;
+    int lineStart = 0;
+    int tlen = (int)text.length();
+    for (int i = 0; i <= tlen; i++)
+    {
+        if (i == tlen || text[i] == '\n')
+        {
+            int len = i - lineStart;
+            if (len > 0)
+            {
+                if (len > LOGS_MAX_CHARS) len = LOGS_MAX_CHARS; // truncate, no wrap
+                segs[next] = {(uint16_t)lineStart, (uint16_t)len};
+                next = (next + 1) % LOGS_MAX_LINES;
+                if (count < LOGS_MAX_LINES) count++;
+            }
+            lineStart = i + 1;
+        }
+    }
+
+    tft.fillRect(0, LOGS_TOP, 320, 240 - LOGS_TOP, clockBackgroundColor);
+    tft.setTextFont(1);
+    tft.setTextSize(1);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    int first = (next + LOGS_MAX_LINES - count) % LOGS_MAX_LINES;
+    for (int k = 0; k < count; k++)
+    {
+        const Seg &g = segs[(first + k) % LOGS_MAX_LINES];
+        tft.drawString(text.substring(g.start, g.start + g.len),
+                       4, LOGS_TOP + k * LOGS_LINE_STEP);
+    }
+    lastShownLogVersion = logVersion();
+}
+
+void renderLogsPage()
+{
+    tft.fillScreen(clockBackgroundColor);
+
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
+    tft.drawString("LOGS", 4, 0);
+
+    tft.setTextFont(1);
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString("tap anywhere to go back", 316, 4);
+
+    renderLogsLines();
 }
 
 /*-------- Touch routing + page loop ----------*/
@@ -556,6 +649,10 @@ void handleUiTouch()
         else if (buttonContains(BTN_SET_STAT, tx, ty))
         {
             switchToScreen(SCREEN_STATUS);
+        }
+        else if (buttonContains(BTN_SET_LOGS, tx, ty))
+        {
+            switchToScreen(SCREEN_LOGS);
         }
         else if (buttonContains(BTN_SET_BACK, tx, ty))
         {
@@ -622,6 +719,7 @@ void handleUiTouch()
     }
 
     case SCREEN_STATUS:
+    case SCREEN_LOGS:
         switchToScreen(SCREEN_SETTINGS);
         break;
 
@@ -649,6 +747,10 @@ void renderUiPage()
             renderStatusPage();
             lastStatusRefresh = millis();
             break;
+        case SCREEN_LOGS:
+            renderLogsPage();
+            lastStatusRefresh = millis();
+            break;
         default:
             break;
         }
@@ -658,6 +760,15 @@ void renderUiPage()
     {
         // Live-refresh the dynamic values (uptime, heap, RSSI, clock) once a second
         renderStatusValues();
+        lastStatusRefresh = millis();
+    }
+    else if (uiScreen == SCREEN_LOGS && millis() - lastStatusRefresh > 1000)
+    {
+        // Repaint the tail only when a new line has actually arrived
+        if (logVersion() != lastShownLogVersion)
+        {
+            renderLogsLines();
+        }
         lastStatusRefresh = millis();
     }
 }

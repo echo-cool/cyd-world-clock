@@ -40,6 +40,26 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs .
 3. Select board "ESP32 Dev Module" and set Tools → Partition Scheme →
    "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)", then build and upload
 
+## CI builds and releases
+
+Every push and pull request is build-verified by GitHub Actions
+([`.github/workflows/build.yml`](.github/workflows/build.yml)), which uploads
+the compiled images as a workflow artifact. To publish a release with
+firmware attached, push a version tag:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The release gets two files: `esp32worldclock-<tag>-ota.bin` (app image —
+upload it straight through the web updater below, no toolchain needed) and
+`esp32worldclock-<tag>-factory.bin` (bootloader + partition table + app, for
+a first USB flash with `esptool.py write_flash 0x0 ...`). CI builds from
+`secrets.h.example`, so release binaries contain no WiFi credentials — a
+freshly flashed device opens the captive portal, and OTA-updated devices
+keep their stored settings.
+
 ## Over-the-air updates
 
 Once a build with OTA support is on the device, later updates can go over
@@ -177,6 +197,8 @@ settings page (the choice is saved to flash):
   saved and restored on the next boot, and is used as the daytime target by
   auto-brightness.
 - **System status** — opens a live diagnostics page.
+- **Logs** — shows the most recent log lines right on the display (see
+  below).
 
 ## Public holidays
 
@@ -196,10 +218,10 @@ Everything on the settings page can also be changed from a browser: go to
 `http://esp32worldclock.local/` (or the device IP shown on the System status
 page) to pick the four timezones, clock face, clock/date format and
 brightness without touching the device. The page also links to the firmware
-updater (`/update`) and a scriptable diagnostics endpoint
-(`/api/status`, JSON: IP, RSSI, uptime, heap, NTP syncs, zones, market
-status...). If `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic
-credentials (username `admin`) protect these pages.
+updater (`/update`), the log viewer (`/logs`) and a scriptable diagnostics
+endpoint (`/api/status`, JSON: IP, RSSI, chip/CPU, flash, heap, uptime, NTP
+syncs, zones, market status...). If `OTA_PASSWORD` is set in `secrets.h`,
+the same HTTP Basic credentials (username `admin`) protect these pages.
 
 ## Auto-brightness
 
@@ -215,9 +237,29 @@ changes (touch gesture or settings page) always win for 2 hours.
 
 ## System status page
 
-Shows WiFi SSID, IP address, signal strength, MAC address, uptime, free heap,
-NTP sync count / last sync time and the current UTC time, refreshed every
-second. Tap anywhere to go back.
+Live diagnostics, refreshed every second — tap anywhere to go back:
+
+- WiFi SSID and signal strength (color-coded), IP address
+- Chip model / revision and CPU frequency, plus the CPU temperature on
+  chips that have a sensor (the classic ESP32 in the CYD does not)
+- Flash size and speed, firmware size (with % of the OTA slot used) and
+  the running build's compile timestamp
+- Free heap (with the low-water mark since boot), uptime
+- NTP sync count / last sync age and the current UTC time
+
+## Logs page
+
+Everything the firmware logs goes to the serial port **and** into a 6KB
+in-RAM ring buffer, each line stamped with the uptime. Two ways to read it
+without a USB cable:
+
+- **On the device** — settings → **Logs** shows the newest lines on the
+  display, live; tap anywhere to go back.
+- **In the browser** — `http://esp32worldclock.local/logs` is an
+  auto-refreshing viewer (`/api/logs` serves the same text raw, handy for
+  `curl`).
+
+The buffer holds the most recent couple hundred lines; it resets on reboot.
 
 # Timekeeping
 

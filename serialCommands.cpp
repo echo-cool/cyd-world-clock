@@ -31,48 +31,48 @@ void handleSerialCommands()
                     // Persist so the level survives a reboot
                     projectConfig.brightness = backlightLevel;
                     projectConfig.saveConfigFile();
-                    Serial.print("Brightness set to: ");
-                    Serial.println(backlightLevel);
+                    Log.print("Brightness set to: ");
+                    Log.println(backlightLevel);
                 } else {
-                    Serial.println("Error: Brightness must be between 5 and 255");
+                    Log.println("Error: Brightness must be between 5 and 255");
                 }
             } else {
-                Serial.println("Error: Usage: BRIGHTNESS <value>");
+                Log.println("Error: Usage: BRIGHTNESS <value>");
             }
         }
         else if (command == "SYNC") {
-            Serial.println("Forcing NTP time synchronization...");
+            Log.println("Forcing NTP time synchronization...");
             // Force immediate sync by calling updateNTP manually
             if (waitForSync(10)) { // Wait up to 10 seconds for sync
-                Serial.println("Time sync successful!");
-                Serial.println("UTC: " + UTC.dateTime());
-                Serial.println("Santa Clara: " + worldZones[0].tz.dateTime());
+                Log.println("Time sync successful!");
+                Log.println("UTC: " + UTC.dateTime());
+                Log.println("Santa Clara: " + worldZones[0].tz.dateTime());
             } else {
-                Serial.println("Time sync failed or timed out");
+                Log.println("Time sync failed or timed out");
             }
         }
         else if (command == "WIFI" || command == "IP") {
-            Serial.println("=== WiFi Information ===");
-            Serial.print("SSID: ");
-            Serial.println(WiFi.SSID());
-            Serial.print("IP Address: ");
-            Serial.println(WiFi.localIP());
-            Serial.print("Gateway: ");
-            Serial.println(WiFi.gatewayIP());
-            Serial.print("Subnet: ");
-            Serial.println(WiFi.subnetMask());
-            Serial.print("DNS: ");
-            Serial.println(WiFi.dnsIP());
-            Serial.print("Signal Strength (RSSI): ");
-            Serial.print(WiFi.RSSI());
-            Serial.println(" dBm");
-            Serial.print("MAC Address: ");
-            Serial.println(WiFi.macAddress());
-            Serial.print("Connection Status: ");
+            Log.println("=== WiFi Information ===");
+            Log.print("SSID: ");
+            Log.println(WiFi.SSID());
+            Log.print("IP Address: ");
+            Log.println(WiFi.localIP());
+            Log.print("Gateway: ");
+            Log.println(WiFi.gatewayIP());
+            Log.print("Subnet: ");
+            Log.println(WiFi.subnetMask());
+            Log.print("DNS: ");
+            Log.println(WiFi.dnsIP());
+            Log.print("Signal Strength (RSSI): ");
+            Log.print(WiFi.RSSI());
+            Log.println(" dBm");
+            Log.print("MAC Address: ");
+            Log.println(WiFi.macAddress());
+            Log.print("Connection Status: ");
             if (WiFi.status() == WL_CONNECTED) {
-                Serial.println("Connected");
+                Log.println("Connected");
             } else {
-                Serial.println("Disconnected");
+                Log.println("Disconnected");
             }
         }
         else if (command == "LDR") {
@@ -80,10 +80,10 @@ void handleSerialCommands()
         }
         else if (command == "WEATHER") {
             long age = weatherAgeMinutes();
-            Serial.println(age < 0 ? "No weather data yet."
+            Log.println(age < 0 ? "No weather data yet."
                                    : "Weather data is " + String(age) + " min old.");
             weatherInvalidate();
-            Serial.println("Cache invalidated - the background task refetches within seconds.");
+            Log.println("Cache invalidated - the background task refetches within seconds.");
         }
         else if (command == "HOLIDAYS") {
             printMarketHolidaysStatus();
@@ -91,37 +91,37 @@ void handleSerialCommands()
             printPublicHolidaysStatus();
         }
         else if (command == "HELP" || command == "?") {
-            Serial.println("=== Available Commands ===");
-            Serial.println("BRIGHTNESS <5-255>  - Set display brightness");
-            Serial.println("SYNC                - Force NTP time synchronization");
-            Serial.println("WIFI or IP          - Show WiFi connection info");
-            Serial.println("LDR                 - Show ambient light sensor state");
-            Serial.println("WEATHER             - Force a weather refetch");
-            Serial.println("HOLIDAYS            - Show/refresh market holiday calendars");
-            Serial.println("HELP or ?           - Show this help message");
+            Log.println("=== Available Commands ===");
+            Log.println("BRIGHTNESS <5-255>  - Set display brightness");
+            Log.println("SYNC                - Force NTP time synchronization");
+            Log.println("WIFI or IP          - Show WiFi connection info");
+            Log.println("LDR                 - Show ambient light sensor state");
+            Log.println("WEATHER             - Force a weather refetch");
+            Log.println("HOLIDAYS            - Show/refresh market holiday calendars");
+            Log.println("HELP or ?           - Show this help message");
         }
         else if (command.length() > 0) {
-            Serial.println("Unknown command. Type HELP for available commands.");
+            Log.println("Unknown command. Type HELP for available commands.");
         }
     }
 }
 
 void showStartupCommands()
 {
-    Serial.println();
-    Serial.println("=== World Clock Ready ===");
-    Serial.println("Serial commands available:");
-    Serial.println("- BRIGHTNESS <5-255> : Set display brightness");
-    Serial.println("- SYNC               : Force time synchronization");
-    Serial.println("- WIFI or IP         : Show network information");
-    Serial.println("- LDR                : Show ambient light sensor state");
-    Serial.println("- WEATHER            : Force a weather refetch");
-    Serial.println("- HELP or ?          : Show command help");
-    Serial.println("Type any command and press Enter");
-    Serial.println();
-    Serial.println("Touch screen controls:");
-    Serial.println("- Tap CENTER of clock : Open settings (timezones, formats, status)");
-    Serial.println("- Tap LEFT third      : Decrease brightness");
-    Serial.println("- Tap RIGHT third     : Increase brightness");
-    Serial.println();
+    Log.println();
+    Log.println("=== World Clock Ready ===");
+    Log.println("Serial commands available:");
+    Log.println("- BRIGHTNESS <5-255> : Set display brightness");
+    Log.println("- SYNC               : Force time synchronization");
+    Log.println("- WIFI or IP         : Show network information");
+    Log.println("- LDR                : Show ambient light sensor state");
+    Log.println("- WEATHER            : Force a weather refetch");
+    Log.println("- HELP or ?          : Show command help");
+    Log.println("Type any command and press Enter");
+    Log.println();
+    Log.println("Touch screen controls:");
+    Log.println("- Tap CENTER of clock : Open settings (timezones, formats, status)");
+    Log.println("- Tap LEFT third      : Decrease brightness");
+    Log.println("- Tap RIGHT third     : Increase brightness");
+    Log.println();
 }
