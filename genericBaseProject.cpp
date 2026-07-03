@@ -18,7 +18,8 @@
 #error "Missing secrets.h - copy secrets.h.example to secrets.h and set your WiFi credentials"
 #endif
 
-#define WIFI_CONNECT_TIMEOUT 5000  // 5 second timeout for the preconfigured WiFi connection
+#define WIFI_CONNECT_TIMEOUT 5000  // per-attempt timeout for the preconfigured WiFi connection
+#define WIFI_CONNECT_ATTEMPTS 10   // attempts before falling back to the WiFiManager portal
 
 // ----------------------------
 // Standard Libraries
@@ -144,24 +145,43 @@ void baseProjectSetup()
         Serial.println("No saved config found, will use defaults or WiFiManager");
     }
 
-    // Step 1: Try preconfigured WiFi credentials first
+    // Step 1: Try preconfigured WiFi credentials first. A single attempt can
+    // fail even when the network is fine (AP busy, weak signal on boot), so
+    // retry several times before falling back to the config portal.
     if (!forceConfig)
     {
         Serial.println("Attempting to connect with preconfigured WiFi...");
         WiFi.mode(WIFI_STA);
-        WiFi.begin(PRECONFIGURED_SSID, PRECONFIGURED_PASSWORD);
 
-        unsigned long startTime = millis();
-        while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT)
+        for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected; attempt++)
         {
-            delay(500);
-            Serial.print(".");
+            Serial.print("WiFi connect attempt ");
+            Serial.print(attempt);
+            Serial.print("/");
+            Serial.print(WIFI_CONNECT_ATTEMPTS);
+            Serial.print(" ");
+
+            // Reset any half-finished connection state from the previous attempt
+            WiFi.disconnect();
+            delay(100);
+            WiFi.begin(PRECONFIGURED_SSID, PRECONFIGURED_PASSWORD);
+
+            unsigned long startTime = millis();
+            while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT)
+            {
+                delay(500);
+                Serial.print(".");
+            }
+            Serial.println();
+
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                wifiConnected = true;
+            }
         }
 
-        if (WiFi.status() == WL_CONNECTED)
+        if (wifiConnected)
         {
-            wifiConnected = true;
-            Serial.println();
             Serial.println("Connected with preconfigured WiFi!");
             Serial.print("IP address: ");
             Serial.println(WiFi.localIP());
@@ -177,8 +197,7 @@ void baseProjectSetup()
         }
         else
         {
-            Serial.println();
-            Serial.println("Preconfigured WiFi connection failed, falling back to WiFiManager");
+            Serial.println("All preconfigured WiFi attempts failed, falling back to WiFiManager");
             forceConfig = true;
         }
     }

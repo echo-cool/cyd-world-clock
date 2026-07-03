@@ -45,7 +45,8 @@ There are two ways to get the clock online:
 
 1. **Preconfigured credentials (optional):** Set `PRECONFIGURED_SSID` /
    `PRECONFIGURED_PASSWORD` in your local `secrets.h`. On boot the device tries
-   these first (5 second timeout). Leave the placeholders unchanged to skip this.
+   these first (up to 10 attempts, 5 seconds each). Leave the placeholders
+   unchanged to skip this.
 2. **WiFiManager captive portal (fallback):** If the preconfigured connection
    fails — or you double-press reset to force config mode — the device starts a
    captive portal. Connect to SSID `esp32Project` (password `12345678`) and use
