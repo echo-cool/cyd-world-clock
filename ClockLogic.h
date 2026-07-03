@@ -101,6 +101,10 @@ WorldClockZone worldZones[4] = {
 bool firstDraw = true;
 int backlightLevel = 80; // PWM value (0-255)
 
+// Brightness bar state (globals so the touch UI can reset them cleanly)
+unsigned long brightnessBarShownTime = 0;
+bool brightnessBarVisible = false;
+
 // Manual brightness override: when the user changes brightness (touch or serial),
 // auto-brightness is suspended until this timestamp so the two don't fight.
 unsigned long manualBrightnessUntil = 0;
@@ -944,6 +948,10 @@ void showBrightnessBar(int brightness)
     tft.drawString(String(percentage) + "%", 160, barY + barHeight + 10);
 }
 
+// Touch UI pages (settings, system status, timezone selection).
+// Included here so it can see the display, touch and worldZones globals above.
+#include "uiPages.h"
+
 void rollingClockSetup(bool is24Hour, bool usDate)
 {
     Serial.println("World Clock Setup");
@@ -977,7 +985,11 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     
     // Show timezone setup status
     showWiFiStatus("Setting up zones...", TFT_CYAN);
-    
+
+    // Apply the timezones saved in the project config to the four quadrants
+    // (falls back to the compiled-in defaults if nothing was saved yet).
+    applyConfiguredZones();
+
     // Initialize all timezones with retry mechanism
     for (int i = 0; i < 4; i++) {
         bool tzSuccess = false;
@@ -1073,39 +1085,51 @@ void rollingClockSetup(bool is24Hour, bool usDate)
 void handleTouch()
 {
     static unsigned long lastTouchTime = 0;
-    static unsigned long brightnessBarShownTime = 0;
-    static bool brightnessBarVisible = false;
-    
+
     TouchPoint touch = touchscreen.getTouch();
-    
-    // Check if screen is being touched (zRaw indicates pressure)
-    if (touch.zRaw != 0) 
+    bool down = (touch.zRaw > 800); // zRaw indicates pressure
+
+    if (!down)
+    {
+        touchSuppressedUntilRelease = false;
+    }
+    else if (!touchSuppressedUntilRelease)
     {
         unsigned long currentTime = millis();
-        
-        // Debounce - only allow one touch every 50ms for brightness control
-        if (currentTime - lastTouchTime > 50 && touch.zRaw > 800)
+
+        // getTouch() already maps touch.x into screen pixels (0..screenWidth),
+        // so the 320px screen splits into three touch zones:
+        //   left third  = dimmer, center third = settings, right third = brighter
+        if (touch.x >= 107 && touch.x <= 213)
         {
-            // Determine touch location (left vs right half of screen).
-            // getTouch() already maps touch.x into screen pixels (0..screenWidth),
-            // so the screen is 320px wide and we split at the 160px midpoint.
-            if (touch.x < 160) // Left half - make dimmer
+            // Center tap opens the settings page. switchToScreen suppresses
+            // further touch input until the finger is lifted.
+            Serial.println("CENTER touch - opening settings page");
+            switchToScreen(SCREEN_SETTINGS);
+            brightnessBarVisible = false;
+            return;
+        }
+
+        // Debounce - only allow one touch every 50ms for brightness control
+        if (currentTime - lastTouchTime > 50)
+        {
+            if (touch.x < 107) // Left third - make dimmer
             {
                 backlightLevel -= 5; // Decrease brightness
                 if (backlightLevel <= 5) backlightLevel = 5; // Minimum brightness
-                
+
                 Serial.print("LEFT touch - Dimmer: ");
                 Serial.println(backlightLevel);
             }
-            else // Right half - make brighter
+            else // Right third - make brighter
             {
                 backlightLevel += 5; // Increase brightness
                 if (backlightLevel > 255) backlightLevel = 255; // Maximum brightness
-                
+
                 Serial.print("RIGHT touch - Brighter: ");
                 Serial.println(backlightLevel);
             }
-            
+
             // Apply PWM to backlight pin
             analogWrite(BACKLIGHT_PIN, backlightLevel);
 
@@ -1118,7 +1142,7 @@ void handleTouch()
             brightnessBarShownTime = currentTime;
 
             lastTouchTime = currentTime;
-            
+
             Serial.print("Touch at X: ");
             Serial.print(touch.x);
             Serial.print(", Y: ");
@@ -1129,7 +1153,7 @@ void handleTouch()
             Serial.println(backlightLevel);
         }
     }
-    
+
     // Hide brightness bar after the configured timeout
     if (brightnessBarVisible && (millis() - brightnessBarShownTime > BRIGHTNESS_BAR_TIMEOUT_MS)) {
         brightnessBarVisible = false;
@@ -1144,20 +1168,34 @@ void handleTouch()
 
 void drawRollingClock()
 {
-    unsigned long currentTime = millis();
-    
     // Handle serial commands
     handleSerialCommands();
-    
-    // Handle touch input for backlight control
-    handleTouch();
-    
+
     // Update flash state for market status messages
     updateFlashState();
-    
+
+    // If a settings/status/timezone page is open, it owns the screen and the
+    // touch input; the clock quadrants resume when the user navigates back.
+    if (uiScreen != SCREEN_HOME)
+    {
+        handleUiTouch();
+        renderUiPage();
+        resetFlashChangeFlag();
+        return;
+    }
+
+    // Handle touch input for backlight control and opening the settings page
+    handleTouch();
+    if (uiScreen != SCREEN_HOME)
+    {
+        // A center tap just opened the settings page - render it next loop
+        resetFlashChangeFlag();
+        return;
+    }
+
     // Adjust brightness based on Santa Clara time
     adjustBrightnessBasedOnHomeTime();
-    
+
     // Only clear screen and draw borders on first draw
     if (firstDraw) {
         tft.fillScreen(clockBackgroundColor);

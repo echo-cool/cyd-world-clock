@@ -97,6 +97,11 @@ void showStartupCommands()
     Serial.println("- HELP or ?          : Show command help");
     Serial.println("Type any command and press Enter");
     Serial.println();
+    Serial.println("Touch screen controls:");
+    Serial.println("- Tap CENTER of clock : Open settings (timezones, formats, status)");
+    Serial.println("- Tap LEFT third      : Decrease brightness");
+    Serial.println("- Tap RIGHT third     : Increase brightness");
+    Serial.println();
 }
 
 #endif // SERIAL_COMMANDS_H
