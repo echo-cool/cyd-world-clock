@@ -3,6 +3,8 @@
 #define PROJECT_TIME_ZONE_LABEL "timeZone"
 #define PROJECT_TIME_TWENTY_FOUR_HOUR "twentyFourHour"
 #define PROJECT_TIME_US_DATE "usDate"
+#define PROJECT_ZONE_NAME_PREFIX "zoneName"
+#define PROJECT_ZONE_TZ_PREFIX "zoneTz"
 
 class ProjectConfig
 {
@@ -14,6 +16,12 @@ public:
 
   bool usDateFormat = false;
 
+  // Per-quadrant world clock timezones, selectable from the touch UI.
+  // Defaults match the compiled-in worldZones in ClockLogic.h.
+  String zoneName[4] = {"SANTA CLARA", "NEW YORK", "BEIJING", "LONDON"};
+  String zoneTZ[4] = {"America/Los_Angeles", "America/New_York",
+                      "Asia/Shanghai", "Europe/London"};
+
   bool fetchConfigFile()
   {
     if (SPIFFS.exists(PROJECT_CONFIG_JSON))
@@ -24,7 +32,7 @@ public:
       if (configFile)
       {
         Serial.println("opened config file");
-        StaticJsonDocument<1024> json;
+        StaticJsonDocument<2048> json;
         DeserializationError error = deserializeJson(json, configFile);
         serializeJsonPretty(json, Serial);
         if (!error)
@@ -46,6 +54,20 @@ public:
             usDateFormat = json[PROJECT_TIME_US_DATE].as<bool>();
           }
 
+          for (int i = 0; i < 4; i++)
+          {
+            String nameKey = String(PROJECT_ZONE_NAME_PREFIX) + String(i);
+            String tzKey = String(PROJECT_ZONE_TZ_PREFIX) + String(i);
+            if (json.containsKey(nameKey))
+            {
+              zoneName[i] = json[nameKey].as<String>();
+            }
+            if (json.containsKey(tzKey))
+            {
+              zoneTZ[i] = json[tzKey].as<String>();
+            }
+          }
+
           return true;
         }
         else
@@ -63,10 +85,16 @@ public:
   bool saveConfigFile()
   {
     Serial.println(F("Saving config"));
-    StaticJsonDocument<1024> json;
+    StaticJsonDocument<2048> json;
     json[PROJECT_TIME_ZONE_LABEL] = timeZone;
     json[PROJECT_TIME_TWENTY_FOUR_HOUR] = twentyFourHour;
     json[PROJECT_TIME_US_DATE] = usDateFormat;
+
+    for (int i = 0; i < 4; i++)
+    {
+      json[String(PROJECT_ZONE_NAME_PREFIX) + String(i)] = zoneName[i];
+      json[String(PROJECT_ZONE_TZ_PREFIX) + String(i)] = zoneTZ[i];
+    }
 
     File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "w");
     if (!configFile)

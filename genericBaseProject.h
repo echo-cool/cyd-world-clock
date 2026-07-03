@@ -8,11 +8,20 @@
 // Configuration
 // ----------------------------
 
-// Preconfigured WiFi credentials - try these first, fallback to WiFiManager if failed
-#define PRECONFIGURED_SSID "watermelonCrystal"
-#define PRECONFIGURED_PASSWORD "2479CrystalDrive"
-#define PRECONFIGURED_TIMEZONE "America/New_York"
-#define WIFI_CONNECT_TIMEOUT 5000  // 10 seconds timeout for WiFi connection
+// Preconfigured WiFi credentials live in an untracked "secrets.h" so they are
+// never committed to the repository. Copy secrets.h.example to secrets.h and
+// fill in your own values. These are tried first on boot, with a fallback to
+// the WiFiManager captive portal if the connection fails.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#error "Missing secrets.h - copy secrets.h.example to secrets.h and set your WiFi credentials"
+#endif
+
+#define WIFI_CONNECT_TIMEOUT 5000  // 5 second timeout for the preconfigured WiFi connection
+
+// Backlight control pin (CYD / ESP32-Cheap-Yellow-Display)
+#define BACKLIGHT_PIN 21
 
 // ----------------------------
 // Standard Libraries
@@ -22,15 +31,10 @@
 #include <FS.h>
 #include "SPIFFS.h"
 
-// Multi-core task handles
-TaskHandle_t TimeSyncTask;
-
 // NTP sync monitoring variables
 unsigned long lastSyncTime = 0;
 unsigned long syncCount = 0;
 bool ntpSyncStatus = false;
-
-// Function to manually test NTP sync - defined after ezTime includes
 
 // ----------------------------
 // Additional Libraries - each one of these will need to be installed.
@@ -87,47 +91,44 @@ ProjectDisplay *projectDisplay = &cyd;
 
 Timezone myTZ;
 
-// Production NTP sync monitoring - manual test function removed
+// Handle ezTime NTP synchronization and sync monitoring.
+//
+// IMPORTANT: ezTime is not thread-safe. This runs from the main loop (the same
+// context that reads the time and calls setLocation()) so that all ezTime
+// access happens on a single core. A previous version ran events() in a task
+// pinned to Core 0 while the main loop read the clock on Core 1, which is an
+// unsynchronized concurrent access to ezTime's internal state.
+void handleTimeSync() {
+    static unsigned long lastStatusReport = 0;
+    static time_t lastKnownTime = 0;
 
-// Time sync task running on Core 0
-void timeSyncTaskCode(void * parameter) {
-    Serial.println("Time sync task started on core " + String(xPortGetCoreID()));
-    
-    unsigned long lastStatusReport = 0;
-    time_t lastKnownTime = 0;
-    
-    for(;;) {
-        // Store time before events() call
-        time_t timeBefore = UTC.now();
-        
-        // Handle ezTime events for NTP synchronization
-        events();
-        
-        // Check if time was updated (indicates sync occurred)
-        time_t timeAfter = UTC.now();
-        
-        // Detect if a sync just happened
-        if (timeAfter != lastKnownTime && timeAfter > 1000000000) { // Valid timestamp
-            if (lastKnownTime > 0 && abs(timeAfter - timeBefore) > 1) {
-                // Time jumped significantly - likely a sync occurred
-                syncCount++;
-                lastSyncTime = millis();
-                ntpSyncStatus = true;
-                
-                Serial.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
-            }
-            lastKnownTime = timeAfter;
+    // Store time before events() call
+    time_t timeBefore = UTC.now();
+
+    // Handle ezTime events for NTP synchronization
+    events();
+
+    // Check if time was updated (indicates sync occurred)
+    time_t timeAfter = UTC.now();
+
+    // Detect if a sync just happened
+    if (timeAfter != lastKnownTime && timeAfter > 1000000000) { // Valid timestamp
+        if (lastKnownTime > 0 && abs(timeAfter - timeBefore) > 1) {
+            // Time jumped significantly - likely a sync occurred
+            syncCount++;
+            lastSyncTime = millis();
+            ntpSyncStatus = true;
+
+            Serial.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
         }
-        
-        // Report sync status every 30 minutes (production frequency)
-        if (millis() - lastStatusReport > 1800000) { // 30 minutes
-            lastStatusReport = millis();
-            
-            Serial.println("NTP Status: " + String(syncCount) + " syncs, Last: " + String((millis() - lastSyncTime)/1000/60) + "min ago");
-        }
-        
-        // Small delay to prevent excessive CPU usage
-        vTaskDelay(100 / portTICK_PERIOD_MS); // 100ms delay
+        lastKnownTime = timeAfter;
+    }
+
+    // Report sync status every 30 minutes (production frequency)
+    if (millis() - lastStatusReport > 1800000) { // 30 minutes
+        lastStatusReport = millis();
+
+        Serial.println("NTP Status: " + String(syncCount) + " syncs, Last: " + String((millis() - lastSyncTime)/1000/60) + "min ago");
     }
 }
 
@@ -239,22 +240,11 @@ void baseProjectSetup()
     Serial.print(F(":     "));
     Serial.println(myTZ.dateTime());
     Serial.println("-------------------------");
-    
-    // Create time sync task on Core 0 (Core 1 is used for main loop/display)
-    xTaskCreatePinnedToCore(
-        timeSyncTaskCode,   // Task function
-        "TimeSyncTask",     // Name of task
-        10000,              // Stack size of task (10KB)
-        NULL,               // Parameter of the task
-        1,                  // Priority of the task (1 = low priority)
-        &TimeSyncTask,      // Task handle to keep track of created task
-        0);                 // Pin task to core 0
-    
-    Serial.println("Time sync task created on Core 0");
 }
 
 void baseProjectLoop()
 {
     drd->loop();
-    // Note: events() now runs on Core 0 in dedicated time sync task
+    // Handle ezTime NTP events on the main core (ezTime is not thread-safe).
+    handleTimeSync();
 }
