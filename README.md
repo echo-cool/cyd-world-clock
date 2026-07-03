@@ -32,3 +32,31 @@ There are two ways to get the clock online:
   <img src="img/wifi.jpg" alt="wifi" width="45%"/>
   <img src="img/autoConnect.jpg" alt="autoConnect" width="16%"/>
 </p>
+
+# Touch Screen Controls
+
+The home screen (four world clocks) is split into three touch zones:
+
+| Zone | Action |
+| --- | --- |
+| Left third | Decrease backlight brightness |
+| Center third | Open the **Settings** page |
+| Right third | Increase backlight brightness |
+
+## Settings page
+
+- **Change timezones** — tap any of the four clock slots, then pick a city from
+  the paged timezone list. Cities with a stock exchange (New York, London,
+  Beijing, Tokyo, Hong Kong) automatically show that market's trading status.
+  The selection is saved to flash and restored on boot.
+- **Clock format** — toggle between 24-hour and 12-hour (AM/PM) display.
+- **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
+- **Brightness** — `-` / `+` buttons adjust the backlight (also pauses
+  auto-brightness for 2 hours, same as the home-screen gesture).
+- **System status** — opens a live diagnostics page.
+
+## System status page
+
+Shows WiFi SSID, IP address, signal strength, MAC address, uptime, free heap,
+NTP sync count / last sync time and the current UTC time, refreshed every
+second. Tap anywhere to go back.
