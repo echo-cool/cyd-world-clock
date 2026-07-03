@@ -335,48 +335,25 @@ String getMarketStatus(WorldClockZone &zone)
     int currentDayOfWeek = weekday(local); // 1=Sunday, 2=Monday, ..., 7=Saturday
     int currentTotalMinutes = currentHour * 60 + currentMinute;
     
-    // Weekend logic with special cases for Sunday evening and Friday evening
-    if (currentDayOfWeek == 7) { // Saturday
-        // Saturday is generally closed for all markets
-        return zone.market.exchange + " CLOSED";
-    } else if (currentDayOfWeek == 1) { // Sunday
-        // Sunday evening trading - check if any sessions are active
-        // US markets may have overnight sessions continuing from Friday or starting Sunday evening
-        if (zone.market.exchange == "NYSE") {
-            // Check if we're in an overnight session that started Friday night
+    // Weekend logic - NYSE is closed on Saturday and Sunday
+    if (currentDayOfWeek == 7 || currentDayOfWeek == 1) { // Saturday or Sunday
+        // Check for Sunday evening futures/overnight trading starting at 6 PM ET
+        if (currentDayOfWeek == 1 && zone.market.exchange == "NYSE" && currentTotalMinutes >= 18 * 60) { // Sunday after 6 PM
+            // Check if we have overnight sessions that start Sunday evening
             for (int i = 0; i < zone.market.sessionCount; i++) {
                 TradingSession session = zone.market.sessions[i];
-                if (session.sessionName == "OVERNIGHT" && session.sessionName.length() > 0) {
-                    int sessionStart = session.openHour * 60 + session.openMinute;
-                    int sessionEnd = session.closeHour * 60 + session.closeMinute;
-                    
-                    // For overnight sessions that span from Friday to Sunday
-                    if (sessionEnd < sessionStart && currentTotalMinutes < sessionEnd) {
-                        int minutesToClose = sessionEnd - currentTotalMinutes;
+                if (session.sessionName == "OVERNIGHT") {
+                    // Sunday 6 PM ET start time for futures markets
+                    int sundayStart = 18 * 60; // 6 PM Sunday
+                    int mondayEnd = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
+
+                    if (currentTotalMinutes >= sundayStart) {
+                        // Calculate minutes until Monday 4 AM close
+                        int minutesToClose = (24 * 60) - currentTotalMinutes + mondayEnd;
                         if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
                             return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
                         }
                         return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    }
-                }
-                
-                // Check for Sunday evening trading (futures/forex start around 6 PM ET Sunday)
-                if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 18 * 60) { // After 6 PM Sunday
-                    // Sunday 6 PM ET is when futures markets typically open for the week
-                    int minutesToClose = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
-                    if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN && currentTotalMinutes >= 18 * 60) {
-                        return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
-                    }
-                    return zone.market.exchange + " OPEN";
-                }
-                
-                // Also check if pre-market is starting late Sunday (some brokers start at 1 AM Monday)
-                if (session.sessionName == "PRE-MARKET" && currentTotalMinutes >= 1 * 60) { // After 1 AM Sunday night
-                    int sessionStart = session.openHour * 60 + session.openMinute;
-                    if (currentTotalMinutes >= sessionStart) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    } else if (sessionStart - currentTotalMinutes <= MARKET_STATUS_MESSAGE_MIN) {
-                        return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(sessionStart - currentTotalMinutes) + " MIN";
                     }
                 }
             }
@@ -753,9 +730,9 @@ void adjustBrightnessBasedOnHomeTime()
             lastBrightnessAdjustment = currentTime;
             
             int targetBrightness;
-            if (currentHour >= 0 && currentHour < 7) {
-                // Night time (0-6 AM): dim brightness
-                targetBrightness = 5;
+            if (currentHour >= 1 && currentHour < 7) {
+                // Night time (1-6 AM): dim brightness
+                targetBrightness = 1;
             } else {
                 // Day time (7 AM - 11:59 PM): normal brightness
                 targetBrightness = 80;
@@ -1073,21 +1050,21 @@ void handleTouch()
         unsigned long currentTime = millis();
         
         // Debounce - only allow one touch every 50ms for brightness control
-        if (currentTime - lastTouchTime > 50 && touch.zRaw > 800) 
+        if (currentTime - lastTouchTime > 10 && touch.zRaw > 800) 
         {
             // Determine touch location (left vs right half of screen)
             // Screen is 320px wide, so divide at 160px
             if (touch.x < 160) // Left half - make dimmer (touch coordinates are usually 0-4095)
             {
-                backlightLevel -= 5; // Decrease brightness
-                if (backlightLevel <= 5) backlightLevel = 5; // Minimum brightness
+                backlightLevel -= 1; // Decrease brightness
+                if (backlightLevel <= 1) backlightLevel = 1; // Minimum brightness
                 
                 Serial.print("LEFT touch - Dimmer: ");
                 Serial.println(backlightLevel);
             }
             else // Right half - make brighter
             {
-                backlightLevel += 5; // Increase brightness
+                backlightLevel += 1; // Increase brightness
                 if (backlightLevel > 255) backlightLevel = 255; // Maximum brightness
                 
                 Serial.print("RIGHT touch - Brighter: ");
