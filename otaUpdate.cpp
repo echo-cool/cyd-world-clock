@@ -1,0 +1,510 @@
+#include "otaUpdate.h"
+
+#include <ArduinoJson.h>
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#include <Update.h>
+#include <WebServer.h>
+#include <WiFi.h>
+
+#include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
+#include "clockFaces.h"         // FACE_COUNT, clockFaceName
+#include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
+#include "uiPages.h"            // TZ_PRESETS, applyZoneSelection, switchToScreen
+#include "weatherService.h"     // weatherAgeMinutes
+
+// OTA_PASSWORD (optional) lives in the untracked secrets.h.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+volatile bool otaInProgress = false;
+
+static WebServer webServer(80);
+
+static int otaLastPct = -1;
+
+// Web-upload state, valid between UPLOAD_FILE_START and the completion handler
+static bool webUploadAuthorized = false;
+static size_t webUpdateExpectedSize = 0;
+static bool webUpdateOk = false;
+static String webUpdateError;
+
+/*-------- Shared TFT progress screen ----------*/
+
+static void drawOtaScreen(const String &line, uint16_t color)
+{
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(color, TFT_BLACK);
+    tft.drawString(line, 160, 100);
+}
+
+static void drawOtaProgressFrame()
+{
+    otaLastPct = -1;
+    tft.drawRect(58, 120, 204, 18, TFT_WHITE);
+}
+
+static void drawOtaProgressPct(int pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    if (pct == otaLastPct) return;
+    otaLastPct = pct;
+    tft.fillRect(60, 122, pct * 2, 14, TFT_GREEN);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString(String(pct) + " %  ", 160, 146);
+}
+
+// Failure exit shared by both update paths: show the error, then hand the
+// screen back to the clock with a full repaint.
+static void otaFailScreen(const String &line)
+{
+    otaInProgress = false;
+    drawOtaScreen(line, TFT_RED);
+    delay(2000);
+    switchToScreen(SCREEN_HOME);
+}
+
+/*-------- ArduinoOTA (espota / IDE network port) ----------*/
+
+static void setupArduinoOTA()
+{
+    ArduinoOTA.setHostname("esp32worldclock");
+#ifdef OTA_PASSWORD
+    if (strlen(OTA_PASSWORD) > 0)
+    {
+        ArduinoOTA.setPassword(OTA_PASSWORD);
+    }
+#endif
+
+    ArduinoOTA.onStart([]() {
+        otaInProgress = true;
+        drawOtaScreen(ArduinoOTA.getCommand() == U_FLASH
+                          ? "OTA update: receiving firmware..."
+                          : "OTA update: receiving filesystem...",
+                      TFT_CYAN);
+        drawOtaProgressFrame();
+    });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        drawOtaProgressPct(total > 0 ? (int)((progress * 100ULL) / total) : 0);
+    });
+
+    ArduinoOTA.onEnd([]() {
+        drawOtaScreen("OTA update complete - rebooting...", TFT_GREEN);
+    });
+
+    ArduinoOTA.onError([](ota_error_t error) {
+        const char *msg = error == OTA_AUTH_ERROR      ? "auth failed"
+                          : error == OTA_BEGIN_ERROR   ? "begin failed"
+                          : error == OTA_CONNECT_ERROR ? "connect failed"
+                          : error == OTA_RECEIVE_ERROR ? "receive failed"
+                                                       : "end failed";
+        Serial.println(String("OTA error: ") + msg);
+        otaFailScreen(String("OTA update failed (") + msg + ")");
+    });
+
+    ArduinoOTA.begin();
+}
+
+/*-------- Web updater (browser firmware upload) ----------*/
+
+// Self-contained page: file picker, browser-side progress bar, result text.
+// %BUILD% is replaced with the compile timestamp when served.
+static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>World Clock firmware update</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;justify-content:center;padding:2rem}
+.card{max-width:26rem;width:100%;background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:1.5rem}
+h1{font-size:1.2rem;margin:0 0 .3rem}
+p{color:#aaa;font-size:.85rem;margin:.4rem 0}
+code{color:#ccc}
+input[type=file]{width:100%;margin:.8rem 0;color:#ccc}
+button{width:100%;padding:.6rem;border:0;border-radius:6px;background:#0a84ff;color:#fff;font-size:1rem;cursor:pointer}
+button:disabled{background:#444;cursor:default}
+#bar{height:10px;background:#333;border-radius:5px;overflow:hidden;margin:1rem 0 .4rem;display:none}
+#fill{height:100%;width:0;background:#30d158;transition:width .15s}
+#msg{font-size:.9rem;min-height:1.2em}
+.err{color:#ff6961}.ok{color:#30d158}
+</style></head><body><div class="card">
+<h1>ESP32 World Clock</h1>
+<p>Running build: %BUILD% &middot; <a href="/" style="color:#0a84ff">Settings</a></p>
+<p>Select a firmware image (<code>firmware.bin</code> from PlatformIO's
+<code>.pio/build/cyd/</code>, or Arduino IDE &gt; Sketch &gt; Export Compiled
+Binary) and press Update. Keep the device powered until it reboots.</p>
+<form id="f">
+<input type="file" id="file" accept=".bin" required>
+<button id="btn" type="submit">Update firmware</button>
+</form>
+<div id="bar"><div id="fill"></div></div>
+<div id="msg"></div>
+</div>
+<script>
+var f=document.getElementById('f'),file=document.getElementById('file'),
+btn=document.getElementById('btn'),bar=document.getElementById('bar'),
+fill=document.getElementById('fill'),msg=document.getElementById('msg');
+f.addEventListener('submit',function(e){e.preventDefault();
+var fw=file.files[0];if(!fw)return;
+btn.disabled=true;bar.style.display='block';fill.style.width='0';
+msg.textContent='Uploading...';msg.className='';
+var x=new XMLHttpRequest();
+x.open('POST','/update?size='+fw.size);
+x.upload.onprogress=function(ev){if(ev.lengthComputable)
+fill.style.width=Math.round(ev.loaded*100/ev.total)+'%';};
+x.onload=function(){if(x.status==200){
+msg.textContent='Success - the clock is rebooting; give it ~20 seconds.';
+msg.className='ok';}else{
+msg.textContent='Update failed: '+x.responseText;
+msg.className='err';btn.disabled=false;}};
+x.onerror=function(){msg.textContent='Connection lost.';btn.disabled=false;};
+var d=new FormData();d.append('firmware',fw);x.send(d);});
+</script></body></html>
+)rawliteral";
+
+// True if the request may proceed; otherwise a 401 challenge has been sent.
+static bool webAuthenticate()
+{
+#ifdef OTA_PASSWORD
+    if (strlen(OTA_PASSWORD) > 0 && !webServer.authenticate("admin", OTA_PASSWORD))
+    {
+        webServer.requestAuthentication();
+        return false;
+    }
+#endif
+    return true;
+}
+
+static void handleUpdatePage()
+{
+    if (!webAuthenticate()) return;
+    String page = FPSTR(UPDATE_PAGE);
+    page.replace("%BUILD%", String(__DATE__) + " " + __TIME__);
+    webServer.send(200, "text/html", page);
+}
+
+// Streams the multipart upload into the OTA partition chunk by chunk. Runs on
+// the main loop core (webServer.handleClient), so drawing on the TFT is safe;
+// the clock is intentionally frozen behind the progress screen meanwhile.
+static void handleUpdateUpload()
+{
+    HTTPUpload &up = webServer.upload();
+
+    if (up.status == UPLOAD_FILE_START)
+    {
+        webUploadAuthorized = true;
+#ifdef OTA_PASSWORD
+        if (strlen(OTA_PASSWORD) > 0)
+        {
+            webUploadAuthorized = webServer.authenticate("admin", OTA_PASSWORD);
+        }
+#endif
+        if (!webUploadAuthorized) return;
+
+        otaInProgress = true;
+        webUpdateOk = false;
+        webUpdateError = "";
+        // The page passes the exact file size as ?size= so the on-screen
+        // percentage is accurate (multipart Content-Length would overshoot).
+        webUpdateExpectedSize = (size_t)webServer.arg("size").toInt();
+
+        Serial.println("Web update started: " + up.filename);
+        drawOtaScreen("Web update: receiving firmware...", TFT_CYAN);
+        drawOtaProgressFrame();
+
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN))
+        {
+            webUpdateError = Update.errorString();
+        }
+    }
+    else if (up.status == UPLOAD_FILE_WRITE)
+    {
+        if (!webUploadAuthorized || webUpdateError.length() > 0) return;
+        if (Update.write(up.buf, up.currentSize) != up.currentSize)
+        {
+            webUpdateError = Update.errorString();
+        }
+        else if (webUpdateExpectedSize > 0)
+        {
+            drawOtaProgressPct((int)((up.totalSize * 100ULL) / webUpdateExpectedSize));
+        }
+    }
+    else if (up.status == UPLOAD_FILE_END)
+    {
+        if (!webUploadAuthorized) return;
+        if (webUpdateError.length() == 0 && Update.end(true))
+        {
+            webUpdateOk = true;
+            Serial.println("Web update received: " + String(up.totalSize) + " bytes");
+        }
+        else if (webUpdateError.length() == 0)
+        {
+            webUpdateError = Update.errorString();
+        }
+    }
+    else if (up.status == UPLOAD_FILE_ABORTED)
+    {
+        Update.abort();
+        webUpdateError = "upload aborted";
+    }
+}
+
+// Completion handler: runs after the upload callback has seen the whole body.
+static void handleUpdateResult()
+{
+    if (!webUploadAuthorized)
+    {
+        webServer.requestAuthentication();
+        return;
+    }
+
+    if (webUpdateOk)
+    {
+        webServer.sendHeader("Connection", "close");
+        webServer.send(200, "text/plain", "OK - rebooting");
+        drawOtaScreen("Web update complete - rebooting...", TFT_GREEN);
+        delay(750); // let the response reach the browser
+        ESP.restart();
+    }
+    else
+    {
+        String err = webUpdateError.length() > 0 ? webUpdateError : "update failed";
+        webServer.send(500, "text/plain", err);
+        Serial.println("Web update failed: " + err);
+        otaFailScreen("Web update failed");
+    }
+}
+
+/*-------- Web settings page ----------*/
+// Configure the clock from a browser: the same settings as the on-device
+// touch UI (timezones, face, formats, brightness). Served at "/"; changes
+// are applied on the main loop core (webServer.handleClient runs there), so
+// it can safely reuse the touch UI's apply/persist functions.
+
+static const char SETTINGS_PAGE_HEAD[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>World Clock settings</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;justify-content:center;padding:2rem}
+.card{max-width:26rem;width:100%;background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:1.5rem}
+h1{font-size:1.2rem;margin:0 0 .3rem}
+p{color:#aaa;font-size:.85rem;margin:.4rem 0}
+a{color:#0a84ff}
+label{display:block;color:#ccc;font-size:.85rem;margin:.8rem 0 0}
+select,input[type=range]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px}
+button{width:100%;margin-top:1.2rem;padding:.6rem;border:0;border-radius:6px;background:#0a84ff;color:#fff;font-size:1rem;cursor:pointer}
+</style></head><body><div class="card">
+<h1>ESP32 World Clock</h1>
+)rawliteral";
+
+// One preset-city <select> for a quadrant slot, current selection marked.
+static void appendZoneSelect(String &page, const char *label, int slot)
+{
+    page += "<label>" + String(label) + "<select name=\"zone" + String(slot) + "\">";
+    bool matched = false;
+    for (int p = 0; p < TZ_PRESET_COUNT; p++)
+    {
+        bool sel = worldZones[slot].timezone == TZ_PRESETS[p].tz;
+        matched |= sel;
+        page += "<option value=\"" + String(p) + "\"" + (sel ? " selected" : "") + ">" +
+                TZ_PRESETS[p].name + " (" + TZ_PRESETS[p].tz + ")</option>";
+    }
+    if (!matched)
+    {
+        // Zone outside the preset list (e.g. hand-edited config): offer to
+        // keep it; value -1 is ignored by the POST handler.
+        page += "<option value=\"-1\" selected>keep " + worldZones[slot].name + "</option>";
+    }
+    page += "</select></label>";
+}
+
+static void handleSettingsPage()
+{
+    if (!webAuthenticate()) return;
+
+    String page;
+    page.reserve(8192);
+    page += FPSTR(SETTINGS_PAGE_HEAD);
+    page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
+            " &middot; <a href=\"/update\">Firmware update</a>"
+            " &middot; <a href=\"/api/status\">Status JSON</a></p>";
+    page += "<form method=\"POST\" action=\"/settings\">";
+
+    static const char *slotLabels[4] = {"Top-left clock (home)", "Top-right clock",
+                                        "Bottom-left clock", "Bottom-right clock"};
+    for (int i = 0; i < 4; i++)
+    {
+        appendZoneSelect(page, slotLabels[i], i);
+    }
+
+    page += "<label>Clock face<select name=\"face\">";
+    for (int f = 0; f < FACE_COUNT; f++)
+    {
+        page += "<option value=\"" + String(f) + "\"" +
+                (projectConfig.clockFace == f ? " selected" : "") + ">" +
+                clockFaceName(f) + "</option>";
+    }
+    page += "</select></label>";
+
+    page += "<label>Clock format<select name=\"clk\">";
+    page += String("<option value=\"24\"") + (SHOW_24HOUR ? " selected" : "") + ">24 hour</option>";
+    page += String("<option value=\"12\"") + (!SHOW_24HOUR ? " selected" : "") + ">12 hour (AM/PM)</option>";
+    page += "</select></label>";
+
+    page += "<label>Date format<select name=\"date\">";
+    page += String("<option value=\"dmy\"") + (NOT_US_DATE ? " selected" : "") + ">DD/MM/YY</option>";
+    page += String("<option value=\"mdy\"") + (!NOT_US_DATE ? " selected" : "") + ">MM/DD/YY</option>";
+    page += "</select></label>";
+
+    int pct = map(backlightLevel, 5, 255, 0, 100);
+    page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
+            "<input type=\"range\" name=\"bri\" min=\"5\" max=\"255\" value=\"" +
+            String(backlightLevel) + "\" oninput=\"document.getElementById('bv')"
+            ".textContent=Math.round((this.value-5)*100/250)\"></label>";
+
+    page += "<button type=\"submit\">Save</button></form>"
+            "<p>Saving a brightness change pauses auto-brightness for 2 hours, "
+            "same as the on-device controls.</p>"
+            "</div></body></html>";
+    webServer.send(200, "text/html", page);
+}
+
+static void handleSettingsPost()
+{
+    if (!webAuthenticate()) return;
+
+    // Timezone changes first - each one persists the config and re-fetches
+    // the zone definition (brief blocking network call per changed zone).
+    for (int i = 0; i < 4; i++)
+    {
+        String arg = webServer.arg("zone" + String(i));
+        if (arg.length() == 0) continue;
+        int idx = arg.toInt();
+        if (idx < 0 || idx >= TZ_PRESET_COUNT) continue; // -1 = keep current
+        if (worldZones[i].timezone == TZ_PRESETS[idx].tz &&
+            worldZones[i].name == TZ_PRESETS[idx].name) continue;
+        applyZoneSelection(i, TZ_PRESETS[idx]);
+    }
+
+    // Absent fields keep their current value, so a partial POST (scripted
+    // curl, say) can't silently flip unrelated settings.
+    bool wants24 = webServer.hasArg("clk") ? webServer.arg("clk") != "12" : SHOW_24HOUR;
+    bool wantsDmy = webServer.hasArg("date") ? webServer.arg("date") != "mdy" : NOT_US_DATE;
+    if (wants24 != SHOW_24HOUR || wantsDmy != NOT_US_DATE)
+    {
+        SHOW_24HOUR = wants24;
+        NOT_US_DATE = wantsDmy;
+        saveDisplayPrefs();
+    }
+
+    if (webServer.hasArg("face"))
+    {
+        int face = webServer.arg("face").toInt();
+        if (face >= 0 && face < FACE_COUNT && face != projectConfig.clockFace)
+        {
+            projectConfig.clockFace = face;
+            projectConfig.saveConfigFile();
+        }
+    }
+
+    int bri = webServer.arg("bri").toInt();
+    if (bri >= 5 && bri <= 255 && bri != backlightLevel)
+    {
+        backlightLevel = bri;
+        analogWrite(BACKLIGHT_PIN, backlightLevel);
+        manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
+        projectConfig.brightness = backlightLevel;
+        projectConfig.saveConfigFile();
+    }
+
+    // Repaint the home screen with the new settings, whatever page the
+    // on-device UI was showing.
+    switchToScreen(SCREEN_HOME);
+    Serial.println("Settings applied from the web page");
+
+    webServer.sendHeader("Location", "/");
+    webServer.send(303, "text/plain", "Saved");
+}
+
+// Diagnostics as JSON - the System status page, but scriptable.
+static void handleApiStatus()
+{
+    if (!webAuthenticate()) return;
+
+    StaticJsonDocument<1536> doc;
+    doc["hostname"] = "esp32worldclock";
+    doc["ip"] = WiFi.localIP().toString();
+    doc["ssid"] = WiFi.SSID();
+    doc["rssiDbm"] = WiFi.RSSI();
+    doc["mac"] = WiFi.macAddress();
+    doc["uptimeSec"] = millis() / 1000UL;
+    doc["freeHeapBytes"] = ESP.getFreeHeap();
+    doc["ntpSyncs"] = syncCount;
+    doc["lastSyncAgoMin"] = (syncCount > 0)
+                                ? (long)((millis() - lastSyncTime) / 60000UL)
+                                : -1;
+    doc["utc"] = UTC.dateTime("Y-m-d H:i:s");
+    doc["build"] = String(__DATE__) + " " + __TIME__;
+    doc["clockFace"] = clockFaceName(projectConfig.clockFace);
+    doc["brightness"] = backlightLevel;
+    doc["weatherAgeMin"] = weatherAgeMinutes();
+    JsonArray zones = doc.createNestedArray("zones");
+    for (int i = 0; i < 4; i++)
+    {
+        JsonObject z = zones.createNestedObject();
+        z["name"] = worldZones[i].name;
+        z["tz"] = worldZones[i].timezone;
+        if (worldZones[i].lastMarketStatus.length() > 0)
+        {
+            z["market"] = worldZones[i].lastMarketStatus;
+        }
+    }
+
+    String out;
+    serializeJson(doc, out);
+    webServer.send(200, "application/json", out);
+}
+
+static void setupWebUpdater()
+{
+    webServer.on("/", HTTP_GET, handleSettingsPage);
+    webServer.on("/settings", HTTP_POST, handleSettingsPost);
+    webServer.on("/api/status", HTTP_GET, handleApiStatus);
+    webServer.on("/update", HTTP_GET, handleUpdatePage);
+    webServer.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
+    webServer.onNotFound([]() {
+        webServer.sendHeader("Location", "/");
+        webServer.send(302, "text/plain", "");
+    });
+    webServer.begin();
+
+    // ArduinoOTA.begin() already registered the "esp32worldclock" hostname;
+    // advertise the web pages on it too.
+    MDNS.addService("http", "tcp", 80);
+}
+
+/*-------- Public entry points ----------*/
+
+void setupOTA()
+{
+    setupArduinoOTA();
+    setupWebUpdater();
+    Serial.println("OTA updates enabled (hostname: esp32worldclock, espota port 3232)");
+    Serial.println("Web settings + updater: http://" + WiFi.localIP().toString() +
+                   "/ (or http://esp32worldclock.local/)");
+}
+
+void handleOTA()
+{
+    ArduinoOTA.handle();
+    webServer.handleClient();
+}

@@ -5,6 +5,9 @@
 
 #include "ClockLogic.h"         // backlightLevel, worldZones, manualBrightnessUntil
 #include "genericBaseProject.h" // BACKLIGHT_PIN
+#include "holidayService.h"     // public holiday status
+#include "marketHolidays.h"     // holiday calendar status / refresh
+#include "weatherService.h"     // weatherAgeMinutes, weatherInvalidate
 
 void handleSerialCommands()
 {
@@ -25,6 +28,9 @@ void handleSerialCommands()
                     analogWrite(BACKLIGHT_PIN, backlightLevel);
                     // Respect this manual setting before auto-brightness resumes
                     manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
+                    // Persist so the level survives a reboot
+                    projectConfig.brightness = backlightLevel;
+                    projectConfig.saveConfigFile();
                     Serial.print("Brightness set to: ");
                     Serial.println(backlightLevel);
                 } else {
@@ -69,11 +75,29 @@ void handleSerialCommands()
                 Serial.println("Disconnected");
             }
         }
+        else if (command == "LDR") {
+            printLdrStatus();
+        }
+        else if (command == "WEATHER") {
+            long age = weatherAgeMinutes();
+            Serial.println(age < 0 ? "No weather data yet."
+                                   : "Weather data is " + String(age) + " min old.");
+            weatherInvalidate();
+            Serial.println("Cache invalidated - the background task refetches within seconds.");
+        }
+        else if (command == "HOLIDAYS") {
+            printMarketHolidaysStatus();
+            marketHolidaysForceRefresh();
+            printPublicHolidaysStatus();
+        }
         else if (command == "HELP" || command == "?") {
             Serial.println("=== Available Commands ===");
             Serial.println("BRIGHTNESS <5-255>  - Set display brightness");
             Serial.println("SYNC                - Force NTP time synchronization");
             Serial.println("WIFI or IP          - Show WiFi connection info");
+            Serial.println("LDR                 - Show ambient light sensor state");
+            Serial.println("WEATHER             - Force a weather refetch");
+            Serial.println("HOLIDAYS            - Show/refresh market holiday calendars");
             Serial.println("HELP or ?           - Show this help message");
         }
         else if (command.length() > 0) {
@@ -90,6 +114,8 @@ void showStartupCommands()
     Serial.println("- BRIGHTNESS <5-255> : Set display brightness");
     Serial.println("- SYNC               : Force time synchronization");
     Serial.println("- WIFI or IP         : Show network information");
+    Serial.println("- LDR                : Show ambient light sensor state");
+    Serial.println("- WEATHER            : Force a weather refetch");
     Serial.println("- HELP or ?          : Show command help");
     Serial.println("Type any command and press Enter");
     Serial.println();

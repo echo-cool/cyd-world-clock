@@ -26,6 +26,13 @@ void configModeCallback(WiFiManager *myWiFiManager)
   wm_Display->drawWifiManagerMessage(myWiFiManager);
 }
 
+// If nobody uses the captive portal within this window, reboot and retry the
+// whole connection sequence (preconfigured credentials first) instead of
+// sitting in the portal forever. This lets the clock recover unattended when
+// the router comes back after a power cut: without a timeout the portal
+// blocks until someone walks over to the device.
+#define CONFIG_PORTAL_TIMEOUT_S 300
+
 void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *theDisplay)
 {
   wm_Display = theDisplay;
@@ -34,6 +41,8 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   wm.setSaveConfigCallback(saveConfigCallback);
   // set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wm.setAPCallback(configModeCallback);
+  // reboot-and-retry instead of blocking in the portal forever
+  wm.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT_S);
 
   WiFiManagerParameter timeZoneParam(PROJECT_TIME_ZONE_LABEL, "Time Zone", config.timeZone.c_str(), 60);
 
@@ -72,9 +81,9 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
     drd->stop();
     if (!wm.startConfigPortal("esp32Project", "12345678"))
     {
-      Serial.println("failed to connect and hit timeout");
+      Serial.println("Config portal timed out with no WiFi - rebooting to retry");
       delay(3000);
-      // reset and try again, or maybe put it to deep sleep
+      // reset and try again (preconfigured credentials get retried first)
       ESP.restart();
       delay(5000);
     }
@@ -83,9 +92,13 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   {
     if (!wm.autoConnect("esp32Project", "12345678"))
     {
-      Serial.println("failed to connect and hit timeout");
+      Serial.println("Config portal timed out with no WiFi - rebooting to retry");
       delay(3000);
-      // if we still have not connected restart and try all over again
+      // Stop the double-reset detector first: its RTC flag is still armed
+      // (drd->loop() never ran during setup), so restarting without this
+      // would read as a "double reset" and force the portal open again,
+      // looping forever instead of retrying the preconfigured WiFi.
+      drd->stop();
       ESP.restart();
       delay(5000);
     }

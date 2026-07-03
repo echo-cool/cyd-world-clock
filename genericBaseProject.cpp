@@ -52,9 +52,17 @@
 
 #include "genericBaseProject.h"
 
+#include "otaUpdate.h"
+
 #include "wifiManagerHandler.h"
 
 #include "cheapYellowLCD.h"
+
+#include "holidayService.h" // named public holidays for the zones
+
+#include "marketHolidays.h" // cached/fetched exchange holiday calendars
+
+#include "uiPages.h" // getPosixFallback - offline timezone rules
 
 // Number of seconds after reset during which a
 // subseqent reset will be considered a double reset.
@@ -145,6 +153,10 @@ void baseProjectSetup()
         Serial.println("No saved config found, will use defaults or WiFiManager");
     }
 
+    // Load the cached market holiday calendars (SPIFFS is up); the weekly
+    // network refresh is scheduled later from the main loop.
+    marketHolidaysBegin();
+
     // Step 1: Try preconfigured WiFi credentials first. A single attempt can
     // fail even when the network is fine (AP busy, weak signal on boot), so
     // retry several times before falling back to the config portal.
@@ -208,9 +220,20 @@ void baseProjectSetup()
         setupWiFiManager(forceConfig, projectConfig, projectDisplay);
     }
 
-    // Final check to ensure WiFi is connected
+    // Final check to ensure WiFi is connected. Bounded: both paths above are
+    // supposed to have us connected by now, so if we're still offline after
+    // 30 seconds something is wedged - reboot and run the whole sequence
+    // again rather than hanging here forever.
+    unsigned long wifiWaitStart = millis();
     while (WiFi.status() != WL_CONNECTED)
     {
+        if (millis() - wifiWaitStart > 30000UL)
+        {
+            Serial.println("\nStill no WiFi after portal/connect - rebooting to retry");
+            drd->stop(); // avoid the reboot registering as a double reset
+            delay(1000);
+            ESP.restart();
+        }
         Serial.print(".");
         delay(500);
     }
@@ -219,6 +242,9 @@ void baseProjectSetup()
     Serial.println("WiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+
+    // Enable over-the-air firmware updates now that the network is up
+    setupOTA();
 
     Serial.println("Waiting for time sync");
 
@@ -235,7 +261,24 @@ void baseProjectSetup()
     Serial.println();
     Serial.println("UTC:             " + UTC.dateTime());
 
-    myTZ.setLocation(projectConfig.timeZone);
+    // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in
+    // ClockLogic.cpp), so this zone survives timezone-server outages too. The
+    // cache payload is uppercased, hence the case-insensitive name check.
+    if (!(myTZ.setCache(4 * EEPROM_CACHE_LEN) &&
+          myTZ.getOlson().equalsIgnoreCase(projectConfig.timeZone)))
+    {
+        if (!myTZ.setLocation(projectConfig.timeZone))
+        {
+            // Timezone server unreachable and nothing cached: preset zones
+            // carry built-in POSIX rules so local time is still correct.
+            const char *posix = getPosixFallback(projectConfig.timeZone);
+            if (posix)
+            {
+                myTZ.setPosix(posix);
+                Serial.println("Timezone server unreachable - using built-in POSIX rules");
+            }
+        }
+    }
     Serial.print(projectConfig.timeZone);
     Serial.print(F(":     "));
     Serial.println(myTZ.dateTime());
@@ -247,4 +290,10 @@ void baseProjectLoop()
     drd->loop();
     // Handle ezTime NTP events on the main core (ezTime is not thread-safe).
     handleTimeSync();
+    // Service over-the-air update requests
+    handleOTA();
+    // Schedule the weekly holiday-calendar refresh (fetch runs on core 0)
+    marketHolidaysService();
+    // Track the zones' local years for the public-holiday tables
+    holidaysService();
 }

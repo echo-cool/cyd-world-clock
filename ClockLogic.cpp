@@ -2,14 +2,20 @@
 
 #include "ClockLogic.h"
 
-#include <WiFi.h>
-
-#include "Digit.h"
+#include "clockFaces.h"
 #include "genericBaseProject.h" // BACKLIGHT_PIN
+#include "holidayService.h"     // holidaysBegin, getHolidayName
+#include "marketHolidays.h"
 #include "serialCommands.h"
 #include "uiPages.h"
+#include "weatherService.h" // weatherBegin
 
-TFT_eSprite sprite = TFT_eSprite(&tft); // Sprite class
+// Off-screen buffer for one full clock quadrant (160x120x16bpp = 38KB). Each
+// quadrant is rendered here and pushed to the panel in a single blit, so the
+// per-minute updates never show a half-drawn (black-flashing) quadrant. If the
+// allocation ever fails the code falls back to drawing directly on the panel.
+static TFT_eSprite quadSprite = TFT_eSprite(&tft);
+static bool quadSpriteOk = false;
 
 // Touch screen pins (bit-banged SPI)
 #define MOSI_PIN 32
@@ -24,7 +30,6 @@ int clockSize = 2;  // Moderate size for Font 4 to fit in quadrants
 int clockDatum = TL_DATUM;
 uint16_t clockBackgroundColor = TFT_BLACK;
 uint16_t clockFontColor = TFT_WHITE;  // Changed to white for better contrast
-int prevDay = 0;
 
 bool SHOW_24HOUR = true;
 
@@ -80,7 +85,7 @@ void updateFlashState();
 void resetFlashChangeFlag();
 void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex);
 bool needsFlashOnlyUpdate(WorldClockZone &zone);
-void adjustBrightnessBasedOnHomeTime();
+void adjustBrightnessAuto();
 
 void SetupCYD()
 {
@@ -93,18 +98,7 @@ void SetupCYD()
     tft.setTextFont(clockFont);
     tft.setTextSize(clockSize);
     tft.setTextDatum(clockDatum);
-
-    sprite.createSprite(tft.textWidth("8"), tft.fontHeight());
-    sprite.setTextColor(clockFontColor, clockBackgroundColor);
-    sprite.setRotation(1);
-    sprite.setTextFont(clockFont);
-    sprite.setTextSize(clockSize);
-    sprite.setTextDatum(clockDatum);
 }
-
-/*-------- Digits ----------*/
-Digit *digs[4]; // Only need 4 digits for HH:MM (no seconds)
-int colons[1]; // Only one colon between hours and minutes
 
 // Screen dimensions (320x240)
 int screenWidth = 320;
@@ -124,160 +118,20 @@ QuadrantPos quadrants[4] = {
     {160, 120, 240, 180}      // Bottom-right
 };
 
-bool ispm; // set by ParseDigits; drives the AM/PM indicator in 12-hour mode
-
-void CalculateDigitOffsetsForQuadrant(int quadrantIndex)
+String formatHHMM(time_t local, bool &pm)
 {
-    QuadrantPos quad = quadrants[quadrantIndex];
-
-    tft.setTextFont(clockFont);
-    tft.setTextSize(clockSize);
-    int DigitWidth = tft.textWidth("8");
-    int colonWidth = tft.textWidth(":");
-    int colonPadding = 1;
-    int fontHeight = tft.fontHeight();
-
-    // Calculate total width of time display (HH:MM only - no AM/PM)
-    int timeWidth = DigitWidth * 4 + colonWidth + (colonPadding * 2);
-
-    // Center the time display horizontally in the quadrant
-    int startX = quad.x + (quadrantWidth - timeWidth) / 2;
-
-    // Position time higher up in the quadrant (account for timezone label and date below)
-    int labelHeight = 20; // Space for timezone label at top
-    int dateHeight = 40;  // Further increased space for date and day name at bottom
-    int availableHeight = quadrantHeight - labelHeight - dateHeight;
-    int timeY = quad.y + labelHeight + (availableHeight - fontHeight) / 3; // Moved up by using /3 instead of /2
-
-    digs[0]->SetXY(startX, timeY);                      // HH
-    digs[1]->SetXY(digs[0]->X() + DigitWidth, timeY);   // HH
-
-    colons[0] = digs[1]->X() + DigitWidth + colonPadding; // :
-
-    digs[2]->SetXY(colons[0] + colonWidth + colonPadding, timeY);      // MM
-    digs[3]->SetXY(digs[2]->X() + DigitWidth, timeY);   // MM
-}
-
-void SetupDigits()
-{
-    tft.fillScreen(clockBackgroundColor);
-    tft.setTextFont(clockFont);
-    tft.setTextSize(clockSize);
-    tft.setTextDatum(clockDatum);
-
-    for (size_t i = 0; i < 4; i++)  // Only 4 digits for HH:MM
-    {
-        digs[i] = new Digit(0);
-        digs[i]->Height(tft.fontHeight());
-    }
-
-    // Note: Digit positions will be calculated per quadrant in DrawSingleTimeZone
-}
-
-/*-------- DRAWING ----------*/
-// Note: DrawColons is now handled within DrawSingleTimeZone for each quadrant
-
-// Note: DrawAmPm is now handled within DrawSingleTimeZone for each quadrant
-
-void DrawADigit(Digit *digg); // Without this line, compiler says: error: variable or field 'DrawADigit' declared void.
-
-void DrawADigit(Digit *digg)
-{
-    if (digg->Value() == digg->NewValue())
-    {
-        sprite.drawNumber(digg->Value(), 0, 0);
-        sprite.pushSprite(digg->X(), digg->Y());
-    }
-    else
-    {
-        for (size_t f = 0; f <= digg->Height(); f++)
-        {
-            digg->Frame(f);
-            sprite.drawNumber(digg->Value(), 0, -digg->Frame());
-            sprite.drawNumber(digg->NewValue(), 0, digg->Height() - digg->Frame());
-            sprite.pushSprite(digg->X(), digg->Y());
-            delay(5);
-        }
-        digg->Value(digg->NewValue());
-    }
-}
-
-void DrawDigitsAtOnce()
-{
-    tft.setTextDatum(TL_DATUM);
-    for (size_t f = 0; f <= digs[0]->Height(); f++) // For all animation frames...
-    {
-        for (size_t di = 0; di < 4; di++) // for all Digits (HH:MM only)...
-        {
-            Digit *dig = digs[di];
-            if (dig->Value() == dig->NewValue()) // If Digit is not changing...
-            {
-                if (f == 0) //... and this is first frame, just draw it to screeen without animation.
-                {
-                    sprite.drawNumber(dig->Value(), 0, 0);
-                    sprite.pushSprite(dig->X(), dig->Y());
-                }
-            }
-            else // However, if a Digit is changing value, we need to draw animation frame "f"
-            {
-                dig->Frame(f);                                                       // Set the animation offset
-                sprite.drawNumber(dig->Value(), 0, -dig->Frame());                   // Scroll up the current value
-                sprite.drawNumber(dig->NewValue(), 0, dig->Height() - dig->Frame()); // while make new value appear from below
-                sprite.pushSprite(dig->X(), dig->Y());                               // Draw the current animation frame to actual screen.
-            }
-        }
-        delay(5);
-    }
-
-    // Once all animations are done, then we can update all Digits to current new values.
-    for (size_t di = 0; di < 4; di++)
-    {
-        Digit *dig = digs[di];
-        dig->Value(dig->NewValue());
-    }
-}
-
-void DrawDigitsWithoutAnimation()
-{
-    for (size_t di = 0; di < 4; di++)  // Only 4 digits for HH:MM
-    {
-        Digit *dig = digs[di];
-        dig->Value(dig->NewValue());
-        dig->Frame(0);
-        sprite.drawNumber(dig->NewValue(), 0, 0);
-        sprite.pushSprite(dig->X(), dig->Y());
-    }
-}
-
-void DrawDigitsOneByOne()
-{
-    tft.setTextDatum(TL_DATUM);
-    for (size_t i = 0; i < 4; i++)  // Only 4 digits for HH:MM
-    {
-        DrawADigit(digs[3 - i]);
-    }
-}
-
-void ParseDigits(Timezone &tz)
-{
-    time_t local = tz.now();
     int hr = hour(local); // 24-hour value from ezTime
-
-    // Track AM/PM (used by the indicator in 12-hour mode)
-    ispm = (hr >= 12);
-
-    // Honor the 12/24-hour user setting
+    pm = (hr >= 12);
     if (!SHOW_24HOUR)
     {
         hr = hr % 12;
         if (hr == 0) hr = 12; // midnight / noon shown as 12, not 0
     }
-
-    digs[0]->NewValue(hr / 10);
-    digs[1]->NewValue(hr % 10);
-    digs[2]->NewValue(minute(local) / 10);
-    digs[3]->NewValue(minute(local) % 10);
+    char buf[6];
+    sprintf(buf, "%02d:%02d", hr, minute(local));
+    return String(buf);
 }
+
 uint16_t getDayNightColor(Timezone &tz)
 {
     time_t local = tz.now();
@@ -320,6 +174,76 @@ long daysFromCivil(int y, int m, int d)
     return era * 146097 + (long)doe - 719468;
 }
 
+// Inverse of daysFromCivil (also Howard Hinnant's algorithm).
+void civilFromDays(long days, int &y, int &m, int &d)
+{
+    days += 719468;
+    long era = (days >= 0 ? days : days - 146096) / 146097;
+    unsigned doe = (unsigned)(days - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long yr = (long)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    y = (int)(yr + (m <= 2));
+}
+
+// Format a countdown as "2D 5H", "5H 03M" or "45 MIN" depending on magnitude.
+static String formatOpenCountdown(long minutes)
+{
+    char buf[12];
+    if (minutes >= 24 * 60) {
+        sprintf(buf, "%ldD %ldH", minutes / (24 * 60), (minutes % (24 * 60)) / 60);
+    } else if (minutes >= 60) {
+        sprintf(buf, "%ldH %02ldM", minutes / 60, minutes % 60);
+    } else {
+        sprintf(buf, "%ld MIN", minutes);
+    }
+    return String(buf);
+}
+
+// Minutes until the next REGULAR session opens, walking real calendar dates
+// so weekends AND full-day exchange holidays (marketHolidays.cpp) are skipped.
+// The scan covers 30 days so long closures (SSE Spring Festival / golden
+// week) still resolve to a countdown. DST shifts between now and the open are
+// ignored (at most an hour off around a transition weekend) and half-day
+// early closes are not modeled.
+static long minutesToNextRegularOpen(const WorldClockZone &zone, int y, int mo, int dd, int totalMinutes)
+{
+    long today = daysFromCivil(y, mo, dd);
+    for (int d = 0; d <= 30; d++) {
+        long days = today + d;
+        int wd = (int)((days + 4) % 7) + 1; // 1=Sunday ... 7=Saturday
+        if (wd == 1 || wd == 7) continue;   // markets closed on weekends
+        int fy, fm, fd;
+        civilFromDays(days, fy, fm, fd);
+        if (isMarketHoliday(zone.market.exchange, fy, fm, fd)) continue;
+        long best = -1;
+        for (int i = 0; i < zone.market.sessionCount; i++) {
+            const TradingSession &session = zone.market.sessions[i];
+            if (session.sessionName != "REGULAR") continue;
+            int start = session.openHour * 60 + session.openMinute;
+            if (d == 0 && start <= totalMinutes) continue; // already past today
+            long m = d * 1440L + start - totalMinutes;
+            if (best < 0 || m < best) best = m;
+        }
+        if (best >= 0) return best;
+    }
+    return -1;
+}
+
+// Status line for a market that is closed: count down to the next regular
+// open instead of a bare "CLOSED". Worded "OPENS IN" (not "OPEN IN") so
+// shouldMessageFlash() doesn't treat this always-on countdown as one of the
+// <=10 minute flashing alerts.
+static String closedStatusWithCountdown(const WorldClockZone &zone, int y, int mo, int dd, int totalMinutes)
+{
+    long m = minutesToNextRegularOpen(zone, y, mo, dd, totalMinutes);
+    if (m < 0) return zone.market.exchange + " CLOSED";
+    return zone.market.exchange + " OPENS IN " + formatOpenCountdown(m);
+}
+
 String getMarketStatus(WorldClockZone &zone)
 {
     if (!zone.market.hasMarket) {
@@ -331,6 +255,16 @@ String getMarketStatus(WorldClockZone &zone)
     int currentMinute = minute(local);
     int currentDayOfWeek = weekday(local); // 1=Sunday, 2=Monday, ..., 7=Saturday
     int currentTotalMinutes = currentHour * 60 + currentMinute;
+    int currentYear = year(local);
+    int currentMonth = month(local);
+    int currentDayOfMonth = day(local);
+
+    // Full-day exchange holiday: closed all day, countdown to the next open
+    // (the countdown itself skips holidays too). Half-day early closes are
+    // not modeled - see marketHolidays.cpp.
+    if (isMarketHoliday(zone.market.exchange, currentYear, currentMonth, currentDayOfMonth)) {
+        return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
+    }
 
     // Weekend logic - NYSE is closed on Saturday and Sunday
     if (currentDayOfWeek == 7 || currentDayOfWeek == 1) { // Saturday or Sunday
@@ -355,7 +289,7 @@ String getMarketStatus(WorldClockZone &zone)
                 }
             }
         }
-        return zone.market.exchange + " CLOSED";
+        return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
     } else if (currentDayOfWeek == 6) { // Friday
         // Friday may have extended evening hours - check if overnight sessions extend into weekend
         if (zone.market.exchange == "NYSE") {
@@ -441,11 +375,17 @@ String getMarketStatus(WorldClockZone &zone)
         }
     }
 
-    return zone.market.exchange + " CLOSED";
+    return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
 }
 
 uint16_t getMarketStatusColor(String status)
 {
+    // Countdown to the next regular open ("NYSE OPENS IN 5H 03M") - checked
+    // first because it would otherwise match the generic " OPEN" case below.
+    if (status.indexOf("OPENS IN") != -1) {
+        return TFT_LIGHTGREY;
+    }
+
     // Check for specific session types first (before generic OPEN check)
     if (status.indexOf("AFTER-HRS OPEN") != -1) {
         return TFT_CYAN;    // Cyan for extended/after-hours trading
@@ -466,108 +406,106 @@ uint16_t getMarketStatusColor(String status)
     }
 }
 
-void DrawTimeZoneLabel(String label, int quadrantIndex)
+// Render one quadrant's full content (label, time, AM/PM, day/date, market
+// status) with gfx primitives at offset (ox, oy). gfx is normally the
+// off-screen quadSprite (ox = oy = 0), which is then pushed to the panel in
+// one blit; when the sprite allocation failed it is tft itself with the
+// quadrant's top-left corner as the offset. zoneIdx (0-3) keys the
+// public-holiday lookup for this quadrant.
+static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone &zone, int zoneIdx)
 {
-    QuadrantPos quad = quadrants[quadrantIndex];
+    gfx.fillRect(ox, oy, quadrantWidth, quadrantHeight, clockBackgroundColor);
 
-    tft.setTextFont(1);  // Back to font 1 for timezone labels
-    tft.setTextSize(2);  // Back to size 2 for timezone text
-    tft.setTextDatum(TC_DATUM); // Top center
-
-    // Use day/night color for timezone labels
-    tft.setTextColor(getDayNightLabelColor(worldZones[quadrantIndex].tz), clockBackgroundColor);
-
-    // Position label at top-center of quadrant
-    tft.drawString(label, quad.centerX, quad.y + 5);
-}
-
-void DrawDateAndDay(WorldClockZone &zone, int quadrantIndex)
-{
-    QuadrantPos quad = quadrants[quadrantIndex];
     time_t local = zone.tz.now();
+    uint16_t timeColor = getDayNightColor(zone.tz);
+    uint16_t labelColor = getDayNightLabelColor(zone.tz);
+    int centerX = ox + quadrantWidth / 2;
 
-    // Get date components
-    int dd = day(local);
-    int mth = month(local);
-    int yr = year(local);
-    int dow = weekday(local);
+    // Timezone label, top-center
+    gfx.setTextFont(1);
+    gfx.setTextSize(2);
+    gfx.setTextDatum(TC_DATUM);
+    gfx.setTextColor(labelColor, clockBackgroundColor);
+    gfx.drawString(zone.name, centerX, oy + 5);
 
-    // Day names array
-    String dayNames[] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    // Time (HH:MM), centered between the label and the date block
+    bool pm;
+    String hhmm = formatHHMM(local, pm);
+    gfx.setTextFont(clockFont);
+    gfx.setTextSize(clockSize);
+    gfx.setTextDatum(TC_DATUM);
+    gfx.setTextColor(timeColor, clockBackgroundColor);
+    gfx.drawString(hhmm, centerX, oy + 22);
 
-    // Format date string
-    char dateBuffer[12];
-    if (NOT_US_DATE) {
-        sprintf(dateBuffer, "%02d/%02d/%02d", dd, mth, yr % 100); // DD/MM/YY
-    } else {
-        sprintf(dateBuffer, "%02d/%02d/%02d", mth, dd, yr % 100); // MM/DD/YY
+    // In 12-hour mode, an AM/PM indicator in the top-right of the quadrant
+    if (!SHOW_24HOUR) {
+        gfx.setTextFont(1);
+        gfx.setTextSize(1);
+        gfx.setTextDatum(TR_DATUM);
+        gfx.setTextColor(timeColor, clockBackgroundColor);
+        gfx.drawString(pm ? "PM" : "AM", ox + quadrantWidth - 4, oy + 6);
     }
 
-    // Use day/night color for date/day text
-    uint16_t dateColor = getDayNightLabelColor(zone.tz);
-
-    // For all timezones, add relative date indication compared to home (top-left).
-    // Compare actual calendar dates (not bare day-of-month) so it stays correct
-    // across month and year boundaries.
-    String dayText = dayNames[dow];
+    // Day name with the day-offset vs home (top-left quadrant). Compare actual
+    // calendar dates (not bare day-of-month) so it stays correct across month
+    // and year boundaries.
+    static const char *dayNames[8] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    String dayText = dayNames[weekday(local)];
     time_t homeTime = worldZones[0].tz.now();
-    long dayDiff = daysFromCivil(yr, mth, dd) -
+    long dayDiff = daysFromCivil(year(local), month(local), day(local)) -
                    daysFromCivil(year(homeTime), month(homeTime), day(homeTime));
-
     if (dayDiff >= 1) {
         dayText += " (+1)"; // Ahead of home (tomorrow)
     } else if (dayDiff <= -1) {
         dayText += " (-1)"; // Behind home (yesterday)
     }
-    // If same day as home, no indicator needed
 
-    // Draw day name - larger text and better positioning
-    tft.setTextFont(1);  // Back to font 1 for day names
-    tft.setTextSize(2);  // Back to size 2 for day name
-    tft.setTextDatum(TC_DATUM);
-    tft.setTextColor(dateColor, clockBackgroundColor);
-    tft.drawString(dayText, quad.centerX, quad.y + quadrantHeight - 50);
-
-    // Draw date - larger text and better spacing
-    tft.setTextFont(1);  // Keep font 1 for date
-    tft.setTextSize(2);  // Back to size 2 for date
-    tft.drawString(dateBuffer, quad.centerX, quad.y + quadrantHeight - 30);
-
-    // Draw market status if this zone has a market.
-    // Use the cached status (refreshed once per minute in hasTimeChanged) rather
-    // than recomputing the String here on every redraw.
-    String marketStatus = zone.lastMarketStatus;
-    if (marketStatus.length() > 0) {
-        uint16_t marketColor = getMarketStatusColor(marketStatus);
-        tft.setTextFont(1);
-        tft.setTextSize(1);  // Smaller text for market status
-
-        // Check if this message should flash and apply flashing effect
-        if (shouldMessageFlash(marketStatus)) {
-            if (flashState) {
-                // Flash-on state: display the message normally
-                tft.setTextColor(marketColor, clockBackgroundColor);
-                tft.drawString(marketStatus, quad.centerX, quad.y + quadrantHeight - 10);
-            } else {
-                // Flash-off state: clear the text area by drawing a filled rectangle
-                int textWidth = tft.textWidth(marketStatus);
-                int textHeight = tft.fontHeight();
-                int textX = quad.centerX - textWidth / 2;  // Center the text
-                int textY = quad.y + quadrantHeight - 10;
-                tft.fillRect(textX, textY, textWidth, textHeight, clockBackgroundColor);
-            }
-        } else {
-            // Non-flashing messages display normally
-            tft.setTextColor(marketColor, clockBackgroundColor);
-            tft.drawString(marketStatus, quad.centerX, quad.y + quadrantHeight - 10);
-        }
+    char dateBuffer[12];
+    if (NOT_US_DATE) {
+        sprintf(dateBuffer, "%02d/%02d/%02d", day(local), month(local), year(local) % 100);
+    } else {
+        sprintf(dateBuffer, "%02d/%02d/%02d", month(local), day(local), year(local) % 100);
     }
-}
 
-void DrawQuadrantBorders()
-{
-    // Grid lines between quadrants are intentionally disabled for a cleaner look.
-    // Kept as a hook in case borders are wanted again.
+    // Public holiday in this zone today? The day line turns gold and drops
+    // to the smaller font so the holiday's name fits next to the day name;
+    // the date below stays visible as on any other day.
+    char holidayName[32];
+    uint32_t todayYmd = (uint32_t)year(local) * 10000u +
+                        (uint32_t)month(local) * 100u + (uint32_t)day(local);
+    bool isHoliday = getHolidayName(zoneIdx, todayYmd, holidayName, sizeof(holidayName));
+
+    gfx.setTextFont(1);
+    gfx.setTextDatum(TC_DATUM);
+    gfx.setTextColor(isHoliday ? TFT_GOLD : labelColor, clockBackgroundColor);
+    if (isHoliday) {
+        String dayLine = dayText + " - " + holidayName;
+        if (dayLine.length() > 26) {
+            dayLine = dayLine.substring(0, 26); // keep it inside the quadrant
+        }
+        gfx.setTextSize(1);
+        // Vertically centered in the slot the size-2 day name normally fills
+        gfx.drawString(dayLine, centerX, oy + quadrantHeight - 46);
+    } else {
+        gfx.setTextSize(2);
+        gfx.drawString(dayText, centerX, oy + quadrantHeight - 50);
+    }
+    gfx.setTextSize(2);
+    gfx.drawString(dateBuffer, centerX, oy + quadrantHeight - 30);
+
+    // Market status if this zone has a market. Uses the cached status
+    // (refreshed once per minute in hasTimeChanged) rather than recomputing
+    // the String here on every redraw. The <=10-minute open/close alerts
+    // flash: in the flash-off phase the line is simply not drawn.
+    String marketStatus = zone.lastMarketStatus;
+    if (marketStatus.length() > 0 &&
+        (!shouldMessageFlash(marketStatus) || flashState)) {
+        gfx.setTextFont(1);
+        gfx.setTextSize(1);
+        gfx.setTextDatum(TC_DATUM);
+        gfx.setTextColor(getMarketStatusColor(marketStatus), clockBackgroundColor);
+        gfx.drawString(marketStatus, centerX, oy + quadrantHeight - 10);
+    }
 }
 
 bool shouldMessageFlash(String message)
@@ -698,127 +636,136 @@ bool needsFlashOnlyUpdate(WorldClockZone &zone)
     return false;
 }
 
-void adjustBrightnessBasedOnHomeTime()
+/*-------- Ambient-light auto-brightness ----------*/
+// Primary source: the CYD's onboard LDR (self-calibrating, see below).
+// Fallback while the sensor is unproven (or disabled): the old fixed schedule
+// on home-zone time. Manual changes (touch / settings / serial) always win
+// for MANUAL_BRIGHTNESS_HOLD_MS via manualBrightnessUntil.
+
+#if USE_LDR_AUTOBRIGHTNESS
+static int ldrLastRaw = 0;    // last raw sample, normalized so higher = darker
+static float ldrEma = -1.0f;  // smoothed reading (-1 until first sample)
+static int ldrMinSeen = 4095; // observed range since boot - used both to
+static int ldrMaxSeen = 0;    // self-calibrate and to prove the sensor works
+static bool ldrDark = false;
+
+// Sample every couple of seconds and classify the room as dark/bright with
+// hysteresis around the midpoint of the observed range. The LDR circuit on
+// some CYD revisions is broken (flat readings); until the range has swung by
+// LDR_MIN_SWING the sensor is not trusted and ldrIsTrusted() stays false.
+static void ldrSample(unsigned long now)
 {
-    static int lastHourChecked = -1;
-    static unsigned long lastBrightnessAdjustment = 0;
+    static unsigned long lastSample = 0;
+    if (now - lastSample < 2000) return;
+    lastSample = now;
 
-    // Don't fight a manual brightness change (touch / serial) - let it hold first
-    unsigned long currentTime = millis();
-    if (currentTime < manualBrightnessUntil) {
-        return;
-    }
+    int raw = analogRead(LDR_PIN);
+#if !LDR_DARK_IS_HIGH
+    raw = 4095 - raw; // normalize: higher = darker
+#endif
+    ldrLastRaw = raw;
+    ldrEma = (ldrEma < 0) ? raw : ldrEma + 0.2f * (raw - ldrEma);
 
-    // Only check brightness adjustment every 30 seconds to avoid excessive updates
-    if (currentTime - lastBrightnessAdjustment < 30000) {
-        return;
-    }
+    int e = (int)ldrEma;
+    if (e < ldrMinSeen) ldrMinSeen = e;
+    if (e > ldrMaxSeen) ldrMaxSeen = e;
 
-    // Get current hour from Santa Clara (home location - worldZones[0])
-    if (worldZones[0].initialized) {
-        time_t santaClaraTime = worldZones[0].tz.now();
-        int currentHour = hour(santaClaraTime);
-
-        // Only adjust if the hour has changed to avoid constant adjustments
-        if (currentHour != lastHourChecked) {
-            lastHourChecked = currentHour;
-            lastBrightnessAdjustment = currentTime;
-
-            int targetBrightness;
-            if (currentHour >= 1 && currentHour < 7) {
-                // Night time (1-6 AM): dim brightness
-                targetBrightness = 1;
-            } else {
-                // Day time (7 AM - 11:59 PM): normal brightness
-                targetBrightness = 80;
-            }
-
-            // Only adjust if brightness level is different
-            if (backlightLevel != targetBrightness) {
-                backlightLevel = targetBrightness;
-                analogWrite(BACKLIGHT_PIN, backlightLevel);
-
-                Serial.print("Auto brightness adjusted for Santa Clara time ");
-                Serial.print(currentHour);
-                Serial.print(":xx - Brightness set to ");
-                Serial.println(backlightLevel);
-            }
+    if (ldrMaxSeen - ldrMinSeen >= LDR_MIN_SWING) {
+        int mid = (ldrMinSeen + ldrMaxSeen) / 2;
+        int band = (ldrMaxSeen - ldrMinSeen) / 8; // hysteresis, no flapping
+        if (!ldrDark && e > mid + band) {
+            ldrDark = true;
+            Serial.println("Auto brightness: room went dark (LDR " + String(e) + ")");
+        } else if (ldrDark && e < mid - band) {
+            ldrDark = false;
+            Serial.println("Auto brightness: room went bright (LDR " + String(e) + ")");
         }
     }
 }
 
-
-void DrawQuadrantBackground(int quadrantIndex)
+static bool ldrIsTrusted()
 {
-    QuadrantPos quad = quadrants[quadrantIndex];
-    // Clear only this quadrant (grid lines are disabled - see DrawQuadrantBorders)
-    tft.fillRect(quad.x, quad.y, quadrantWidth, quadrantHeight, clockBackgroundColor);
+    return ldrMaxSeen - ldrMinSeen >= LDR_MIN_SWING;
+}
+#endif // USE_LDR_AUTOBRIGHTNESS
+
+void printLdrStatus()
+{
+#if USE_LDR_AUTOBRIGHTNESS
+    Serial.println("=== LDR (ambient light sensor, GPIO " + String(LDR_PIN) + ") ===");
+    Serial.println("Raw (normalized, higher = darker): " + String(ldrLastRaw));
+    Serial.println("Smoothed: " + String((int)ldrEma));
+    Serial.println("Range seen since boot: " + String(ldrMinSeen) + " - " + String(ldrMaxSeen));
+    if (ldrIsTrusted()) {
+        Serial.println("Sensor trusted: yes | Room: " + String(ldrDark ? "DARK" : "BRIGHT"));
+    } else {
+        Serial.println("Sensor trusted: not yet (swing < " + String(LDR_MIN_SWING) +
+                       " counts; using the 1-7 AM time fallback). Cover the sensor");
+        Serial.println("or shine a light at it - if the value never moves, this board's");
+        Serial.println("LDR circuit is one of the known-bad CYD revisions.");
+    }
+#else
+    Serial.println("LDR auto-brightness disabled at compile time (USE_LDR_AUTOBRIGHTNESS=0)");
+#endif
 }
 
-void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex, bool forceRedraw = false)
+void adjustBrightnessAuto()
 {
-    // When called from drawRollingClock with forceRedraw=false,
-    // we already know the time has changed, so don't check again
-    if (!forceRedraw) {
-        CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " - time already confirmed to have changed");
+    unsigned long currentTime = millis();
+
+    // Don't fight a manual brightness change (touch / serial) - let it hold first
+    if (currentTime < manualBrightnessUntil) {
+        return;
+    }
+
+    static unsigned long lastUpdate = 0;
+    if (currentTime - lastUpdate < 250) return;
+    lastUpdate = currentTime;
+
+    int target = -1;
+
+#if USE_LDR_AUTOBRIGHTNESS
+    ldrSample(currentTime);
+    if (ldrIsTrusted()) {
+        target = ldrDark ? NIGHT_BRIGHTNESS : constrain(projectConfig.brightness, 1, 255);
+    }
+#endif
+
+    // Fallback: fixed schedule on home-zone time (night = 1-6 AM)
+    if (target < 0) {
+        if (!worldZones[0].initialized) return;
+        int currentHour = hour(worldZones[0].tz.now());
+        target = (currentHour >= 1 && currentHour < 7)
+                     ? NIGHT_BRIGHTNESS
+                     : constrain(projectConfig.brightness, 1, 255);
+    }
+
+    // Fade toward the target instead of jumping (full sweep in a few seconds)
+    if (backlightLevel != target) {
+        int step = 8;
+        if (backlightLevel < target) {
+            backlightLevel = min(backlightLevel + step, target);
+        } else {
+            backlightLevel = max(backlightLevel - step, target);
+        }
+        analogWrite(BACKLIGHT_PIN, backlightLevel);
+    }
+}
+
+
+void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex)
+{
+    CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " (quadrant " + String(quadrantIndex) + ")");
+
+    QuadrantPos quad = quadrants[quadrantIndex];
+    if (quadSpriteOk) {
+        // Compose off-screen, then update the panel in a single blit - the
+        // quadrant never shows an intermediate (cleared / half-drawn) state.
+        renderQuadrantContent(quadSprite, 0, 0, zone, quadrantIndex);
+        quadSprite.pushSprite(quad.x, quad.y);
     } else {
-        CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " - force redraw requested");
+        renderQuadrantContent(tft, quad.x, quad.y, zone, quadrantIndex);
     }
-
-    // Clear only this quadrant to avoid flashing
-    DrawQuadrantBackground(quadrantIndex);
-
-    // Calculate digit positions for this quadrant
-    CLOCK_DEBUG_PRINTLN("Calculating digit offsets for quadrant " + String(quadrantIndex));
-    CalculateDigitOffsetsForQuadrant(quadrantIndex);
-
-    // Parse time for this timezone
-    ParseDigits(zone.tz);
-
-    // Get day/night appropriate colors
-    uint16_t timeColor = getDayNightColor(zone.tz);
-
-    // Draw timezone label at top of quadrant
-    DrawTimeZoneLabel(zone.name, quadrantIndex);
-
-    // Draw time digits without animation for smooth display
-    CLOCK_DEBUG_PRINTLN("Drawing digits for " + zone.name + " at position (" + String(quadrantIndex) + ")");
-    for (size_t di = 0; di < 4; di++)
-    {
-        Digit *dig = digs[di];
-        dig->Value(dig->NewValue());
-        dig->Frame(0);
-
-        // Set color for this timezone
-        sprite.setTextColor(timeColor, clockBackgroundColor);
-        sprite.drawNumber(dig->NewValue(), 0, 0);
-        sprite.pushSprite(dig->X(), dig->Y());
-        CLOCK_DEBUG_PRINTLN("Drew digit " + String(di) + " value " + String(dig->NewValue()) + " at (" + String(dig->X()) + "," + String(dig->Y()) + ")");
-    }
-
-    // Draw colon with day/night color - use the calculated position
-    tft.setTextFont(clockFont);
-    tft.setTextSize(clockSize);
-    tft.setTextDatum(clockDatum);
-    tft.setTextColor(timeColor, clockBackgroundColor);
-
-    // Get the Y position from the first digit (they're all aligned)
-    int colonY = digs[0]->Y();
-    tft.drawChar(':', colons[0], colonY);
-
-    // In 12-hour mode, show an AM/PM indicator in the top-right of the quadrant
-    // (ispm was set by ParseDigits above).
-    if (!SHOW_24HOUR) {
-        QuadrantPos ampmQuad = quadrants[quadrantIndex];
-        tft.setTextFont(1);
-        tft.setTextSize(1);
-        tft.setTextDatum(TR_DATUM);
-        tft.setTextColor(timeColor, clockBackgroundColor);
-        tft.drawString(ispm ? "PM" : "AM", ampmQuad.x + quadrantWidth - 4, ampmQuad.y + 6);
-    }
-
-    // Draw date and day name below the time
-    DrawDateAndDay(zone, quadrantIndex);
 }
 
 void showWiFiStatus(String message, uint16_t color = TFT_WHITE, int fontsize = 1)
@@ -890,25 +837,29 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // Show WiFi connection status
     showWiFiStatus("Connecting WiFi...", TFT_YELLOW);
 
-    SetupDigits();
+    // Off-screen quadrant buffer for flicker-free updates (see quadSprite)
+    quadSpriteOk = (quadSprite.createSprite(quadrantWidth, quadrantHeight) != nullptr);
+    if (!quadSpriteOk) {
+        Serial.println("WARNING: quadrant sprite allocation failed - drawing direct to panel");
+    }
 
     // Initialize touch screen
     touchscreen.begin();
     Serial.println("Touch screen initialized");
 
-    // Initialize backlight pin with PWM
+#if USE_LDR_AUTOBRIGHTNESS
+    // 0 dB attenuation: the CYD's LDR divider only produces small voltages,
+    // so the narrower ADC range (~0-950mV) gives usable resolution.
+    analogSetPinAttenuation(LDR_PIN, ADC_0db);
+#endif
+
+    // Initialize backlight pin with PWM, restoring the saved brightness
+    backlightLevel = constrain(projectConfig.brightness, 1, 255);
     pinMode(BACKLIGHT_PIN, OUTPUT);
     analogWrite(BACKLIGHT_PIN, backlightLevel);
 
     // Show WiFi connected status
     showWiFiStatus("WiFi Connected!", TFT_GREEN);
-
-    // Show IP address on screen for web configuration
-    String ipAddress = WiFi.localIP().toString();
-    // showWiFiStatus("Web Config:", TFT_WHITE);
-    // delay(1000);
-    // showWiFiStatus("http://" + ipAddress, TFT_CYAN, 2);
-    // delay(2000); // Show IP for 4 seconds so user can note it down
 
     // Show timezone setup status
     showWiFiStatus("Setting up zones...", TFT_CYAN);
@@ -917,12 +868,26 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // (falls back to the compiled-in defaults if nothing was saved yet).
     applyConfiguredZones();
 
-    // Initialize all timezones with retry mechanism
+    // Initialize all timezones. Each zone owns a slot in the emulated EEPROM
+    // (ezTime's EZTIME_CACHE_EEPROM mechanism, EEPROM_CACHE_LEN bytes per slot)
+    // so the timezone rules from a previous boot are still available when the
+    // timezone server or the network is unreachable. The network is only hit on
+    // a cache miss, or inside ezTime itself when the cached entry is older than
+    // 6 months.
     for (int i = 0; i < 4; i++) {
         bool tzSuccess = false;
+
+        // The cache payload is stored uppercased, so compare names
+        // case-insensitively to check the slot holds the configured zone.
+        if (worldZones[i].tz.setCache(i * EEPROM_CACHE_LEN) &&
+            worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
+            tzSuccess = true;
+            showWiFiStatus(worldZones[i].name + " - cached", TFT_GREEN);
+            Serial.println("CACHED: " + worldZones[i].name + " - " + worldZones[i].timezone);
+        }
+
         int retryCount = 0;
         const int maxRetries = 5;
-
         while (!tzSuccess && retryCount < maxRetries) {
             // Show progress on screen
             String statusMsg = "Setting up ";
@@ -936,41 +901,30 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             Serial.print(retryCount + 1);
             Serial.println(")");
 
-            // Try to set the timezone
+            // setLocation() returning true means the server sent a valid
+            // definition and the POSIX rules were applied (and written to this
+            // zone's EEPROM cache slot, assigned by setCache above). Note: don't
+            // "verify" by comparing local time against UTC - zones at UTC+0
+            // (e.g. London in winter) legitimately match UTC.
             if (worldZones[i].tz.setLocation(worldZones[i].timezone)) {
-                // // Wait a moment for timezone to stabilize
-                // delay(500);
+                tzSuccess = true;
 
-                // Verify the timezone was set correctly
+                // Show success on screen
+                String successMsg = worldZones[i].name + " - OK!";
+                showWiFiStatus(successMsg, TFT_GREEN);
+
                 time_t local = worldZones[i].tz.now();
-                time_t utc = UTC.now();
-
-                // Check if local time is different from UTC (indicating timezone worked)
-                if (abs((long)(local - utc)) > 60) { // More than 1 minute difference
-                    tzSuccess = true;
-
-                    // Show success on screen
-                    String successMsg = worldZones[i].name + " - OK!";
-                    showWiFiStatus(successMsg, TFT_GREEN);
-
-                    Serial.print("SUCCESS: ");
-                    Serial.print(worldZones[i].name);
-                    Serial.print(" - ");
-                    Serial.print(worldZones[i].timezone);
-                    Serial.print(" | Time: ");
-                    Serial.print(hour(local));
-                    Serial.print(":");
-                    if (minute(local) < 10) Serial.print("0");
-                    Serial.println(minute(local));
-                } else {
-                    Serial.print("FAILED: Timezone not applied correctly (time matches UTC)");
-                    Serial.println();
-                }
+                Serial.print("SUCCESS: ");
+                Serial.print(worldZones[i].name);
+                Serial.print(" - ");
+                Serial.print(worldZones[i].timezone);
+                Serial.print(" | Time: ");
+                Serial.print(hour(local));
+                Serial.print(":");
+                if (minute(local) < 10) Serial.print("0");
+                Serial.println(minute(local));
             } else {
                 Serial.println("FAILED: setLocation returned false");
-            }
-
-            if (!tzSuccess) {
                 retryCount++;
                 if (retryCount < maxRetries) {
                     // Show retry message on screen
@@ -982,13 +936,27 @@ void rollingClockSetup(bool is24Hour, bool usDate)
         }
 
         if (!tzSuccess) {
-            // Show error on screen
-            String errorMsg = worldZones[i].name + " - FAILED!";
-            showWiFiStatus(errorMsg, TFT_RED);
-
-            Serial.print("ERROR: Failed to set timezone for ");
+            Serial.print("ERROR: Failed to fetch timezone for ");
             Serial.print(worldZones[i].name);
             Serial.println(" after all retries!");
+
+            // Timezone server unreachable and nothing usable cached. Preset
+            // timezones carry built-in POSIX rules (incl. DST), so the zone
+            // still shows correct local time; only a non-preset zone with a
+            // stale cache has to fall back to UTC.
+            const char *posix = getPosixFallback(worldZones[i].timezone);
+            if (posix) {
+                worldZones[i].tz.setPosix(posix);
+                showWiFiStatus(worldZones[i].name + " - built-in rules", TFT_YELLOW);
+                Serial.println("Using built-in POSIX rules: " + String(posix));
+            } else if (!worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
+                // The cache slot held a *different* zone (changed while
+                // offline) - don't keep ticking with the wrong rules.
+                worldZones[i].tz.setPosix("UTC");
+                showWiFiStatus(worldZones[i].name + " - FAILED!", TFT_RED);
+            } else {
+                showWiFiStatus(worldZones[i].name + " - FAILED!", TFT_RED);
+            }
         }
 
         // Seed the market-status cache so the first frame shows it immediately
@@ -998,15 +966,17 @@ void rollingClockSetup(bool is24Hour, bool usDate)
         }
     }
 
+    // Start the background fetchers now that the zones are configured: the
+    // public-holiday tables first (the weather task on core 0 also services
+    // them), then the weather fetch task itself.
+    holidaysBegin();
+    weatherBegin();
+
     // Show ready status
     showWiFiStatus("World Clock Ready!", TFT_GREEN);
 
-    // Show available serial commands and web interface info
+    // Show available serial commands
     showStartupCommands();
-    Serial.println("=== Web Configuration Available ===");
-    Serial.println("Open http://" + WiFi.localIP().toString() + " in your browser");
-    Serial.println("to configure timezones and market settings");
-    Serial.println();
 }
 
 void handleTouch()
@@ -1084,6 +1054,12 @@ void handleTouch()
     // Hide brightness bar after the configured timeout
     if (brightnessBarVisible && (millis() - brightnessBarShownTime > BRIGHTNESS_BAR_TIMEOUT_MS)) {
         brightnessBarVisible = false;
+        // Persist the new level once, now that the adjustment gesture is over
+        // (saving on every ±1 tick while the finger is held would hammer flash).
+        if (projectConfig.brightness != backlightLevel) {
+            projectConfig.brightness = backlightLevel;
+            projectConfig.saveConfigFile();
+        }
         // Clear the brightness bar area and force a full screen redraw
         tft.fillScreen(clockBackgroundColor);
         firstDraw = true; // This will force a complete redraw in the next cycle
@@ -1120,18 +1096,37 @@ void drawRollingClock()
         return;
     }
 
-    // Adjust brightness based on Santa Clara time
-    adjustBrightnessBasedOnHomeTime();
+    // Ambient-light auto-brightness (time-of-day fallback inside)
+    adjustBrightnessAuto();
 
-    // Only clear screen and draw borders on first draw
+    // Alternate faces (big clock / calendar / weather) own the whole screen;
+    // the classic four-quadrant world clock is drawn by the code below.
+    if (projectConfig.clockFace != FACE_QUAD) {
+        drawAlternateFace();
+        resetFlashChangeFlag();
+        return;
+    }
+
+    // Repaint the quadrants as soon as async public-holiday data lands, so a
+    // freshly booted clock shows today's holiday without waiting for the
+    // next minute tick.
+    static uint32_t lastQuadHolidayVersion = 0;
+    uint32_t holidayVersion = holidaysDataVersion();
+    if (holidayVersion != lastQuadHolidayVersion) {
+        lastQuadHolidayVersion = holidayVersion;
+        for (int i = 0; i < 4; i++) {
+            worldZones[i].initialized = false;
+        }
+    }
+
+    // Only clear the whole screen on first draw
     if (firstDraw) {
         tft.fillScreen(clockBackgroundColor);
-        DrawQuadrantBorders();
         firstDraw = false;
 
         // Force redraw all quadrants on first run
         for (int i = 0; i < 4; i++) {
-            DrawSingleTimeZone(worldZones[i], i, true);
+            DrawSingleTimeZone(worldZones[i], i);
         }
     } else {
         // Check each timezone for updates
@@ -1139,9 +1134,10 @@ void drawRollingClock()
             if (hasTimeChanged(worldZones[i])) {
                 // Full redraw needed (time, date, or market status changed)
                 CLOCK_DEBUG_PRINTLN("Calling DrawSingleTimeZone for " + worldZones[i].name);
-                DrawSingleTimeZone(worldZones[i], i, false);
-            } else if (needsFlashOnlyUpdate(worldZones[i])) {
-                // Only market status flashing update needed
+                DrawSingleTimeZone(worldZones[i], i);
+            } else if (!brightnessBarVisible && needsFlashOnlyUpdate(worldZones[i])) {
+                // Only market status flashing update needed (skipped while the
+                // brightness bar overlay owns the center of the screen)
                 updateMarketStatusOnly(worldZones[i], i);
             }
         }

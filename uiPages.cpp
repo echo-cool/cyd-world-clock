@@ -2,8 +2,11 @@
 
 #include <WiFi.h>
 
+#include "clockFaces.h"         // ClockFace enum, clockFaceName
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
+#include "holidayService.h"     // holidaysInvalidate
 #include "projectConfig.h"
+#include "weatherService.h"     // weatherInvalidate
 
 UIScreen uiScreen = SCREEN_HOME;
 bool uiPageDrawn = false;      // false -> render the full page on the next loop
@@ -17,34 +20,76 @@ bool touchSuppressedUntilRelease = false;
 
 /*-------- Timezone presets ----------*/
 
-struct TimezonePreset
-{
-    const char *name; // label shown on the clock quadrant
-    const char *tz;   // tz database name used by ezTime
-};
-
+// The posix column carries each zone's current POSIX TZ rules (matching the
+// tz database's POSIX representation, including DST transitions). They are
+// only used as a fallback when the timezone server is unreachable AND no
+// cached definition exists, so the clock still shows correct local time on a
+// first boot without the server. Update an entry if a region changes its
+// DST law (rare).
+//
+// The country column feeds the public-holiday service (date.nager.at). It is
+// "" for Dubai and Mumbai because that API has no AE / IN calendars - those
+// zones simply show no holidays.
 const TimezonePreset TZ_PRESETS[] = {
-    {"SANTA CLARA", "America/Los_Angeles"},
-    {"DENVER", "America/Denver"},
-    {"CHICAGO", "America/Chicago"},
-    {"NEW YORK", "America/New_York"},
-    {"SAO PAULO", "America/Sao_Paulo"},
-    {"LONDON", "Europe/London"},
-    {"PARIS", "Europe/Paris"},
-    {"BERLIN", "Europe/Berlin"},
-    {"MOSCOW", "Europe/Moscow"},
-    {"DUBAI", "Asia/Dubai"},
-    {"MUMBAI", "Asia/Kolkata"},
-    {"SINGAPORE", "Asia/Singapore"},
-    {"HONG KONG", "Asia/Hong_Kong"},
-    {"BEIJING", "Asia/Shanghai"},
-    {"TOKYO", "Asia/Tokyo"},
-    {"SEOUL", "Asia/Seoul"},
-    {"SYDNEY", "Australia/Sydney"},
-    {"AUCKLAND", "Pacific/Auckland"},
+    {"SANTA CLARA", "America/Los_Angeles", 37.35, -121.95, "PST8PDT,M3.2.0,M11.1.0", "US"},
+    {"DENVER", "America/Denver", 39.74, -104.99, "MST7MDT,M3.2.0,M11.1.0", "US"},
+    {"CHICAGO", "America/Chicago", 41.88, -87.63, "CST6CDT,M3.2.0,M11.1.0", "US"},
+    {"NEW YORK", "America/New_York", 40.71, -74.01, "EST5EDT,M3.2.0,M11.1.0", "US"},
+    {"SAO PAULO", "America/Sao_Paulo", -23.55, -46.63, "<-03>3", "BR"},
+    {"LONDON", "Europe/London", 51.51, -0.13, "GMT0BST,M3.5.0/1,M10.5.0", "GB"},
+    {"PARIS", "Europe/Paris", 48.86, 2.35, "CET-1CEST,M3.5.0,M10.5.0/3", "FR"},
+    {"BERLIN", "Europe/Berlin", 52.52, 13.41, "CET-1CEST,M3.5.0,M10.5.0/3", "DE"},
+    {"MOSCOW", "Europe/Moscow", 55.76, 37.62, "MSK-3", "RU"},
+    {"DUBAI", "Asia/Dubai", 25.20, 55.27, "<+04>-4", ""},
+    {"MUMBAI", "Asia/Kolkata", 19.08, 72.88, "IST-5:30", ""},
+    {"SINGAPORE", "Asia/Singapore", 1.35, 103.82, "<+08>-8", "SG"},
+    {"HONG KONG", "Asia/Hong_Kong", 22.32, 114.17, "HKT-8", "HK"},
+    {"BEIJING", "Asia/Shanghai", 39.90, 116.41, "CST-8", "CN"},
+    {"TOKYO", "Asia/Tokyo", 35.68, 139.69, "JST-9", "JP"},
+    {"SEOUL", "Asia/Seoul", 37.57, 126.98, "KST-9", "KR"},
+    {"SYDNEY", "Australia/Sydney", -33.87, 151.21, "AEST-10AEDT,M10.1.0,M4.1.0/3", "AU"},
+    {"AUCKLAND", "Pacific/Auckland", -36.85, 174.76, "NZST-12NZDT,M9.5.0,M4.1.0/3", "NZ"},
 };
 const int TZ_PRESET_COUNT = sizeof(TZ_PRESETS) / sizeof(TZ_PRESETS[0]);
 const int TZ_PER_PAGE = 5;
+
+const char *getPosixFallback(const String &tz)
+{
+    for (int i = 0; i < TZ_PRESET_COUNT; i++)
+    {
+        if (tz == TZ_PRESETS[i].tz)
+        {
+            return TZ_PRESETS[i].posix;
+        }
+    }
+    return nullptr;
+}
+
+const char *getCountryForTimezone(const String &tz)
+{
+    for (int i = 0; i < TZ_PRESET_COUNT; i++)
+    {
+        if (tz == TZ_PRESETS[i].tz)
+        {
+            return TZ_PRESETS[i].country;
+        }
+    }
+    return nullptr;
+}
+
+bool getCityCoords(const String &tz, float &lat, float &lon)
+{
+    for (int i = 0; i < TZ_PRESET_COUNT; i++)
+    {
+        if (tz == TZ_PRESETS[i].tz)
+        {
+            lat = TZ_PRESETS[i].lat;
+            lon = TZ_PRESETS[i].lon;
+            return true;
+        }
+    }
+    return false;
+}
 
 MarketInfo getMarketInfoForTimezone(const String &tz)
 {
@@ -126,14 +171,15 @@ void drawButton(const UIButton &b, const String &label, uint16_t border, uint16_
     tft.drawString(label, b.x + b.w / 2, b.y + b.h / 2);
 }
 
-// Settings page layout
-const UIButton BTN_SET_TZ = {20, 42, 280, 30};
-const UIButton BTN_SET_CLK = {20, 78, 280, 30};
-const UIButton BTN_SET_DATE = {20, 114, 280, 30};
-const UIButton BTN_SET_DIM = {20, 150, 60, 30};
-const UIButton BTN_SET_BRI = {240, 150, 60, 30};
-const UIButton BTN_SET_STAT = {20, 196, 135, 32};
-const UIButton BTN_SET_BACK = {165, 196, 135, 32};
+// Settings page layout (6 rows, 34px pitch, below the 26px title)
+const UIButton BTN_SET_TZ = {20, 30, 280, 28};
+const UIButton BTN_SET_FACE = {20, 64, 280, 28};
+const UIButton BTN_SET_CLK = {20, 98, 280, 28};
+const UIButton BTN_SET_DATE = {20, 132, 280, 28};
+const UIButton BTN_SET_DIM = {20, 166, 60, 28};
+const UIButton BTN_SET_BRI = {240, 166, 60, 28};
+const UIButton BTN_SET_STAT = {20, 200, 135, 28};
+const UIButton BTN_SET_BACK = {165, 200, 135, 28};
 
 // Zone-pick page layout (2x2 grid mirroring the clock quadrants)
 const UIButton BTN_ZONE[4] = {
@@ -213,13 +259,13 @@ void saveDisplayPrefs()
 
 void drawSettingsBrightnessLabel()
 {
-    tft.fillRect(85, 150, 150, 30, clockBackgroundColor);
+    tft.fillRect(85, 166, 150, 28, clockBackgroundColor);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
     int pct = map(backlightLevel, 5, 255, 0, 100);
-    tft.drawString("Brightness " + String(pct) + "%", 160, 165);
+    tft.drawString("Brightness " + String(pct) + "%", 160, 180);
 }
 
 void adjustBacklightFromUi(int delta)
@@ -230,12 +276,17 @@ void adjustBacklightFromUi(int delta)
     analogWrite(BACKLIGHT_PIN, backlightLevel);
     // Hold this manual setting before auto-brightness resumes
     manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
+    // Persist so the level survives a reboot (taps are discrete, so this
+    // stays well within SPIFFS write-endurance territory)
+    projectConfig.brightness = backlightLevel;
+    projectConfig.saveConfigFile();
     drawSettingsBrightnessLabel();
     Serial.println("Brightness set from settings page: " + String(backlightLevel));
 }
 
 // Apply a timezone preset to a quadrant, persist it, and re-fetch the zone
-// definition from the ezTime server (brief blocking network call).
+// definition from the ezTime server (brief blocking network call). Declared
+// in uiPages.h - also used by the web settings page.
 void applyZoneSelection(int slot, const TimezonePreset &preset)
 {
     tft.fillScreen(clockBackgroundColor);
@@ -256,7 +307,11 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
 
     if (!worldZones[slot].tz.setLocation(preset.tz))
     {
-        Serial.println("Failed to set timezone " + String(preset.tz));
+        // Timezone server unreachable - fall back to the preset's built-in
+        // POSIX rules so the quadrant still ticks with correct local time.
+        Serial.println("Failed to fetch timezone " + String(preset.tz) +
+                       " - using built-in POSIX rules");
+        worldZones[slot].tz.setPosix(preset.posix);
     }
     if (worldZones[slot].market.hasMarket)
     {
@@ -266,6 +321,10 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     projectConfig.zoneName[slot] = preset.name;
     projectConfig.zoneTZ[slot] = preset.tz;
     projectConfig.saveConfigFile();
+
+    // Cached weather / holidays are for the old city - refetch as needed
+    weatherInvalidate();
+    holidaysInvalidate();
 
     Serial.println("Quadrant " + String(slot) + " set to " + String(preset.name) +
                    " (" + String(preset.tz) + ")");
@@ -281,9 +340,12 @@ void renderSettingsPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SETTINGS", 160, 6);
+    tft.drawString("SETTINGS", 160, 2);
 
     drawButton(BTN_SET_TZ, "Change timezones  >", TFT_CYAN, TFT_WHITE);
+    drawButton(BTN_SET_FACE,
+               "Clock face: " + String(clockFaceName(projectConfig.clockFace)),
+               TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_CLK,
                SHOW_24HOUR ? "Clock format: 24 hour" : "Clock format: 12 hour (AM/PM)",
                TFT_CYAN, TFT_WHITE);
@@ -464,6 +526,12 @@ void handleUiTouch()
         if (buttonContains(BTN_SET_TZ, tx, ty))
         {
             switchToScreen(SCREEN_ZONE_PICK);
+        }
+        else if (buttonContains(BTN_SET_FACE, tx, ty))
+        {
+            projectConfig.clockFace = (projectConfig.clockFace + 1) % FACE_COUNT;
+            projectConfig.saveConfigFile();
+            uiPageDrawn = false; // redraw with the new label
         }
         else if (buttonContains(BTN_SET_CLK, tx, ty))
         {

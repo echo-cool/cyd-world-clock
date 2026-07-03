@@ -4,6 +4,8 @@
 #include "SPIFFS.h"
 #include <ArduinoJson.h>
 
+#include "clockFaces.h" // FACE_COUNT - clamp the saved face index
+
 ProjectConfig projectConfig;
 
 bool ProjectConfig::fetchConfigFile()
@@ -52,6 +54,16 @@ bool ProjectConfig::fetchConfigFile()
           }
         }
 
+        if (json.containsKey(PROJECT_BRIGHTNESS))
+        {
+          brightness = constrain(json[PROJECT_BRIGHTNESS].as<int>(), 1, 255);
+        }
+
+        if (json.containsKey(PROJECT_CLOCK_FACE))
+        {
+          clockFace = constrain(json[PROJECT_CLOCK_FACE].as<int>(), 0, FACE_COUNT - 1);
+        }
+
         return true;
       }
       else
@@ -79,6 +91,9 @@ bool ProjectConfig::saveConfigFile()
     json[String(PROJECT_ZONE_NAME_PREFIX) + String(i)] = zoneName[i];
     json[String(PROJECT_ZONE_TZ_PREFIX) + String(i)] = zoneTZ[i];
   }
+
+  json[PROJECT_BRIGHTNESS] = brightness;
+  json[PROJECT_CLOCK_FACE] = clockFace;
 
   File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "w");
   if (!configFile)

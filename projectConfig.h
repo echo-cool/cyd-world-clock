@@ -10,6 +10,8 @@
 #define PROJECT_TIME_US_DATE "usDate"
 #define PROJECT_ZONE_NAME_PREFIX "zoneName"
 #define PROJECT_ZONE_TZ_PREFIX "zoneTz"
+#define PROJECT_BRIGHTNESS "brightness"
+#define PROJECT_CLOCK_FACE "clockFace"
 
 class ProjectConfig
 {
@@ -26,6 +28,14 @@ public:
   String zoneName[4] = {"SANTA CLARA", "NEW YORK", "BEIJING", "LONDON"};
   String zoneTZ[4] = {"America/Los_Angeles", "America/New_York",
                       "Asia/Shanghai", "Europe/London"};
+
+  // User's preferred backlight level (1-255). Restored on boot and used as the
+  // daytime target by auto-brightness.
+  int brightness = 80;
+
+  // Home-screen face (ClockFace enum in clockFaces.h): 0 = quad world clock,
+  // 1 = big clock, 2 = calendar, 3 = weather, 4 = markets.
+  int clockFace = 0;
 
   bool fetchConfigFile();
   bool saveConfigFile();

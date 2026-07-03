@@ -1,0 +1,53 @@
+{
+  "comment": [
+    "Full-day exchange closure calendars fetched weekly by the clock",
+    "(see marketHolidays.cpp - MARKET_HOLIDAYS_URL points at the raw GitHub",
+    "URL of this file). Update this file when an exchange publishes next",
+    "year's schedule and every device picks it up within a week - no",
+    "reflash needed.",
+    "",
+    "Format: holidays.<EXCHANGE> = array of YYYYMMDD integers, weekday",
+    "closures only (weekends are handled by the market-status logic).",
+    "An exchange listed here fully replaces its compiled-in table; an",
+    "exchange omitted here keeps the compiled-in fallback. Max 8 exchanges,",
+    "88 dates each. Half-day early closes are not modeled.",
+    "",
+    "Sources: NYSE https://www.nyse.com/trade/hours-calendars |",
+    "LSE https://www.londonstockexchange.com/equities-trading/business-days |",
+    "SSE State Council holiday schedule | TSE https://www.jpx.co.jp |",
+    "HKEX https://www.gov.hk/en/about/abouthk/holiday/"
+  ],
+  "updated": "2026-07-03",
+  "holidays": {
+    "NYSE": [
+      20260101, 20260119, 20260216, 20260403, 20260525, 20260619, 20260703,
+      20260907, 20261126, 20261225,
+      20270101, 20270118, 20270215, 20270326, 20270531, 20270618, 20270705,
+      20270906, 20271125, 20271224
+    ],
+    "LSE": [
+      20260101, 20260403, 20260406, 20260504, 20260525, 20260831, 20261225,
+      20261228,
+      20270101, 20270326, 20270329, 20270503, 20270531, 20270830, 20271227,
+      20271228
+    ],
+    "SSE": [
+      20260101, 20260102,
+      20260216, 20260217, 20260218, 20260219, 20260220, 20260223,
+      20260406,
+      20260501, 20260504, 20260505,
+      20260619,
+      20260925,
+      20261001, 20261002, 20261005, 20261006, 20261007
+    ],
+    "TSE": [
+      20260101, 20260102, 20260112, 20260211, 20260223, 20260320, 20260429,
+      20260504, 20260505, 20260506, 20260720, 20260811, 20260921, 20260922,
+      20260923, 20261012, 20261103, 20261123, 20261231
+    ],
+    "HKEX": [
+      20260101, 20260217, 20260218, 20260219, 20260403, 20260406, 20260407,
+      20260501, 20260525, 20260619, 20260701, 20261001, 20261019, 20261225
+    ]
+  }
+}
