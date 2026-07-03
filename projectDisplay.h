@@ -2,6 +2,10 @@
 #ifndef PROJECTDISPLAY_H
 #define PROJECTDISPLAY_H
 
+// Only pointers to WiFiManager cross this interface, so a forward declaration
+// keeps this header light; implementations include <WiFiManager.h> themselves.
+class WiFiManager;
+
 class ProjectDisplay
 {
 public:

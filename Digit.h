@@ -1,3 +1,5 @@
+#ifndef DIGIT_H
+#define DIGIT_H
 
 class Digit
 {
@@ -25,3 +27,4 @@ public:
     int Y();
 };
 
+#endif // DIGIT_H

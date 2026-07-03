@@ -1,3 +1,8 @@
+#ifndef SERIAL_DISPLAY_H
+#define SERIAL_DISPLAY_H
+
+#include <Arduino.h>
+
 #include "projectDisplay.h"
 
 class SerialDisplay : public ProjectDisplay
@@ -13,3 +18,5 @@ public:
     Serial.println("Entered Conf Mode");
   }
 };
+
+#endif // SERIAL_DISPLAY_H

@@ -8,12 +8,36 @@
 
 # Setup
 
-1. [Install Arduino IDE and CH340 USB to UART Driver](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/SETUP.md)
-2. Copy `libraries` to `C:\Users\[YOU_USER_NAME]\Documents\Arduino\libraries`
-3. Copy `secrets.h.example` to `secrets.h` and fill in your WiFi credentials
+1. Copy `secrets.h.example` to `secrets.h` and fill in your WiFi credentials
    (see "Connect Wifi" below). `secrets.h` is git-ignored so your credentials
    are never committed.
-4. Build and upload with Arduino IDE
+2. Build and upload with one of the toolchains below. All of them use the
+   vendored `libraries/` folder in this repo (its TFT_eSPI copy carries the
+   display config for the CYD), so no library installation is needed except
+   for the Arduino IDE.
+
+## Building
+
+**PlatformIO** (fastest incremental builds):
+
+```
+pio run                 # build
+pio run -t upload       # build + flash
+pio device monitor      # serial monitor (115200 baud)
+```
+
+**arduino-cli**:
+
+```
+arduino-cli compile --fqbn esp32:esp32:esp32 --libraries libraries .
+arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 .
+```
+
+**Arduino IDE**:
+
+1. [Install Arduino IDE and CH340 USB to UART Driver](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/SETUP.md)
+2. Copy `libraries` to `C:\Users\[YOU_USER_NAME]\Documents\Arduino\libraries`
+3. Select board "ESP32 Dev Module", then build and upload
 
 # Connect Wifi
 
