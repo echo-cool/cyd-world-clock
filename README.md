@@ -1,4 +1,4 @@
-# ESP32WorldClock
+# CYD World Clock
 
 <p align="center">
   <img src="img/demo.jpg" alt="Four-quadrant world clock face" width="65%"/>

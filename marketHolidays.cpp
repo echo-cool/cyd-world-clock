@@ -16,7 +16,7 @@
 #endif
 #ifndef MARKET_HOLIDAYS_URL
 #define MARKET_HOLIDAYS_URL \
-    "https://raw.githubusercontent.com/echo-cool/ESP32WorldClock/main/marketHolidays.json"
+    "https://raw.githubusercontent.com/echo-cool/cyd-world-clock/main/marketHolidays.json"
 #endif
 
 // ---------------------------------------------------------------------------
