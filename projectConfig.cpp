@@ -9,6 +9,126 @@
 
 ProjectConfig projectConfig;
 
+String sanitizeHostname(const String &raw)
+{
+  String out;
+  for (unsigned int i = 0; i < raw.length() && out.length() < 32; i++)
+  {
+    char c = raw[i];
+    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
+    {
+      out += c;
+    }
+  }
+  while (out.startsWith("-")) out.remove(0, 1);
+  while (out.endsWith("-")) out.remove(out.length() - 1);
+  if (out.length() == 0) out = "esp32worldclock";
+  return out;
+}
+
+// Serialize all settings into json. Shared by saveConfigFile and the
+// /api/config backup so the two can never drift apart.
+static void fillJson(ProjectConfig &c, JsonDocument &json)
+{
+  json[PROJECT_TIME_ZONE_LABEL] = c.timeZone;
+  json[PROJECT_TIME_TWENTY_FOUR_HOUR] = c.twentyFourHour;
+  json[PROJECT_TIME_US_DATE] = c.usDateFormat;
+
+  for (int i = 0; i < 4; i++)
+  {
+    json[String(PROJECT_ZONE_NAME_PREFIX) + String(i)] = c.zoneName[i];
+    json[String(PROJECT_ZONE_TZ_PREFIX) + String(i)] = c.zoneTZ[i];
+  }
+
+  json[PROJECT_BRIGHTNESS] = c.brightness;
+  json[PROJECT_CLOCK_FACE] = c.clockFace;
+  json[PROJECT_HOSTNAME] = c.hostname;
+  json[PROJECT_NIGHT_START] = c.nightStartHour;
+  json[PROJECT_NIGHT_END] = c.nightEndHour;
+  json[PROJECT_NIGHT_BRIGHTNESS] = c.nightBrightness;
+}
+
+// Apply json onto the settings; missing keys keep their current values and
+// out-of-range values are clamped. Shared by fetchConfigFile and the
+// /api/config restore. Returns true if at least one known key was present.
+static bool applyDoc(ProjectConfig &c, JsonDocument &json)
+{
+  bool any = false;
+
+  if (json.containsKey(PROJECT_TIME_ZONE_LABEL))
+  {
+    c.timeZone = String(json[PROJECT_TIME_ZONE_LABEL].as<String>());
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_TIME_TWENTY_FOUR_HOUR))
+  {
+    c.twentyFourHour = json[PROJECT_TIME_TWENTY_FOUR_HOUR].as<bool>();
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_TIME_US_DATE))
+  {
+    c.usDateFormat = json[PROJECT_TIME_US_DATE].as<bool>();
+    any = true;
+  }
+
+  for (int i = 0; i < 4; i++)
+  {
+    String nameKey = String(PROJECT_ZONE_NAME_PREFIX) + String(i);
+    String tzKey = String(PROJECT_ZONE_TZ_PREFIX) + String(i);
+    if (json.containsKey(nameKey))
+    {
+      c.zoneName[i] = json[nameKey].as<String>();
+      any = true;
+    }
+    if (json.containsKey(tzKey))
+    {
+      c.zoneTZ[i] = json[tzKey].as<String>();
+      any = true;
+    }
+  }
+
+  if (json.containsKey(PROJECT_BRIGHTNESS))
+  {
+    c.brightness = constrain(json[PROJECT_BRIGHTNESS].as<int>(), 1, 255);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_CLOCK_FACE))
+  {
+    c.clockFace = constrain(json[PROJECT_CLOCK_FACE].as<int>(), 0, FACE_COUNT - 1);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_HOSTNAME))
+  {
+    c.hostname = sanitizeHostname(json[PROJECT_HOSTNAME].as<String>());
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_NIGHT_START))
+  {
+    c.nightStartHour = constrain(json[PROJECT_NIGHT_START].as<int>(), 0, 23);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_NIGHT_END))
+  {
+    c.nightEndHour = constrain(json[PROJECT_NIGHT_END].as<int>(), 0, 23);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_NIGHT_BRIGHTNESS))
+  {
+    c.nightBrightness = constrain(json[PROJECT_NIGHT_BRIGHTNESS].as<int>(), 1, 255);
+    any = true;
+  }
+
+  return any;
+}
+
 bool ProjectConfig::fetchConfigFile()
 {
   if (SPIFFS.exists(PROJECT_CONFIG_JSON))
@@ -25,46 +145,7 @@ bool ProjectConfig::fetchConfigFile()
       if (!error)
       {
         Log.println("\nparsed json");
-
-        if (json.containsKey(PROJECT_TIME_ZONE_LABEL))
-        {
-          timeZone = String(json[PROJECT_TIME_ZONE_LABEL].as<String>());
-        }
-
-        if (json.containsKey(PROJECT_TIME_TWENTY_FOUR_HOUR))
-        {
-          twentyFourHour = json[PROJECT_TIME_TWENTY_FOUR_HOUR].as<bool>();
-        }
-
-        if (json.containsKey(PROJECT_TIME_US_DATE))
-        {
-          usDateFormat = json[PROJECT_TIME_US_DATE].as<bool>();
-        }
-
-        for (int i = 0; i < 4; i++)
-        {
-          String nameKey = String(PROJECT_ZONE_NAME_PREFIX) + String(i);
-          String tzKey = String(PROJECT_ZONE_TZ_PREFIX) + String(i);
-          if (json.containsKey(nameKey))
-          {
-            zoneName[i] = json[nameKey].as<String>();
-          }
-          if (json.containsKey(tzKey))
-          {
-            zoneTZ[i] = json[tzKey].as<String>();
-          }
-        }
-
-        if (json.containsKey(PROJECT_BRIGHTNESS))
-        {
-          brightness = constrain(json[PROJECT_BRIGHTNESS].as<int>(), 1, 255);
-        }
-
-        if (json.containsKey(PROJECT_CLOCK_FACE))
-        {
-          clockFace = constrain(json[PROJECT_CLOCK_FACE].as<int>(), 0, FACE_COUNT - 1);
-        }
-
+        applyDoc(*this, json);
         return true;
       }
       else
@@ -83,18 +164,7 @@ bool ProjectConfig::saveConfigFile()
 {
   Log.println(F("Saving config"));
   StaticJsonDocument<2048> json;
-  json[PROJECT_TIME_ZONE_LABEL] = timeZone;
-  json[PROJECT_TIME_TWENTY_FOUR_HOUR] = twentyFourHour;
-  json[PROJECT_TIME_US_DATE] = usDateFormat;
-
-  for (int i = 0; i < 4; i++)
-  {
-    json[String(PROJECT_ZONE_NAME_PREFIX) + String(i)] = zoneName[i];
-    json[String(PROJECT_ZONE_TZ_PREFIX) + String(i)] = zoneTZ[i];
-  }
-
-  json[PROJECT_BRIGHTNESS] = brightness;
-  json[PROJECT_CLOCK_FACE] = clockFace;
+  fillJson(*this, json);
 
   File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "w");
   if (!configFile)
@@ -111,4 +181,23 @@ bool ProjectConfig::saveConfigFile()
   }
   configFile.close();
   return true;
+}
+
+String ProjectConfig::toJsonString()
+{
+  StaticJsonDocument<2048> json;
+  fillJson(*this, json);
+  String out;
+  serializeJsonPretty(json, out);
+  return out;
+}
+
+bool ProjectConfig::applyFromJsonString(const String &body)
+{
+  StaticJsonDocument<2048> json;
+  if (deserializeJson(json, body))
+  {
+    return false;
+  }
+  return applyDoc(*this, json);
 }

@@ -49,7 +49,7 @@ static int daysInMonth(int y, int m)
 static void renderBigClockFace(bool full)
 {
     time_t local = worldZones[0].tz.now();
-    uint16_t timeColor = getDayNightColor(worldZones[0].tz);
+    uint16_t timeColor = getDayNightColor(worldZones[0]);
 
     if (full) {
         tft.fillScreen(clockBackgroundColor);
@@ -85,7 +85,7 @@ static void renderBigClockFace(bool full)
     tft.fillRect(0, 130, 320, 28, clockBackgroundColor);
     tft.setTextFont(4);
     tft.setTextDatum(TC_DATUM);
-    tft.setTextColor(getDayNightLabelColor(worldZones[0].tz), clockBackgroundColor);
+    tft.setTextColor(getDayNightLabelColor(worldZones[0]), clockBackgroundColor);
     tft.drawString(String(DAY_NAMES[weekday(local)]) + " " + formatDate(local), 160, 132);
 
     // Market status of the home zone (computed fresh - the once-per-minute
@@ -109,7 +109,7 @@ static void renderBigClockFace(bool full)
         tft.setTextFont(1);
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
-        tft.setTextColor(getDayNightLabelColor(worldZones[k].tz), clockBackgroundColor);
+        tft.setTextColor(getDayNightLabelColor(worldZones[k]), clockBackgroundColor);
         tft.drawString(name, cx, 204);
 
         bool zonePm;
@@ -117,7 +117,7 @@ static void renderBigClockFace(bool full)
         if (!SHOW_24HOUR) zoneTime += zonePm ? "P" : "A";
         tft.setTextFont(2);
         tft.setTextDatum(TC_DATUM);
-        tft.setTextColor(getDayNightColor(worldZones[k].tz), clockBackgroundColor);
+        tft.setTextColor(getDayNightColor(worldZones[k]), clockBackgroundColor);
         tft.drawString(zoneTime, cx, 216);
     }
 }
@@ -233,7 +233,7 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
     tft.setTextFont(4);
     tft.setTextSize(1);
     tft.setTextDatum(TR_DATUM);
-    tft.setTextColor(getDayNightColor(worldZones[0].tz), clockBackgroundColor);
+    tft.setTextColor(getDayNightColor(worldZones[0]), clockBackgroundColor);
     tft.drawString(hhmm, 314, 4);
 }
 
@@ -256,7 +256,7 @@ static void renderWeatherFace(bool full)
     tft.setTextFont(4);
     tft.setTextSize(2);
     tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(getDayNightColor(worldZones[0].tz), clockBackgroundColor);
+    tft.setTextColor(getDayNightColor(worldZones[0]), clockBackgroundColor);
     tft.drawString(hhmm, 8, 2);
     if (!SHOW_24HOUR) {
         tft.setTextFont(2);
@@ -283,13 +283,13 @@ static void renderWeatherFace(bool full)
         tft.setTextFont(2);
         tft.setTextSize(1);
         tft.setTextDatum(TL_DATUM);
-        tft.setTextColor(getDayNightLabelColor(worldZones[i].tz), clockBackgroundColor);
+        tft.setTextColor(getDayNightLabelColor(worldZones[i]), clockBackgroundColor);
         tft.drawString(worldZones[i].name, 8, ry);
 
         bool zonePm;
         String zoneTime = formatHHMM(worldZones[i].tz.now(), zonePm);
         if (!SHOW_24HOUR) zoneTime += zonePm ? " PM" : " AM";
-        tft.setTextColor(getDayNightColor(worldZones[i].tz), clockBackgroundColor);
+        tft.setTextColor(getDayNightColor(worldZones[i]), clockBackgroundColor);
         tft.drawString(zoneTime, 8, ry + 18);
 
         ZoneWeather w = getZoneWeather(i);
@@ -378,7 +378,7 @@ static void renderMarketsFace(bool full)
     tft.setTextFont(4);
     tft.setTextSize(1);
     tft.setTextDatum(TR_DATUM);
-    tft.setTextColor(getDayNightColor(worldZones[0].tz), clockBackgroundColor);
+    tft.setTextColor(getDayNightColor(worldZones[0]), clockBackgroundColor);
     tft.drawString(hhmm, 314, 4);
 
     // One row per exchange
@@ -401,7 +401,7 @@ static void renderMarketsFace(bool full)
         if (!SHOW_24HOUR) zoneTime += zonePm ? "P" : "A";
         tft.setTextFont(4);
         tft.setTextDatum(TR_DATUM);
-        tft.setTextColor(getDayNightColor(marketZones[i].tz), clockBackgroundColor);
+        tft.setTextColor(getDayNightColor(marketZones[i]), clockBackgroundColor);
         tft.drawString(zoneTime, 312, ry);
 
         // Status recomputed each minute - transitions land on minute boundaries

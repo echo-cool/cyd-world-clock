@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
+#include <SPIFFS.h>       // filesystem usage in /api/status
 #include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -11,8 +12,11 @@
 #include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
 #include "clockFaces.h"         // FACE_COUNT, clockFaceName
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
-#include "uiPages.h"            // TZ_PRESETS, applyZoneSelection, switchToScreen
+#include "holidayService.h"     // holidayZonesLoaded - /api/status
+#include "marketHolidays.h"     // marketHolidaysFetchedInfo - /api/status
+#include "uiPages.h"            // TZ_PRESETS, applyZoneSelection, resetReasonText
 #include "weatherService.h"     // weatherAgeMinutes
+#include "wifiWatch.h"          // outage history - /api/status
 
 // OTA_PASSWORD (optional) lives in the untracked secrets.h.
 #if __has_include("secrets.h")
@@ -77,7 +81,9 @@ static void otaFailScreen(const String &line)
 
 static void setupArduinoOTA()
 {
-    ArduinoOTA.setHostname("esp32worldclock");
+    // Configurable so two clocks on one network don't collide on
+    // "<hostname>.local" (web settings page; applied on boot).
+    ArduinoOTA.setHostname(projectConfig.hostname.c_str());
 #ifdef OTA_PASSWORD
     if (strlen(OTA_PASSWORD) > 0)
     {
@@ -301,7 +307,8 @@ h1{font-size:1.2rem;margin:0 0 .3rem}
 p{color:#aaa;font-size:.85rem;margin:.4rem 0}
 a{color:#0a84ff}
 label{display:block;color:#ccc;font-size:.85rem;margin:.8rem 0 0}
-select,input[type=range]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px}
+select,input[type=range],input[type=text]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
+.row{display:flex;gap:.6rem}.row label{flex:1;margin-top:.8rem}
 button{width:100%;margin-top:1.2rem;padding:.6rem;border:0;border-radius:6px;background:#0a84ff;color:#fff;font-size:1rem;cursor:pointer}
 </style></head><body><div class="card">
 <h1>ESP32 World Clock</h1>
@@ -328,12 +335,22 @@ static void appendZoneSelect(String &page, const char *label, int slot)
     page += "</select></label>";
 }
 
+// 0:00 .. 23:00 <option> rows for the night-window hour selects.
+static void appendHourOptions(String &page, int selected)
+{
+    for (int h = 0; h < 24; h++)
+    {
+        page += "<option value=\"" + String(h) + "\"" +
+                (h == selected ? " selected" : "") + ">" + String(h) + ":00</option>";
+    }
+}
+
 static void handleSettingsPage()
 {
     if (!webAuthenticate()) return;
 
     String page;
-    page.reserve(8192);
+    page.reserve(12288);
     page += FPSTR(SETTINGS_PAGE_HEAD);
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
             " &middot; <a href=\"/update\">Firmware update</a>"
@@ -373,10 +390,41 @@ static void handleSettingsPage()
             String(backlightLevel) + "\" oninput=\"document.getElementById('bv')"
             ".textContent=Math.round((this.value-5)*100/250)\"></label>";
 
+    // Night dimming: window (home-zone hours) + the dimmed level
+    page += "<div class=\"row\"><label>Night dim from<select name=\"nstart\">";
+    appendHourOptions(page, projectConfig.nightStartHour);
+    page += "</select></label><label>until<select name=\"nend\">";
+    appendHourOptions(page, projectConfig.nightEndHour);
+    page += "</select></label></div>";
+    int npct = map(constrain(projectConfig.nightBrightness, 1, 255), 1, 255, 0, 100);
+    page += "<label>Night brightness (<span id=\"nv\">" + String(npct) + "</span>%)"
+            "<input type=\"range\" name=\"nbri\" min=\"1\" max=\"255\" value=\"" +
+            String(constrain(projectConfig.nightBrightness, 1, 255)) +
+            "\" oninput=\"document.getElementById('nv')"
+            ".textContent=Math.round((this.value-1)*100/254)\"></label>";
+    page += "<p>Night brightness is used when the room is dark (light sensor), "
+            "or inside the window above (home-zone time) when the sensor is "
+            "unavailable. Equal hours disable the schedule.</p>";
+
+    page += "<label>Hostname (mDNS \"&lt;name&gt;.local\", applied after reboot)"
+            "<input type=\"text\" name=\"host\" maxlength=\"32\" value=\"" +
+            projectConfig.hostname + "\"></label>";
+
     page += "<button type=\"submit\">Save</button></form>"
             "<p>Saving a brightness change pauses auto-brightness for 2 hours, "
-            "same as the on-device controls.</p>"
-            "</div></body></html>";
+            "same as the on-device controls.</p>";
+
+    // Config backup/restore (/api/config). Restore expects a previously
+    // downloaded backup; the device saves it and reboots to apply.
+    page += "<p><a href=\"/api/config\" download=\"worldclock-config.json\">Backup config"
+            "</a> &middot; restore: <input type=\"file\" id=\"cfg\" accept=\".json\" "
+            "style=\"width:auto;color:#ccc\"></p>"
+            "<script>document.getElementById('cfg').addEventListener('change',"
+            "async function(){if(!this.files[0])return;"
+            "var r=await fetch('/api/config',{method:'POST',body:await this.files[0].text()});"
+            "alert(await r.text());});</script>";
+
+    page += "</div></body></html>";
     webServer.send(200, "text/html", page);
 }
 
@@ -428,6 +476,50 @@ static void handleSettingsPost()
         projectConfig.saveConfigFile();
     }
 
+    // Night dimming + hostname: gathered into a single config save
+    bool cfgDirty = false;
+    if (webServer.hasArg("nstart"))
+    {
+        int v = constrain(webServer.arg("nstart").toInt(), 0, 23);
+        if (v != projectConfig.nightStartHour)
+        {
+            projectConfig.nightStartHour = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("nend"))
+    {
+        int v = constrain(webServer.arg("nend").toInt(), 0, 23);
+        if (v != projectConfig.nightEndHour)
+        {
+            projectConfig.nightEndHour = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("nbri"))
+    {
+        int v = webServer.arg("nbri").toInt();
+        if (v >= 1 && v <= 255 && v != projectConfig.nightBrightness)
+        {
+            projectConfig.nightBrightness = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("host"))
+    {
+        String h = sanitizeHostname(webServer.arg("host"));
+        if (h != projectConfig.hostname)
+        {
+            projectConfig.hostname = h;
+            cfgDirty = true;
+            Log.println("Hostname changed to \"" + h + "\" - applies after the next reboot");
+        }
+    }
+    if (cfgDirty)
+    {
+        projectConfig.saveConfigFile();
+    }
+
     // Repaint the home screen with the new settings, whatever page the
     // on-device UI was showing.
     switchToScreen(SCREEN_HOME);
@@ -437,17 +529,65 @@ static void handleSettingsPost()
     webServer.send(303, "text/plain", "Saved");
 }
 
+/*-------- Config backup / restore ----------*/
+// GET /api/config downloads the settings JSON; POST the same JSON back to
+// restore it (clone a second device, or recover after a partition-scheme
+// change wipes SPIFFS). The device saves the imported config and reboots so
+// zones, hostname and formats all apply through the normal boot path.
+
+static void handleApiConfigGet()
+{
+    if (!webAuthenticate()) return;
+    webServer.sendHeader("Content-Disposition",
+                         "attachment; filename=\"worldclock-config.json\"");
+    webServer.send(200, "application/json", projectConfig.toJsonString());
+}
+
+static void handleApiConfigPost()
+{
+    if (!webAuthenticate()) return;
+
+    String body = webServer.arg("plain");
+    if (body.length() == 0 || body.length() > 4096)
+    {
+        webServer.send(400, "text/plain",
+                       "Expected the config JSON (a /api/config backup) as the request body");
+        return;
+    }
+    if (!projectConfig.applyFromJsonString(body))
+    {
+        webServer.send(400, "text/plain",
+                       "Not a valid config JSON - no recognized settings found");
+        return;
+    }
+    projectConfig.saveConfigFile();
+    Log.println("Config imported via /api/config - rebooting to apply");
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/plain", "OK - config saved, rebooting to apply it");
+    delay(750); // let the response reach the client
+    ESP.restart();
+}
+
 // Diagnostics as JSON - the System status page, but scriptable.
 static void handleApiStatus()
 {
     if (!webAuthenticate()) return;
 
-    DynamicJsonDocument doc(2048);
-    doc["hostname"] = "esp32worldclock";
+    DynamicJsonDocument doc(3072);
+    doc["hostname"] = projectConfig.hostname;
     doc["ip"] = WiFi.localIP().toString();
     doc["ssid"] = WiFi.SSID();
     doc["rssiDbm"] = WiFi.RSSI();
     doc["mac"] = WiFi.macAddress();
+    doc["gateway"] = WiFi.gatewayIP().toString();
+    doc["dns"] = WiFi.dnsIP().toString();
+    doc["wifiChannel"] = WiFi.channel();
+    doc["wifiDrops"] = wifiDropCount();
+    doc["wifiOfflineSec"] = (long)(wifiOfflineDurationMs() / 1000UL);
+    doc["resetReason"] = resetReasonText();
+    doc["sdk"] = ESP.getSdkVersion();
+    doc["spiffsUsedBytes"] = SPIFFS.usedBytes();
+    doc["spiffsTotalBytes"] = SPIFFS.totalBytes();
     doc["chip"] = String(ESP.getChipModel()) + " r" + String(ESP.getChipRevision());
     doc["cpuMhz"] = ESP.getCpuFreqMHz();
 #if SOC_TEMP_SENSOR_SUPPORTED
@@ -469,6 +609,31 @@ static void handleApiStatus()
     doc["clockFace"] = clockFaceName(projectConfig.clockFace);
     doc["brightness"] = backlightLevel;
     doc["weatherAgeMin"] = weatherAgeMinutes();
+
+    long calAgeDays = -1;
+    doc["marketHolidaySource"] = marketHolidaysFetchedInfo(calAgeDays) ? "fetched" : "compiled";
+    if (calAgeDays >= 0)
+    {
+        doc["marketHolidayAgeDays"] = calAgeDays;
+    }
+    int holidayZonesEligible = 0;
+    doc["holidayZonesLoaded"] = holidayZonesLoaded(holidayZonesEligible);
+    doc["holidayZonesEligible"] = holidayZonesEligible;
+
+    bool ldrTrusted, ldrDark;
+    int ldrSmoothed;
+    if (getLdrState(ldrTrusted, ldrDark, ldrSmoothed))
+    {
+        doc["ldrTrusted"] = ldrTrusted;
+        if (ldrTrusted)
+        {
+            doc["ldrRoomDark"] = ldrDark;
+        }
+    }
+    unsigned long nowMs = millis();
+    doc["manualBrightnessHoldMin"] =
+        (manualBrightnessUntil > nowMs) ? (long)((manualBrightnessUntil - nowMs) / 60000UL) : 0;
+
     JsonArray zones = doc.createNestedArray("zones");
     for (int i = 0; i < 4; i++)
     {
@@ -536,6 +701,8 @@ static void setupWebUpdater()
     webServer.on("/", HTTP_GET, handleSettingsPage);
     webServer.on("/settings", HTTP_POST, handleSettingsPost);
     webServer.on("/api/status", HTTP_GET, handleApiStatus);
+    webServer.on("/api/config", HTTP_GET, handleApiConfigGet);
+    webServer.on("/api/config", HTTP_POST, handleApiConfigPost);
     webServer.on("/logs", HTTP_GET, handleLogsPage);
     webServer.on("/api/logs", HTTP_GET, handleApiLogs);
     webServer.on("/update", HTTP_GET, handleUpdatePage);
@@ -546,7 +713,7 @@ static void setupWebUpdater()
     });
     webServer.begin();
 
-    // ArduinoOTA.begin() already registered the "esp32worldclock" hostname;
+    // ArduinoOTA.begin() already registered the configured hostname on mDNS;
     // advertise the web pages on it too.
     MDNS.addService("http", "tcp", 80);
 }
@@ -557,9 +724,10 @@ void setupOTA()
 {
     setupArduinoOTA();
     setupWebUpdater();
-    Log.println("OTA updates enabled (hostname: esp32worldclock, espota port 3232)");
+    Log.println("OTA updates enabled (hostname: " + projectConfig.hostname +
+                   ", espota port 3232)");
     Log.println("Web settings + updater: http://" + WiFi.localIP().toString() +
-                   "/ (or http://esp32worldclock.local/)");
+                   "/ (or http://" + projectConfig.hostname + ".local/)");
 }
 
 void handleOTA()

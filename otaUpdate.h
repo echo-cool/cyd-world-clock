@@ -4,18 +4,21 @@
 // ---------------------------------------------------------------------------
 // The device's web server (port 80) and over-the-air firmware updates.
 //
-// Web pages, at http://esp32worldclock.local/ (or the device IP from the
-// System status page):
-//   /            - settings page (timezones, clock face, formats, brightness)
+// Web pages, at http://esp32worldclock.local/ (hostname configurable on the
+// settings page; or use the device IP from the System status page):
+//   /            - settings page (timezones, face, formats, brightness,
+//                  night dimming, hostname, config backup/restore)
 //   /update      - firmware updater (upload a compiled .bin)
 //   /logs        - recent log lines (auto-refreshing viewer)
 //   /api/status  - diagnostics as JSON
+//   /api/config  - settings backup as JSON (GET) / restore (POST the same
+//                  JSON back; the device saves it and reboots to apply)
 //   /api/logs    - the log tail as plain text
 //
 // Firmware updates also work over ArduinoOTA / espota - uncomment the espota
-// block in platformio.ini, or use the Arduino IDE's network port
-// "esp32worldclock". The min_spiffs partition scheme provides the two OTA
-// app slots.
+// block in platformio.ini, or use the Arduino IDE's network port named after
+// the configured hostname. The min_spiffs partition scheme provides the two
+// OTA app slots.
 //
 // Set OTA_PASSWORD in secrets.h to require authentication everywhere
 // (HTTP Basic auth on the web pages, username "admin").

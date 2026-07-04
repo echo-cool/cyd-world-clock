@@ -64,7 +64,9 @@ keep their stored settings.
 
 Once a build with OTA support is on the device, later updates can go over
 WiFi — no USB cable needed. The device advertises itself as `esp32worldclock`
-on mDNS (its IP is also shown on the System status page), and shows a
+on mDNS (the hostname is configurable on the web settings page, so two clocks
+on one network don't collide; its IP is also shown on the System status
+page), and shows a
 progress bar on the display during the transfer before rebooting into the
 new firmware. There are two ways in:
 
@@ -121,6 +123,15 @@ whole sequence (preconfigured credentials first). So after a power cut where
 the router comes back later than the clock, the clock reconnects on its own —
 no button pressing needed.
 
+**If WiFi drops while the clock is running**, the clock keeps ticking (time
+runs locally between NTP syncs) and recovers in stages: after a minute
+offline a steady `NO WIFI` label appears at the bottom of the home screen
+(and the System status page shows the WiFi row in red), every 3 minutes an
+explicit reconnect is kicked in case the WiFi stack's auto-reconnect has
+wedged, and after 30 minutes offline the device reboots into the full boot
+recovery sequence above. A clock that lost its network during a multi-hour
+router outage therefore rejoins on its own once the router is back.
+
 <p align="center">
   <img src="img/wifi.jpg" alt="wifi" width="45%"/>
   <img src="img/autoConnect.jpg" alt="autoConnect" width="16%"/>
@@ -146,7 +157,12 @@ settings page (the choice is saved to flash):
   with date, day-offset vs. home and stock market status. On a public
   holiday in a zone's country, that quadrant's day line turns gold and shows
   the holiday's name next to the day (e.g. `WED - INDEPENDENCE DAY`); the
-  date stays visible as usual.
+  date stays visible as usual. Each zone's colors follow the sun's real
+  position at that city (computed from its coordinates — no network needed):
+  daytime is orange/yellow from actual sunrise to actual sunset, so London
+  correctly reads as night at 4:30 PM in December and as day at 9 PM in
+  June; after sunset the zone dims to grey (light before local midnight,
+  dark in the small hours).
 - **Big clock** — the home zone (top-left quadrant) in 75px digits with date
   and market status, plus a mini strip of the other three zones' times along
   the bottom.
@@ -173,22 +189,30 @@ settings page (the choice is saved to flash):
 
 - **Change timezones** — tap any of the four clock slots, then pick a city from
   the paged timezone list. Cities with a stock exchange (New York, London,
-  Beijing, Tokyo, Hong Kong) automatically show that market's trading status;
-  while an exchange is closed the line counts down to its next regular open
-  (e.g. `NYSE OPENS IN 5H 03M`). Full-day exchange holidays are respected —
-  the status shows closed on holidays and the countdown skips them; half-day
-  early closes are not modeled. The selection is saved to flash and restored
-  on boot.
+  Beijing, Tokyo, Hong Kong) automatically show that market's trading status,
+  color-coded: green while the exchange is open, yellow with a countdown when
+  the next regular open is less than 24 hours away (e.g. `NYSE OPENS IN
+  5H 03M`), and a plain red `CLOSED` when the open is further out (weekends
+  viewed early, long holiday closures — multi-day countdowns like `2D 8H`
+  were too easy to misread as a time). Full-day exchange holidays are
+  respected — the status shows closed on holidays and the countdown skips
+  them — and so are half-day early closes (NYSE Black Friday / Christmas Eve
+  1 PM, LSE 12:30 on Christmas/New Year's Eve, HKEX noon closes): the status
+  flips to closed at the early-close time instead of running hours long. The
+  selection is saved to flash and restored on boot.
 
   Exchange holiday calendars keep themselves current: once a week the device fetches
   [`marketHolidays.json`](marketHolidays.json) from this repository over
   HTTPS and caches it in flash, so updating that file (when an exchange
   publishes next year's schedule) reaches every clock within a week — no
-  reflash needed. Compiled-in tables (2026–2027 for NYSE/LSE, 2026 for
-  SSE/TSE/HKEX, in `marketHolidays.cpp`) serve as the offline fallback. Type
-  `HOLIDAYS` in the serial monitor to inspect the active calendars or force a
-  refetch, and set `MARKET_HOLIDAYS_URL` in `secrets.h` to point a forked
-  device at your own copy of the file.
+  reflash needed. The file carries full-day closures (`"holidays"`, YYYYMMDD
+  integers) and half-day early closes (`"earlyCloses"`, `"YYYYMMDD:HHMM"`
+  strings, e.g. `"20261224:1300"` for a 1 PM close). Compiled-in tables
+  (2026–2027 for NYSE/LSE, 2026 for SSE/TSE/HKEX, in `marketHolidays.cpp`)
+  serve as the offline fallback. Type `HOLIDAYS` in the serial monitor to
+  inspect the active calendars or force a refetch, and set
+  `MARKET_HOLIDAYS_URL` in `secrets.h` to point a forked device at your own
+  copy of the file.
 - **Clock face** — cycle between the four home-screen faces (see above).
 - **Clock format** — toggle between 24-hour and 12-hour (AM/PM) display.
 - **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
@@ -217,35 +241,68 @@ each zone currently has.
 Everything on the settings page can also be changed from a browser: go to
 `http://esp32worldclock.local/` (or the device IP shown on the System status
 page) to pick the four timezones, clock face, clock/date format and
-brightness without touching the device. The page also links to the firmware
-updater (`/update`), the log viewer (`/logs`) and a scriptable diagnostics
-endpoint (`/api/status`, JSON: IP, RSSI, chip/CPU, flash, heap, uptime, NTP
-syncs, zones, market status...). If `OTA_PASSWORD` is set in `secrets.h`,
-the same HTTP Basic credentials (username `admin`) protect these pages.
+brightness without touching the device. The web page additionally exposes a
+few settings that have no on-device UI:
+
+- **Night dimming** — the backlight level used at night (default: minimum)
+  and the fallback dim window (default 1–7 AM home-zone time, used when the
+  light sensor is unavailable; the window may wrap midnight, and equal
+  start/end hours disable it).
+- **Hostname** — the mDNS name the device advertises (`<hostname>.local`,
+  default `esp32worldclock`). Change it when running two clocks on one
+  network; it is applied on the next reboot.
+- **Config backup / restore** — the *Backup config* link downloads all
+  settings as JSON (also available at `/api/config`); picking a backup file
+  next to *restore* uploads it back, after which the device saves it and
+  reboots. Handy for cloning a second clock, or for restoring the display
+  settings after a partition-scheme change wipes SPIFFS. Scriptable too:
+  `curl http://esp32worldclock.local/api/config -o backup.json` and
+  `curl -X POST --data-binary @backup.json http://esp32worldclock.local/api/config`.
+
+The page also links to the firmware updater (`/update`), the log viewer
+(`/logs`) and a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
+RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...). If
+`OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic credentials
+(username `admin`) protect these pages.
 
 ## Auto-brightness
 
 The clock dims itself using the CYD's onboard light sensor (LDR on GPIO 34):
-when the room goes dark the backlight fades to minimum, and it fades back to
-the saved brightness when the lights come on. The LDR circuit is unreliable
-on some CYD board revisions, so the sensor is only trusted after its reading
-has actually been seen to move; until then the clock falls back to a fixed
-schedule (dim between 1–7 AM home-zone time). Type `LDR` in the serial
-monitor to see the live readings, and set `LDR_DARK_IS_HIGH` to 0 in
-`ClockLogic.h` if your board's sensor reads inverted. Manual brightness
-changes (touch gesture or settings page) always win for 2 hours.
+when the room goes dark the backlight fades to the configured night
+brightness, and it fades back to the saved brightness when the lights come
+on. The LDR circuit is unreliable on some CYD board revisions, so the sensor
+is only trusted after its reading has actually been seen to move; until then
+the clock falls back to a time schedule (default: dim between 1–7 AM
+home-zone time). Both the night brightness and the schedule window are
+configurable on the web settings page. Type `LDR` in the serial monitor to
+see the live readings, and set `LDR_DARK_IS_HIGH` to 0 in `ClockLogic.h` if
+your board's sensor reads inverted. Manual brightness changes (touch gesture
+or settings page) always win for 2 hours.
 
-## System status page
+## System status pages
 
-Live diagnostics, refreshed every second — tap anywhere to go back:
+Live diagnostics across three pages, refreshed every second — each tap moves
+to the next page, and the last tap returns to settings:
 
-- WiFi SSID and signal strength (color-coded), IP address
-- Chip model / revision and CPU frequency, plus the CPU temperature on
-  chips that have a sensor (the classic ESP32 in the CYD does not)
-- Flash size and speed, firmware size (with % of the OTA slot used) and
-  the running build's compile timestamp
-- Free heap (with the low-water mark since boot), uptime
-- NTP sync count / last sync age and the current UTC time
+- **System (1/3)** — WiFi SSID and signal strength (color-coded, red
+  `OFFLINE` when the connection is down), IP address; chip model / revision
+  and CPU frequency, plus the CPU temperature on chips that have a sensor
+  (the classic ESP32 in the CYD does not); flash size and speed, firmware
+  size (with % of the OTA slot used) and the running build's compile
+  timestamp; free heap (with the low-water mark since boot), uptime; NTP
+  sync count / last sync age and the current UTC time.
+- **Network & storage (2/3)** — mDNS hostname, MAC address, gateway, DNS,
+  WiFi channel; WiFi dropouts since boot (with the last outage's length and
+  how long ago it ended); the reason for the last reset (power-on, software
+  reset, crash, brownout... — shown in red after an abnormal one); SPIFFS
+  usage, largest allocatable heap block (fragmentation), SDK version.
+- **Clock data (3/3)** — home timezone, active face and formats; weather
+  data age; market-holiday calendar source (weekly-fetched vs. compiled-in)
+  and age; public-holiday tables loaded per eligible zone; current backlight
+  level, what's driving auto-brightness (light sensor vs. schedule), any
+  manual-brightness hold remaining, and the configured night window.
+
+Everything on these pages is also in the `/api/status` JSON for scripting.
 
 ## Logs page
 

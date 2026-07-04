@@ -64,6 +64,8 @@
 
 #include "uiPages.h" // getPosixFallback - offline timezone rules
 
+#include "wifiWatch.h" // runtime WiFi-loss supervision
+
 // Number of seconds after reset during which a
 // subseqent reset will be considered a double reset.
 #define DRD_TIMEOUT 10
@@ -292,6 +294,8 @@ void baseProjectLoop()
     handleTimeSync();
     // Service over-the-air update requests
     handleOTA();
+    // Watch the WiFi link: offline indicator, reconnect kicks, self-heal reboot
+    wifiWatchService();
     // Schedule the weekly holiday-calendar refresh (fetch runs on core 0)
     marketHolidaysService();
     // Track the zones' local years for the public-holiday tables

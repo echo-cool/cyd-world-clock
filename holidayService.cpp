@@ -151,6 +151,21 @@ uint32_t holidaysDataVersion()
     return v;
 }
 
+int holidayZonesLoaded(int &eligible)
+{
+    int loaded = 0;
+    eligible = 0;
+    holLock();
+    for (int i = 0; i < 4; i++)
+    {
+        if (zoneHol[i].country[0] == '\0') continue;
+        eligible++;
+        if (zoneHol[i].valid) loaded++;
+    }
+    holUnlock();
+    return loaded;
+}
+
 // One country-year fetch. Runs on the core-0 task; results land in `out`.
 // Keeps only nationwide public holidays (global == true, type "Public") so
 // regional observances don't clutter the display.

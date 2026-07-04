@@ -1,16 +1,21 @@
 {
   "comment": [
-    "Full-day exchange closure calendars fetched weekly by the clock",
+    "Exchange closure calendars fetched weekly by the clock",
     "(see marketHolidays.cpp - MARKET_HOLIDAYS_URL points at the raw GitHub",
     "URL of this file). Update this file when an exchange publishes next",
     "year's schedule and every device picks it up within a week - no",
     "reflash needed.",
     "",
     "Format: holidays.<EXCHANGE> = array of YYYYMMDD integers, weekday",
-    "closures only (weekends are handled by the market-status logic).",
-    "An exchange listed here fully replaces its compiled-in table; an",
-    "exchange omitted here keeps the compiled-in fallback. Max 8 exchanges,",
-    "88 dates each. Half-day early closes are not modeled.",
+    "full-day closures only (weekends are handled by the market-status",
+    "logic). earlyCloses.<EXCHANGE> = array of 'YYYYMMDD:HHMM' strings for",
+    "half days - the exchange trades normally until HHMM local time, then",
+    "closes (e.g. '20261224:1300' = 1:00 PM close on Christmas Eve).",
+    "An exchange listed under holidays fully replaces its compiled-in",
+    "tables (holidays AND early closes); an exchange omitted there keeps",
+    "the compiled-in fallback for both. earlyCloses entries are ignored",
+    "for exchanges not listed under holidays. Max 8 exchanges, 88 holiday",
+    "dates and 12 early closes each.",
     "",
     "Sources: NYSE https://www.nyse.com/trade/hours-calendars |",
     "LSE https://www.londonstockexchange.com/equities-trading/business-days |",
@@ -49,5 +54,10 @@
       20260101, 20260217, 20260218, 20260219, 20260403, 20260406, 20260407,
       20260501, 20260525, 20260619, 20260701, 20261001, 20261019, 20261225
     ]
+  },
+  "earlyCloses": {
+    "NYSE": ["20261127:1300", "20261224:1300", "20271126:1300"],
+    "LSE": ["20261224:1230", "20261231:1230", "20271224:1230", "20271231:1230"],
+    "HKEX": ["20260216:1200", "20261224:1200", "20261231:1200"]
   }
 }

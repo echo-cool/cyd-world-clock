@@ -1,13 +1,17 @@
 #include "uiPages.h"
 
+#include <SPIFFS.h>       // filesystem usage row on the status page
 #include <WiFi.h>
+#include <esp_system.h>   // esp_reset_reason - reset reason row
 #include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED - CPU temp row
 
 #include "clockFaces.h"         // ClockFace enum, clockFaceName
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
-#include "holidayService.h"     // holidaysInvalidate
+#include "holidayService.h"     // holidaysInvalidate, holidayZonesLoaded
+#include "marketHolidays.h"     // marketHolidaysFetchedInfo - status page
 #include "projectConfig.h"
 #include "weatherService.h"     // weatherInvalidate
+#include "wifiWatch.h"          // outage history rows on the status page
 
 UIScreen uiScreen = SCREEN_HOME;
 bool uiPageDrawn = false;      // false -> render the full page on the next loop
@@ -432,12 +436,64 @@ void renderTzListPage()
     drawButton(BTN_TZ_NEXT, "Next >", TFT_CYAN, TFT_WHITE);
 }
 
-/*-------- System status page ----------*/
+/*-------- System status pages ----------*/
+// Three pages, cycled by tapping the screen (the last tap returns to the
+// settings page): 1) system, 2) network & storage, 3) clock data. The
+// dynamic values refresh once a second while a page is showing.
 
-const int STATUS_ROW_COUNT = 11;
+const int STATUS_PAGE_COUNT = 3;
+const int STATUS_MAX_ROWS = 11;
 const int STATUS_VALUE_X = 96;
 const int STATUS_ROW_Y0 = 34;
 const int STATUS_ROW_STEP = 17;
+
+int statusPageIndex = 0; // reset to 0 when entering from the settings page
+
+static const char *STATUS_TITLES[STATUS_PAGE_COUNT] = {
+    "SYSTEM STATUS", "NETWORK & STORAGE", "CLOCK DATA"};
+
+static const char *STATUS_LABELS_SYSTEM[] = {
+    "WiFi", "IP addr", "CPU", "CPU temp", "Flash", "Firmware",
+    "Build", "Heap", "Uptime", "NTP sync", "UTC time"};
+static const char *STATUS_LABELS_NETWORK[] = {
+    "Hostname", "MAC", "Gateway", "DNS", "Channel", "Drops",
+    "Reset", "SPIFFS", "Max alloc", "SDK"};
+static const char *STATUS_LABELS_DATA[] = {
+    "Home zone", "Face", "Format", "Weather", "Mkt hols", "Pub hols",
+    "Backlight", "Auto-dim", "Hold", "Night"};
+
+static int statusRowCount(int page)
+{
+    return page == 0 ? 11 : 10;
+}
+
+static const char *const *statusLabels(int page)
+{
+    switch (page)
+    {
+    case 1: return STATUS_LABELS_NETWORK;
+    case 2: return STATUS_LABELS_DATA;
+    default: return STATUS_LABELS_SYSTEM;
+    }
+}
+
+const char *resetReasonText()
+{
+    switch (esp_reset_reason())
+    {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external pin";
+    case ESP_RST_SW: return "software reset";
+    case ESP_RST_PANIC: return "crash (panic)";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "SDIO reset";
+    default: return "unknown";
+    }
+}
 
 String formatUptime()
 {
@@ -448,7 +504,17 @@ String formatUptime()
     return String(buf);
 }
 
-void renderStatusValues()
+// Compact duration for the outage-history row: "45m", "3h", "2d".
+static String agoText(unsigned long ms)
+{
+    unsigned long m = ms / 60000UL;
+    if (m < 60) return String(m) + "m";
+    if (m < 48 * 60) return String(m / 60) + "h";
+    return String(m / (24 * 60)) + "d";
+}
+
+// Page 1: the classic system diagnostics.
+static void fillSystemValues(String *values, uint16_t *colors)
 {
     String ssid = WiFi.SSID();
     if (ssid.length() > 14) ssid = ssid.substring(0, 14);
@@ -456,8 +522,14 @@ void renderStatusValues()
     uint32_t sketch = ESP.getSketchSize();
     uint32_t slot = sketch + ESP.getFreeSketchSpace();
 
-    String values[STATUS_ROW_COUNT];
-    values[0] = ssid + " (" + String(WiFi.RSSI()) + " dBm)";
+    bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    int rssi = WiFi.RSSI();
+
+    values[0] = wifiUp ? ssid + " (" + String(rssi) + " dBm)" : "OFFLINE";
+    colors[0] = !wifiUp        ? TFT_RED
+                : (rssi > -60) ? TFT_GREEN
+                : (rssi > -75) ? TFT_YELLOW
+                               : TFT_RED;
     values[1] = WiFi.localIP().toString();
     values[2] = String(ESP.getChipModel()) + " r" + String(ESP.getChipRevision()) +
                 " @" + String(ESP.getCpuFreqMHz()) + "MHz";
@@ -479,23 +551,155 @@ void renderStatusValues()
                           String((millis() - lastSyncTime) / 60000UL) + " min ago)"
                     : "none since boot";
     values[10] = UTC.dateTime("H:i:s") + " UTC";
+}
 
+// Page 2: network details, outage history, reset reason and storage.
+static void fillNetworkValues(String *values, uint16_t *colors)
+{
+    String host = projectConfig.hostname + ".local";
+    if (host.length() > 28) host = host.substring(0, 28);
+    values[0] = host;
+    values[1] = WiFi.macAddress();
+    values[2] = WiFi.gatewayIP().toString();
+    values[3] = WiFi.dnsIP().toString();
+    values[4] = String(WiFi.channel());
+
+    int drops = wifiDropCount();
+    unsigned long offlineMs = wifiOfflineDurationMs();
+    if (offlineMs > 0)
+    {
+        values[5] = String(drops) + " (offline " + agoText(offlineMs) + ")";
+        colors[5] = TFT_RED;
+    }
+    else if (drops == 0)
+    {
+        values[5] = "none since boot";
+    }
+    else
+    {
+        values[5] = String(drops) + " (last " + agoText(wifiLastOutageDurationMs()) +
+                    ", " + agoText(wifiLastOutageEndedAgoMs()) + " ago)";
+        colors[5] = TFT_YELLOW;
+    }
+
+    esp_reset_reason_t rr = esp_reset_reason();
+    values[6] = resetReasonText();
+    if (rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT ||
+        rr == ESP_RST_WDT || rr == ESP_RST_BROWNOUT)
+    {
+        colors[6] = TFT_RED; // the previous run died abnormally
+    }
+
+    values[7] = String(SPIFFS.usedBytes() / 1024) + " / " +
+                String(SPIFFS.totalBytes() / 1024) + " KB";
+    values[8] = String(ESP.getMaxAllocHeap() / 1024) + " KB block";
+    values[9] = ESP.getSdkVersion();
+}
+
+// Page 3: what the clock is showing and how fresh its background data is.
+static void fillDataValues(String *values, uint16_t *colors)
+{
+    values[0] = worldZones[0].timezone;
+    values[1] = clockFaceName(projectConfig.clockFace);
+    values[2] = String(SHOW_24HOUR ? "24H" : "12H") + ", " +
+                (NOT_US_DATE ? "DD/MM/YY" : "MM/DD/YY");
+
+    long weatherAge = weatherAgeMinutes();
+    if (weatherAge < 0)
+    {
+        values[3] = "no data yet";
+        colors[3] = TFT_RED;
+    }
+    else
+    {
+        values[3] = "updated " + String(weatherAge) + " min ago";
+        if (weatherAge > 60) colors[3] = TFT_YELLOW; // fetches every 20 min
+    }
+
+    long calAgeDays = -1;
+    if (marketHolidaysFetchedInfo(calAgeDays))
+    {
+        values[4] = calAgeDays < 0 ? "fetched calendars"
+                                   : "fetched " + String(calAgeDays) + "d ago";
+        colors[4] = TFT_GREEN;
+    }
+    else
+    {
+        values[4] = "compiled-in tables";
+        colors[4] = TFT_YELLOW;
+    }
+
+    int eligible = 0;
+    int loaded = holidayZonesLoaded(eligible);
+    if (eligible == 0)
+    {
+        values[5] = "no eligible zones";
+    }
+    else
+    {
+        values[5] = String(loaded) + "/" + String(eligible) + " zones loaded";
+        colors[5] = (loaded == eligible) ? TFT_GREEN : TFT_YELLOW;
+    }
+
+    values[6] = String(backlightLevel) + " (" +
+                String(map(constrain(backlightLevel, 5, 255), 5, 255, 0, 100)) + "%)";
+
+    bool ldrTrusted, ldrDark;
+    int ldrSmoothed;
+    if (!getLdrState(ldrTrusted, ldrDark, ldrSmoothed))
+    {
+        values[7] = "schedule only (no LDR)";
+    }
+    else if (ldrTrusted)
+    {
+        values[7] = String("LDR: room ") + (ldrDark ? "dark" : "bright");
+    }
+    else
+    {
+        values[7] = "schedule (LDR unproven)";
+    }
+
+    unsigned long nowMs = millis();
+    values[8] = (manualBrightnessUntil > nowMs)
+                    ? "manual, " +
+                          String((manualBrightnessUntil - nowMs + 59999UL) / 60000UL) +
+                          " min left"
+                    : "none";
+
+    int ns = projectConfig.nightStartHour;
+    int ne = projectConfig.nightEndHour;
+    int npct = map(constrain(projectConfig.nightBrightness, 1, 255), 1, 255, 0, 100);
+    values[9] = (ns == ne)
+                    ? "window off (" + String(npct) + "% dark)"
+                    : String(ns) + ":00-" + String(ne) + ":00 -> " + String(npct) + "%";
+}
+
+void renderStatusValues()
+{
+    String values[STATUS_MAX_ROWS];
+    uint16_t colors[STATUS_MAX_ROWS];
+    for (int i = 0; i < STATUS_MAX_ROWS; i++)
+    {
+        colors[i] = TFT_WHITE;
+    }
+
+    switch (statusPageIndex)
+    {
+    case 1: fillNetworkValues(values, colors); break;
+    case 2: fillDataValues(values, colors); break;
+    default: fillSystemValues(values, colors); break;
+    }
+
+    int rows = statusRowCount(statusPageIndex);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
 
-    for (int i = 0; i < STATUS_ROW_COUNT; i++)
+    for (int i = 0; i < rows; i++)
     {
         int y = STATUS_ROW_Y0 + i * STATUS_ROW_STEP;
         tft.fillRect(STATUS_VALUE_X, y, 320 - STATUS_VALUE_X, STATUS_ROW_STEP, clockBackgroundColor);
-
-        uint16_t color = TFT_WHITE;
-        if (i == 0) // color-code the WiFi signal strength
-        {
-            int rssi = WiFi.RSSI();
-            color = (rssi > -60) ? TFT_GREEN : (rssi > -75) ? TFT_YELLOW : TFT_RED;
-        }
-        tft.setTextColor(color, clockBackgroundColor);
+        tft.setTextColor(colors[i], clockBackgroundColor);
         tft.drawString(values[i], STATUS_VALUE_X, y);
     }
 }
@@ -508,18 +712,16 @@ void renderStatusPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SYSTEM STATUS", 160, 2);
+    tft.drawString(STATUS_TITLES[statusPageIndex], 160, 2);
 
-    const char *labels[STATUS_ROW_COUNT] = {
-        "WiFi", "IP addr", "CPU", "CPU temp", "Flash", "Firmware",
-        "Build", "Heap", "Uptime", "NTP sync", "UTC time"
-    };
+    const char *const *labels = statusLabels(statusPageIndex);
+    int rows = statusRowCount(statusPageIndex);
 
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    for (int i = 0; i < STATUS_ROW_COUNT; i++)
+    for (int i = 0; i < rows; i++)
     {
         tft.drawString(labels[i], 8, STATUS_ROW_Y0 + i * STATUS_ROW_STEP);
     }
@@ -527,7 +729,12 @@ void renderStatusPage()
     tft.setTextFont(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("Tap anywhere to go back", 160, 228);
+    String footer = (statusPageIndex + 1 < STATUS_PAGE_COUNT)
+                        ? "Page " + String(statusPageIndex + 1) + "/" +
+                              String(STATUS_PAGE_COUNT) + " - tap for next"
+                        : "Page " + String(STATUS_PAGE_COUNT) + "/" +
+                              String(STATUS_PAGE_COUNT) + " - tap to go back";
+    tft.drawString(footer, 160, 228);
 
     renderStatusValues();
 }
@@ -648,6 +855,7 @@ void handleUiTouch()
         }
         else if (buttonContains(BTN_SET_STAT, tx, ty))
         {
+            statusPageIndex = 0; // always enter on the first status page
             switchToScreen(SCREEN_STATUS);
         }
         else if (buttonContains(BTN_SET_LOGS, tx, ty))
@@ -719,6 +927,20 @@ void handleUiTouch()
     }
 
     case SCREEN_STATUS:
+        // Tap cycles through the status pages; the last one returns to settings
+        statusPageIndex++;
+        if (statusPageIndex >= STATUS_PAGE_COUNT)
+        {
+            statusPageIndex = 0;
+            switchToScreen(SCREEN_SETTINGS);
+        }
+        else
+        {
+            uiPageDrawn = false; // repaint with the next page's rows
+            touchSuppressedUntilRelease = true;
+        }
+        break;
+
     case SCREEN_LOGS:
         switchToScreen(SCREEN_SETTINGS);
         break;

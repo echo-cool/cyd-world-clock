@@ -30,16 +30,17 @@ const unsigned long MANUAL_BRIGHTNESS_HOLD_MS = 2UL * 60UL * 60UL * 1000UL; // 2
 // How long the on-screen brightness bar stays visible after the last touch.
 const unsigned long BRIGHTNESS_BAR_TIMEOUT_MS = 2000; // 2 seconds
 
-// Backlight level used in a dark room / at night by auto-brightness.
-const int NIGHT_BRIGHTNESS = 1;
+// The night backlight level and the fallback dim window are configurable:
+// projectConfig.nightBrightness / nightStartHour / nightEndHour (web
+// settings page).
 
 // --- Ambient-light (LDR) auto-brightness ------------------------------------
 // The CYD has an onboard LDR on GPIO 34. Its divider circuit is unreliable on
 // some board revisions (readings that never move), so auto-brightness only
 // trusts the sensor after the smoothed reading has been seen to swing by at
 // least LDR_MIN_SWING counts; until then - or with USE_LDR_AUTOBRIGHTNESS 0 -
-// it falls back to the time-of-day schedule (dim 1-7 AM home time). Use the
-// LDR serial command to inspect the live readings.
+// it falls back to a time-of-day schedule (the configurable night window on
+// home-zone time). Use the LDR serial command to inspect the live readings.
 #ifndef USE_LDR_AUTOBRIGHTNESS
 #define USE_LDR_AUTOBRIGHTNESS 1
 #endif
@@ -113,9 +114,11 @@ String getMarketStatus(WorldClockZone &zone);
 uint16_t getMarketStatusColor(String status);
 
 // Day/night-dependent colors for a zone's local time (used for time digits
-// and for labels/dates respectively).
-uint16_t getDayNightColor(Timezone &tz);
-uint16_t getDayNightLabelColor(Timezone &tz);
+// and for labels/dates respectively). Preset cities carry coordinates, so
+// day/night follows the sun's real position (sunrise/sunset incl. seasons);
+// zones without known coordinates fall back to fixed 6AM-6PM windows.
+uint16_t getDayNightColor(WorldClockZone &zone);
+uint16_t getDayNightLabelColor(WorldClockZone &zone);
 
 // "HH:MM" honoring the 24-hour user setting; pm reports AM/PM for the
 // indicator drawn next to the time in 12-hour mode. Shared by the quadrant
@@ -132,6 +135,12 @@ void civilFromDays(long days, int &y, int &m, int &d);
 
 // Dump the ambient-light sensor state to Serial (the LDR serial command).
 void printLdrStatus();
+
+// Ambient-light sensor state for the status page / status API. Returns false
+// when the LDR is compiled out (USE_LDR_AUTOBRIGHTNESS 0); otherwise fills
+// whether the sensor has proven itself, the current dark/bright verdict and
+// the smoothed reading.
+bool getLdrState(bool &trusted, bool &dark, int &smoothed);
 
 void rollingClockSetup(bool is24Hour, bool usDate);
 void drawRollingClock();

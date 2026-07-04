@@ -20,15 +20,15 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Compiled-in full-day closure calendars for the exchanges the clock knows
-// about. These are the fallback layer; the fetched marketHolidays.json (see
-// the bottom of this file) overrides them per exchange when available.
+// Compiled-in closure calendars for the exchanges the clock knows about.
+// These are the fallback layer; the fetched marketHolidays.json (see the
+// bottom of this file) overrides them per exchange when available.
 //
 // Dates are encoded as YYYYMMDD integers; only weekday closures are listed
 // (weekends are already handled by the market-status logic). Half-day early
 // closes (NYSE Black Friday / Christmas Eve 1pm closes, HKEX Lunar New Year
-// eve half days, ...) are NOT modeled - on those afternoons the status will
-// show OPEN a few hours too long.
+// eve half days, ...) live in the separate EARLY_CLOSE_TABLES below - the
+// market status truncates the trading sessions at the early-close time.
 //
 // Maintenance: NYSE publishes its calendar ~3 years ahead; LSE follows the
 // England & Wales bank holidays; the SSE / TSE / HKEX schedules are announced
@@ -155,6 +155,55 @@ static const HolidayTable HOLIDAY_TABLES[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Compiled-in half-day early closes: the exchange trades normally until
+// closeMinutes (minutes since local midnight), then closes for the day.
+// SSE and TSE have no scheduled half days.
+//
+// NYSE: 1:00 PM on the day after Thanksgiving and (when it's a weekday)
+// Christmas Eve. LSE: 12:30 on Christmas Eve and New Year's Eve. HKEX: noon
+// on Lunar New Year's Eve, Christmas Eve and New Year's Eve (the morning
+// session simply has no afternoon counterpart).
+// ---------------------------------------------------------------------------
+
+struct EarlyClose
+{
+    uint32_t date;         // YYYYMMDD, exchange-local
+    uint16_t closeMinutes; // minutes since local midnight
+};
+
+static const EarlyClose NYSE_EARLY_CLOSES[] = {
+    {20261127, 13 * 60}, // day after Thanksgiving, 1:00 PM
+    {20261224, 13 * 60}, // Christmas Eve, 1:00 PM
+    {20271126, 13 * 60}, // day after Thanksgiving, 1:00 PM
+};
+
+static const EarlyClose LSE_EARLY_CLOSES[] = {
+    {20261224, 12 * 60 + 30}, // Christmas Eve, 12:30
+    {20261231, 12 * 60 + 30}, // New Year's Eve, 12:30
+    {20271224, 12 * 60 + 30}, // Christmas Eve, 12:30
+    {20271231, 12 * 60 + 30}, // New Year's Eve, 12:30
+};
+
+static const EarlyClose HKEX_EARLY_CLOSES[] = {
+    {20260216, 12 * 60}, // Lunar New Year's Eve, noon
+    {20261224, 12 * 60}, // Christmas Eve, noon
+    {20261231, 12 * 60}, // New Year's Eve, noon
+};
+
+struct EarlyCloseTable
+{
+    const char *exchange;
+    const EarlyClose *entries;
+    size_t count;
+};
+
+static const EarlyCloseTable EARLY_CLOSE_TABLES[] = {
+    {"NYSE", NYSE_EARLY_CLOSES, sizeof(NYSE_EARLY_CLOSES) / sizeof(NYSE_EARLY_CLOSES[0])},
+    {"LSE", LSE_EARLY_CLOSES, sizeof(LSE_EARLY_CLOSES) / sizeof(LSE_EARLY_CLOSES[0])},
+    {"HKEX", HKEX_EARLY_CLOSES, sizeof(HKEX_EARLY_CLOSES) / sizeof(HKEX_EARLY_CLOSES[0])},
+};
+
+// ---------------------------------------------------------------------------
 // Fetched override tables.
 //
 // A weekly HTTPS fetch of MARKET_HOLIDAYS_URL keeps the calendars current
@@ -172,12 +221,17 @@ static const unsigned long HOLIDAY_RETRY_MS = 6UL * 3600UL * 1000UL; // after a 
 
 static const int MAX_DYN_EXCHANGES = 8;
 static const int MAX_DYN_DATES = 88;
+static const int MAX_DYN_EARLY = 12;
 
 struct DynHolidayTable
 {
     char exchange[8];
     uint16_t count;
     uint32_t dates[MAX_DYN_DATES];
+    // Half-day early closes ("earlyCloses" in the fetched JSON)
+    uint16_t earlyCount;
+    uint32_t earlyDates[MAX_DYN_EARLY];
+    uint16_t earlyCloseMin[MAX_DYN_EARLY];
 };
 
 static SemaphoreHandle_t holidayMutex = nullptr;
@@ -236,6 +290,45 @@ bool isMarketHoliday(const String &exchange, int y, int m, int d)
     return false;
 }
 
+int marketEarlyCloseMinutes(const String &exchange, int y, int m, int d)
+{
+    const uint32_t key = (uint32_t)y * 10000u + (uint32_t)m * 100u + (uint32_t)d;
+
+    // An exchange present in the fetched data overrides its compiled early
+    // closes entirely, same as the full-day holiday semantics above.
+    holidayLock();
+    for (int t = 0; t < dynTableCount; t++)
+    {
+        if (exchange != dynTables[t].exchange)
+            continue;
+        for (int i = 0; i < dynTables[t].earlyCount; i++)
+        {
+            if (dynTables[t].earlyDates[i] == key)
+            {
+                int minutes = dynTables[t].earlyCloseMin[i];
+                holidayUnlock();
+                return minutes;
+            }
+        }
+        holidayUnlock();
+        return -1;
+    }
+    holidayUnlock();
+
+    for (const EarlyCloseTable &t : EARLY_CLOSE_TABLES)
+    {
+        if (exchange != t.exchange)
+            continue;
+        for (size_t i = 0; i < t.count; i++)
+        {
+            if (t.entries[i].date == key)
+                return t.entries[i].closeMinutes;
+        }
+        return -1;
+    }
+    return -1;
+}
+
 // Parse a holidays JSON payload and, if it is sane, swap it in as the active
 // override tables. Returns false (leaving the current tables untouched) on
 // any parse or validation failure.
@@ -255,6 +348,11 @@ static bool applyHolidayJson(const String &payload)
         Log.println("Holiday JSON rejected: no \"holidays\" object");
         return false;
     }
+
+    // Optional half-day early closes, keyed by the same exchange names. Only
+    // honored for exchanges that also appear in "holidays" (an exchange's
+    // fetched entry replaces its compiled tables as a unit).
+    JsonObject earlies = doc["earlyCloses"];
 
     // Build into a local staging copy first so a bad payload can't leave the
     // active tables half-updated.
@@ -289,6 +387,40 @@ static bool applyHolidayJson(const String &payload)
                 continue;
             t.dates[t.count++] = date;
         }
+
+        // Early closes for this exchange: "YYYYMMDD:HHMM" strings (local
+        // close time). Invalid entries are skipped individually.
+        t.earlyCount = 0;
+        if (!earlies.isNull())
+        {
+            JsonArray ea = earlies[exchange].as<JsonArray>();
+            if (!ea.isNull())
+            {
+                for (JsonVariant v : ea)
+                {
+                    if (t.earlyCount >= MAX_DYN_EARLY)
+                        break;
+                    const char *s = v.as<const char *>();
+                    unsigned int d8 = 0, hhmm = 0;
+                    if (!s || strlen(s) != 13 || s[8] != ':' ||
+                        sscanf(s, "%8u:%4u", &d8, &hhmm) != 2)
+                        continue;
+                    if (d8 < 20200101u || d8 > 20991231u)
+                        continue;
+                    unsigned int mm = (d8 / 100u) % 100u;
+                    unsigned int dd = d8 % 100u;
+                    if (mm < 1 || mm > 12 || dd < 1 || dd > 31)
+                        continue;
+                    unsigned int hh = hhmm / 100u, mn = hhmm % 100u;
+                    if (hh > 23 || mn > 59)
+                        continue;
+                    t.earlyDates[t.earlyCount] = d8;
+                    t.earlyCloseMin[t.earlyCount] = (uint16_t)(hh * 60u + mn);
+                    t.earlyCount++;
+                }
+            }
+        }
+
         // An exchange with no valid dates keeps its compiled fallback instead
         if (t.count > 0)
             stagedCount++;
@@ -439,6 +571,20 @@ void marketHolidaysForceRefresh()
     Log.println("Holiday calendar fetch queued - watch for the result above");
 }
 
+bool marketHolidaysFetchedInfo(long &ageDays)
+{
+    holidayLock();
+    int count = dynTableCount;
+    time_t fetched = lastFetchUnix;
+    holidayUnlock();
+    if (count == 0)
+        return false;
+    time_t nowUtc = UTC.now();
+    ageDays = (fetched > 0 && nowUtc > fetched) ? (long)((nowUtc - fetched) / 86400)
+                                                : -1;
+    return true;
+}
+
 void printMarketHolidaysStatus()
 {
     Log.println("=== Market holiday calendars ===");
@@ -464,7 +610,8 @@ void printMarketHolidaysStatus()
         for (int t = 0; t < dynTableCount; t++)
         {
             Log.println("  " + String(dynTables[t].exchange) + ": " +
-                           String(dynTables[t].count) + " closure dates");
+                           String(dynTables[t].count) + " closure dates, " +
+                           String(dynTables[t].earlyCount) + " early close(s)");
         }
         holidayUnlock();
     }

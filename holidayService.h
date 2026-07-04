@@ -51,6 +51,11 @@ int getZoneHolidays(int zoneIdx, PublicHoliday *out, int maxOut);
 // it between frames to repaint as soon as an async fetch lands.
 uint32_t holidaysDataVersion();
 
+// Status-page summary: how many zones have holiday data loaded, out of the
+// zones whose country the API covers (eligible). Zones with no country code
+// (Dubai, Mumbai) count toward neither.
+int holidayZonesLoaded(int &eligible);
+
 // Serial command support (part of the HOLIDAYS command output).
 void printPublicHolidaysStatus();
 

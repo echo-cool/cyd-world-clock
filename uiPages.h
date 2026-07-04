@@ -75,6 +75,10 @@ void applyZoneSelection(int slot, const TimezonePreset &preset);
 // Persist the SHOW_24HOUR / NOT_US_DATE globals into the project config.
 void saveDisplayPrefs();
 
+// Human-readable last reset reason (esp_reset_reason), e.g. "power-on",
+// "crash (panic)". Shown on the status pages and in /api/status.
+const char *resetReasonText();
+
 void switchToScreen(UIScreen s);
 void handleUiTouch();
 void renderUiPage();
