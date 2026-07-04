@@ -10,13 +10,56 @@
 
 # Setup
 
-1. Copy `secrets.h.example` to `secrets.h` and fill in your WiFi credentials
-   (see "Connect Wifi" below). `secrets.h` is git-ignored so your credentials
-   are never committed.
-2. Build and upload with one of the toolchains below. All of them use the
-   vendored `libraries/` folder in this repo (its TFT_eSPI copy carries the
-   display config for the CYD), so no library installation is needed except
-   for the Arduino IDE.
+There are two ways to get the firmware onto a device:
+
+- **Flash a released image** (next section) — no toolchain or libraries
+  needed, just a USB cable. Start here if you only want to run the clock.
+- **Build from source** (see "Building" below) — needed if you want to change
+  the code, preconfigure WiFi credentials or set an OTA password. Copy
+  `secrets.h.example` to `secrets.h` first and fill in your values
+  (`secrets.h` is git-ignored so your credentials are never committed). All
+  three toolchains use the vendored `libraries/` folder in this repo (its
+  TFT_eSPI copy carries the display config for the CYD), so no library
+  installation is needed except for the Arduino IDE.
+
+## Flashing a release (no build needed)
+
+Each [GitHub release](../../releases/latest) has a
+`esp32worldclock-<tag>-factory.bin` attached: a full flash image (bootloader +
+partition table + app) that brings a brand-new ESP32 to a working clock in one
+step.
+
+1. Download `esp32worldclock-<tag>-factory.bin` from the
+   [latest release](../../releases/latest).
+2. Connect the CYD over USB. If no serial port appears, install the
+   [CH340 USB-to-UART driver](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/SETUP.md)
+   (the port shows up as `COMx` on Windows, `/dev/ttyUSB0` on Linux,
+   `/dev/tty.usbserial-*` on macOS).
+3. Flash the image to offset `0x0` with
+   [esptool](https://docs.espressif.com/projects/esptool/) (`pip install
+   esptool`):
+
+   ```
+   esptool.py --chip esp32 --port COM3 --baud 921600 write_flash 0x0 esp32worldclock-<tag>-factory.bin
+   ```
+
+   Replace `COM3` with your port. No install needed alternative: open
+   [Espressif's web flasher](https://espressif.github.io/esptool-js/) in
+   Chrome/Edge, connect, and program the same file at address `0x0`.
+4. Press reset (or replug USB). The released binaries are built without WiFi
+   credentials, so the device starts the `esp32Project` captive portal — see
+   "Connect Wifi" below to get it online.
+
+Flashing at `0x0` replaces the bootloader, partition table and app, so it also
+works to recover a device in a bad state or one running different firmware.
+If a previous project left settings behind that you want gone, run
+`esptool.py --chip esp32 --port COM3 erase_flash` first (this also wipes any
+stored WiFi credentials).
+
+Once the device is on WiFi, future releases don't need the cable: upload the
+release's `esp32worldclock-<tag>-ota.bin` through the web updater at
+`http://esp32worldclock.local/update` (see "Over-the-air updates" below).
+Settings and WiFi credentials survive OTA updates.
 
 ## Building
 
@@ -57,7 +100,7 @@ git push origin v1.0.0
 The release gets two files: `esp32worldclock-<tag>-ota.bin` (app image —
 upload it straight through the web updater below, no toolchain needed) and
 `esp32worldclock-<tag>-factory.bin` (bootloader + partition table + app, for
-a first USB flash with `esptool.py write_flash 0x0 ...`). CI builds from
+a first USB flash — see "Flashing a release" above). CI builds from
 `secrets.h.example`, so release binaries contain no WiFi credentials — a
 freshly flashed device opens the captive portal, and OTA-updated devices
 keep their stored settings.
