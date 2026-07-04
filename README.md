@@ -1,6 +1,8 @@
 # ESP32WorldClock
- 
-![demo](img/demo.jpg)
+
+<p align="center">
+  <img src="img/demo.jpg" alt="Four-quadrant world clock face" width="65%"/>
+</p>
 
 # Hardware
 
@@ -82,6 +84,11 @@ new firmware. There are two ways in:
   and `pio run -t upload` as usual. In the Arduino IDE, pick the network
   port named `esp32worldclock` under Tools → Port.
 
+<p align="center">
+  <img src="img/ota.png" alt="Web firmware updater page" width="47%"/>
+  <img src="img/ota-progress.jpg" alt="OTA progress bar on the display" width="42%"/>
+</p>
+
 OTA is unauthenticated by default (anyone on your WiFi can flash the
 device); set `OTA_PASSWORD` in `secrets.h` to protect both paths — the web
 page then asks for HTTP Basic credentials (username `admin`), and espota
@@ -148,6 +155,10 @@ face):
 | Center third | Open the **Settings** page |
 | Right third | Increase backlight brightness |
 
+<p align="center">
+  <img src="img/homepage-brightness-adjust.jpg" alt="Brightness bar overlay while adjusting" width="45%"/>
+</p>
+
 # Clock faces
 
 The home screen has five faces, cycled with the **Clock face** button on the
@@ -185,7 +196,19 @@ settings page (the choice is saved to flash):
   built-in timezone rules, so the face works even without the timezone
   server.
 
+<p align="center">
+  <img src="img/face-2.jpg" alt="Big clock face" width="32%"/>
+  <img src="img/face-cal.jpg" alt="Calendar face marking Independence Day" width="32%"/>
+  <img src="img/face-weather.jpg" alt="Weather face" width="32%"/>
+</p>
+
 ## Settings page
+
+<p align="center">
+  <img src="img/settings.jpg" alt="Settings page" width="32%"/>
+  <img src="img/timezone.jpg" alt="Pick a clock slot" width="32%"/>
+  <img src="img/timezone2.jpg" alt="Timezone city list" width="32%"/>
+</p>
 
 - **Change timezones** — tap any of the four clock slots, then pick a city from
   the paged timezone list. Cities with a stock exchange (New York, London,
@@ -265,6 +288,10 @@ RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...). If
 `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic credentials
 (username `admin`) protect these pages.
 
+<p align="center">
+  <img src="img/web-settings.png" alt="Web settings page" width="40%"/>
+</p>
+
 ## Auto-brightness
 
 The clock dims itself using the CYD's onboard light sensor (LDR on GPIO 34):
@@ -304,6 +331,10 @@ to the next page, and the last tap returns to settings:
 
 Everything on these pages is also in the `/api/status` JSON for scripting.
 
+<p align="center">
+  <img src="img/sys-status-1.jpg" alt="System status page 1 of 3" width="45%"/>
+</p>
+
 ## Logs page
 
 Everything the firmware logs goes to the serial port **and** into a 6KB
@@ -317,6 +348,10 @@ without a USB cable:
   `curl`).
 
 The buffer holds the most recent couple hundred lines; it resets on reboot.
+
+<p align="center">
+  <img src="img/log.jpg" alt="On-device log viewer" width="45%"/>
+</p>
 
 # Timekeeping
 
