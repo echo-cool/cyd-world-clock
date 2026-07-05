@@ -21,7 +21,8 @@ enum UIScreen
     SCREEN_ZONE_PICK,
     SCREEN_TZ_LIST,
     SCREEN_STATUS,
-    SCREEN_LOGS
+    SCREEN_LOGS,
+    SCREEN_WIFI_LOGIN
 };
 
 extern UIScreen uiScreen;
@@ -78,6 +79,11 @@ void saveDisplayPrefs();
 // Human-readable last reset reason (esp_reset_reason), e.g. "power-on",
 // "crash (panic)". Shown on the status pages and in /api/status.
 const char *resetReasonText();
+
+// Start the transparent captive-portal login relay and open the on-device
+// helper screen. Called from the settings button and from the web /wifi-login
+// "start" trigger (via the main loop). MAIN core only.
+void openWifiLoginHelper();
 
 void switchToScreen(UIScreen s);
 void handleUiTouch();

@@ -3,11 +3,13 @@
 
 #include <WiFiManager.h>
 #include <ESP_DoubleResetDetector.h>
+#include <WiFi.h>
 
 #include "wifiManagerHandler.h"
 #include "logBuffer.h"
 #include "projectConfig.h"
 #include "projectDisplay.h"
+#include "netCheck.h" // applyStaMacOverride, normalizeMac
 
 DoubleResetDetector *drd;
 ProjectDisplay *wm_Display;
@@ -72,9 +74,23 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   }
   WiFiManagerParameter isUsDateFormat(PROJECT_TIME_US_DATE, "US Date Format", "T", 2, customHtmlTwo);
 
+  // Optional custom MAC for login-required networks (see netCheck.h). Leave
+  // blank for the factory MAC.
+  WiFiManagerParameter macParam(PROJECT_MAC_OVERRIDE,
+                                "Custom MAC (login networks, blank = default)",
+                                config.staMacOverride.c_str(), 20);
+
   wm.addParameter(&timeZoneParam);
   wm.addParameter(&isTwentyFourHour);
   wm.addParameter(&isUsDateFormat);
+  wm.addParameter(&macParam);
+
+  // Make sure the (optional) cloned MAC is on the STA interface before
+  // WiFiManager tries the stored credentials or the portal connects. This also
+  // initialises WiFi for the forceConfig path (which skips the preconfigured
+  // connect block that would otherwise have done WiFi.mode(WIFI_STA)).
+  WiFi.mode(WIFI_STA);
+  applyStaMacOverride();
 
   if (forceConfig)
   {
@@ -112,6 +128,7 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
     config.timeZone = String(timeZoneParam.getValue());
     config.twentyFourHour = (strncmp(isTwentyFourHour.getValue(), "T", 1) == 0);
     config.usDateFormat = (strncmp(isUsDateFormat.getValue(), "T", 1) == 0);
+    config.staMacOverride = normalizeMac(String(macParam.getValue()));
 
     config.saveConfigFile();
     drd->stop();

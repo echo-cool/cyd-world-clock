@@ -23,6 +23,8 @@
 #define PROJECT_QUAD_WEATHER "quadWeather"
 #define PROJECT_DAYLIGHT_BAR "daylightBar"
 #define PROJECT_MARKET_BAR "marketBar"
+#define PROJECT_WEATHER_ALERTS "weatherAlerts"
+#define PROJECT_MAC_OVERRIDE "macOverride"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -61,6 +63,13 @@ public:
   // next boot (mDNS registers during setup).
   String hostname = "esp32worldclock";
 
+  // Optional custom STA MAC address ("AA:BB:CC:DD:EE:FF", empty = factory MAC).
+  // Lets the clock impersonate a device that a login-required (captive-portal)
+  // network has already authorized, since that access is granted per MAC. The
+  // ESP32 forgets a custom MAC across reboots, so it is re-applied every boot
+  // (netCheck.cpp applyStaMacOverride) and changing it requires a reboot.
+  String staMacOverride = "";
+
   // Night dimming, used by auto-brightness (ClockLogic.cpp):
   //  - nightBrightness (1-255) is the backlight target in a dark room (light
   //    sensor) or inside the schedule window below (sensor fallback).
@@ -84,12 +93,16 @@ public:
   //    bottom edge while its exchange is inside regular hours
   //  - smoothTimeFont: anti-aliased digits (fontTimeDigits.h) for the quad
   //    face's times instead of the pixel-doubled Font 4
+  //  - weatherAlerts: show a weather alert on a quadrant's market status line
+  //    (US cities: official NWS warnings; others: severe conditions from the
+  //    weather code). Alternates with the market status when both are present.
   bool smoothTimeFont = true;
   bool dayNightIcons = true;
   bool homeMarker = true;
   bool quadWeather = true;
   bool daylightBar = true;
   bool marketProgressBar = true;
+  bool weatherAlerts = true;
 
   bool fetchConfigFile();
   bool saveConfigFile();

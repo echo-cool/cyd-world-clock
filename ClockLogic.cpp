@@ -12,6 +12,8 @@
 #include "uiPages.h"
 #include "weatherService.h" // weatherBegin
 #include "wifiWatch.h"      // offline indicator on the home faces
+#include "netCheck.h"       // captivePortalActive - login-required indicator
+#include "wifiRelay.h"      // wifiRelayRequested - web-triggered login helper
 
 // Off-screen buffer for one full clock quadrant (160x120x16bpp = 38KB). Each
 // quadrant is rendered here and pushed to the panel in a single blit, so the
@@ -82,12 +84,24 @@ bool flashState = true;
 const unsigned long flashInterval = 1000; // 1 second
 bool flashJustChanged = false;
 
+// Weather-alert alternation on the quadrant status line: when a zone has both a
+// market status AND a weather alert, the line swaps slowly between them. The
+// market slot is longer so the market status stays the primary read; the swap
+// is slow (seconds) rather than a blink, to avoid distraction.
+const unsigned long WX_ALERT_MARKET_MS = 6000; // market status shown per cycle
+const unsigned long WX_ALERT_ALERT_MS = 4000;  // weather alert shown per cycle
+const uint16_t WX_ALERT_COLOR = TFT_ORANGE;    // distinct from any market color
+static bool wxAlertShowingAlert = false;       // false = market slot, true = alert
+static bool wxAlertPhaseJustChanged = false;
+static unsigned long wxAlertPhaseSince = 0;
+
 // Function declarations for flashing functionality
 bool shouldMessageFlash(String message);
 void updateFlashState();
+void updateWeatherAlertPhase();
 void resetFlashChangeFlag();
-void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex);
-bool needsFlashOnlyUpdate(WorldClockZone &zone);
+void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex);
+bool needsStatusBandUpdate(WorldClockZone &zone);
 void adjustBrightnessAuto();
 
 void SetupCYD()
@@ -602,6 +616,42 @@ static bool marketDayProgress(WorldClockZone &zone, float &frac)
     return true;
 }
 
+// What the quadrant's bottom status line should show right now: the market
+// status, a weather alert, or - when a zone has both - whichever the slow
+// alternation is currently on. Uses the cached zone.lastMarketStatus and
+// zone.weatherAlert; call refreshZoneWeatherAlert() first so the latter is
+// current. `flashes` is true only for the time-sensitive market alerts that
+// blink (weather alerts are always steady).
+struct StatusLine
+{
+    String text;
+    uint16_t color;
+    bool flashes;
+};
+
+static StatusLine computeStatusLine(WorldClockZone &zone)
+{
+    String mkt = zone.lastMarketStatus;
+    String wx = projectConfig.weatherAlerts ? zone.weatherAlert : String("");
+
+    if (wx.length() == 0)
+        return {mkt, getMarketStatusColor(mkt), shouldMessageFlash(mkt)};
+    if (mkt.length() == 0)
+        return {wx, WX_ALERT_COLOR, false}; // blank market line: show alert directly
+    // Both present: alternate, market status getting the longer slot.
+    if (wxAlertShowingAlert)
+        return {wx, WX_ALERT_COLOR, false};
+    return {mkt, getMarketStatusColor(mkt), shouldMessageFlash(mkt)};
+}
+
+// Refresh the zone's cached weather-alert text from the background task. Cheap
+// enough for the paint paths (per minute / on data changes), and keeps the
+// per-loop needsStatusBandUpdate() check lock-free.
+static void refreshZoneWeatherAlert(WorldClockZone &zone, int zoneIdx)
+{
+    zone.weatherAlert = projectConfig.weatherAlerts ? getZoneAlert(zoneIdx) : String("");
+}
+
 // Render one quadrant's full content (label, time, AM/PM, day/date, market
 // status) with gfx primitives at offset (ox, oy). gfx is normally the
 // off-screen quadSprite (ox = oy = 0), which is then pushed to the panel in
@@ -738,10 +788,14 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         gfx.drawString(dayText, centerX, dayY);
     }
     gfx.setTextSize(2);
-    gfx.drawString(dateBuffer, centerX, dateY);
+    // With the quadrant temperature enabled the date shifts left a little:
+    // dead-centered, its last digit touches the condition dot of a two-digit
+    // reading (date right edge and dot left edge both land on x+128).
+    int dateX = projectConfig.quadWeather ? centerX - 8 : centerX;
+    gfx.drawString(dateBuffer, dateX, dateY);
 
-    // Current temperature on the right of the date line (the centered date is
-    // always 8 chars, so this slot is guaranteed free). The condition rides
+    // Current temperature on the right of the date line (the date is always
+    // 8 chars, so this slot is guaranteed free). The condition rides
     // in a color dot next to a white reading; sub -9 degree readings are a
     // character wider, so they drop the dot and carry the condition in the
     // digit color instead. Data comes from the background fetch task that
@@ -767,18 +821,19 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         }
     }
 
-    // Market status if this zone has a market. Uses the cached status
-    // (refreshed once per minute in hasTimeChanged) rather than recomputing
-    // the String here on every redraw. The <=10-minute open/close alerts
-    // flash: in the flash-off phase the line is simply not drawn.
-    String marketStatus = zone.lastMarketStatus;
-    if (marketStatus.length() > 0 &&
-        (!shouldMessageFlash(marketStatus) || flashState)) {
+    // Bottom status line: the market status and/or a weather alert. Both use
+    // cached values (market refreshed per minute in hasTimeChanged; alert
+    // refreshed here from the background task). When a zone has both, they
+    // alternate (computeStatusLine); the <=10-minute open/close market alerts
+    // still flash - in the flash-off phase that line is simply not drawn.
+    refreshZoneWeatherAlert(zone, zoneIdx);
+    StatusLine line = computeStatusLine(zone);
+    if (line.text.length() > 0 && (!line.flashes || flashState)) {
         gfx.setTextFont(1);
         gfx.setTextSize(1);
         gfx.setTextDatum(TC_DATUM);
-        gfx.setTextColor(getMarketStatusColor(marketStatus), clockBackgroundColor);
-        gfx.drawString(marketStatus, centerX, oy + quadrantHeight - 10);
+        gfx.setTextColor(line.color, clockBackgroundColor);
+        gfx.drawString(line.text, centerX, oy + quadrantHeight - 10);
     }
 
     // Trading-day progress along the bottom edge while the exchange is inside
@@ -811,38 +866,69 @@ void updateFlashState()
     }
 }
 
+// Advance the slow market/weather-alert alternation. Asymmetric dwell (market
+// slot longer) keeps the market status the primary read while still surfacing
+// the alert. Sets wxAlertPhaseJustChanged so the affected quadrants repaint.
+void updateWeatherAlertPhase()
+{
+    unsigned long now = millis();
+    unsigned long dwell = wxAlertShowingAlert ? WX_ALERT_ALERT_MS : WX_ALERT_MARKET_MS;
+    if (now - wxAlertPhaseSince >= dwell) {
+        wxAlertShowingAlert = !wxAlertShowingAlert;
+        wxAlertPhaseSince = now;
+        wxAlertPhaseJustChanged = true;
+    }
+}
+
 void resetFlashChangeFlag()
 {
     flashJustChanged = false;
+    wxAlertPhaseJustChanged = false;
 }
 
-void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
+// Repaint just the bottom status band (market status / weather alert) without
+// redrawing the whole quadrant. Called between minute ticks when the flash
+// toggles or the market/alert alternation swaps.
+void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
-    String marketStatus = zone.lastMarketStatus; // cached, refreshed per minute
 
-    if (marketStatus.length() > 0 && shouldMessageFlash(marketStatus)) {
-        // Calculate the exact area where market status is displayed
-        tft.setTextFont(1);
-        tft.setTextSize(1);
-        int textWidth = tft.textWidth(marketStatus);
-        int textHeight = tft.fontHeight();
-        int textX = quad.centerX - textWidth / 2;
-        int textY = quad.y + quadrantHeight - 10;
-
-        // Clear only the market status area. Stops just above the bottom-edge
-        // market progress bar (its top row is textY + textHeight), which a
-        // "CLOSE IN" alert would otherwise notch on every flash.
-        tft.fillRect(textX - 2, textY - 1, textWidth + 8, textHeight + 1, clockBackgroundColor);
-
-        // Redraw the market status with current flash state
-        if (flashState) {
-            uint16_t marketColor = getMarketStatusColor(marketStatus);
-            tft.setTextColor(marketColor, clockBackgroundColor);
-            tft.drawString(marketStatus, quad.centerX, textY);
-        }
-        // If flashState is false, we just leave the cleared area empty (invisible)
+    if (quadSpriteOk) {
+        // Re-render the quadrant off-screen and push only the bottom band
+        // holding the status line and the progress bar. Pixel-identical to a
+        // full redraw - correct text placement, clipped at the quadrant edge,
+        // and the grid / home-border pixels a direct clear rect would notch
+        // are all repainted - without blitting the rest of the quadrant.
+        renderQuadrantContent(quadSprite, 0, 0, zone, quadrantIndex);
+        int bandY = quadrantHeight - 12;
+        quadSprite.pushSprite(quad.x, quad.y + bandY, 0, bandY, quadrantWidth, 12);
+        return;
     }
+
+    // Degraded direct-to-panel path (sprite allocation failed). Clip to the
+    // quadrant so a wide alert cannot spill over the neighbouring quadrant
+    // (vpDatum=false keeps absolute screen coordinates).
+    refreshZoneWeatherAlert(zone, quadrantIndex);
+    StatusLine line = computeStatusLine(zone);
+    bool visible = line.text.length() > 0 && (!line.flashes || flashState);
+
+    tft.setTextFont(1);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    int textY = quad.y + quadrantHeight - 10;
+    tft.setViewport(quad.x, quad.y, quadrantWidth, quadrantHeight, false);
+
+    // Clear the status-line row (full quadrant width, clipped by the viewport).
+    // Stops just above the bottom-edge market progress bar so an alert cannot
+    // notch it on every swap/flash.
+    tft.fillRect(quad.x + 2, textY - 1, quadrantWidth - 4, tft.fontHeight() + 1, clockBackgroundColor);
+
+    if (visible) {
+        tft.setTextColor(line.color, clockBackgroundColor);
+        tft.drawString(line.text, quad.centerX, textY);
+    }
+
+    tft.resetViewport();
 }
 
 bool hasTimeChanged(WorldClockZone &zone)
@@ -918,10 +1004,24 @@ bool hasTimeChanged(WorldClockZone &zone)
     return timeChanged;
 }
 
-bool needsFlashOnlyUpdate(WorldClockZone &zone)
+// Whether the status band needs a mid-minute repaint this frame: either a
+// flashing market alert toggled while it is the line on screen, or the
+// market/weather-alert alternation just swapped for a zone that has both.
+// Uses only cached values (no locks, no String rebuilds) so it is cheap to
+// call every loop for all four zones.
+bool needsStatusBandUpdate(WorldClockZone &zone)
 {
-    if (flashJustChanged && zone.market.hasMarket) {
-        return shouldMessageFlash(zone.lastMarketStatus); // cached status
+    bool hasMkt = zone.lastMarketStatus.length() > 0;
+    bool hasAlert = projectConfig.weatherAlerts && zone.weatherAlert.length() > 0;
+
+    // The swap only changes the display when a zone carries both lines.
+    if (wxAlertPhaseJustChanged && hasMkt && hasAlert) return true;
+
+    // A flashing market alert blinks only while the market line is showing
+    // (i.e. not during the alert slot of an alternating zone).
+    if (flashJustChanged) {
+        bool showingMarket = hasMkt && !(hasAlert && wxAlertShowingAlert);
+        if (showingMarket && shouldMessageFlash(zone.lastMarketStatus)) return true;
     }
     return false;
 }
@@ -1383,30 +1483,52 @@ void handleTouch()
     }
 }
 
-// Steady (non-blinking) "NO WIFI" label at the bottom-center of the home
-// faces while the connection has been gone for over a minute (wifiWatch.cpp
-// handles the reconnect kicks / self-heal reboot). Redrawn on a short cadence
-// because the faces repaint their own regions each minute and would erase it;
-// when the connection returns, a full repaint restores whatever it covered.
+// Steady (non-blinking) status label at the bottom-center of the home faces:
+//  - "WIFI LOGIN REQUIRED" (orange) when associated but walled off behind a
+//    captive portal (netCheck.cpp) - the clock is on WiFi but has no internet
+//    until someone logs the network in; see http://<device-ip>/wifi-login.
+//  - "NO WIFI" (red) when the connection has been gone for over a minute
+//    (wifiWatch.cpp handles the reconnect kicks / self-heal reboot).
+// Captive takes precedence over offline. Redrawn on a short cadence because the
+// faces repaint their own regions each minute and would erase it; when the
+// condition clears, a full repaint restores whatever the label covered.
 static void serviceWifiIndicator()
 {
     static bool drawn = false;
     static unsigned long lastDrawMs = 0;
+    static const char *shownLabel = nullptr;
 
-    bool show = wifiOfflineDurationMs() >= WIFI_INDICATOR_AFTER_MS;
-    if (show) {
-        if (!drawn || millis() - lastDrawMs >= 250) {
-            tft.fillRect(160 - 26, 230, 52, 10, clockBackgroundColor);
+    bool captive = captivePortalActive();
+    bool offline = wifiOfflineDurationMs() >= WIFI_INDICATOR_AFTER_MS;
+    const char *label = captive ? "WIFI LOGIN REQUIRED" : (offline ? "NO WIFI" : nullptr);
+
+    if (label) {
+        bool labelChanged = (shownLabel != label);
+        if (labelChanged) {
+            // Wipe the previous (possibly wider) label before the new one, via
+            // a full repaint so no stray pixels are left behind.
+            firstDraw = true;
+            for (int i = 0; i < 4; i++) {
+                worldZones[i].initialized = false;
+            }
+        }
+        if (!drawn || labelChanged || millis() - lastDrawMs >= 250) {
             tft.setTextFont(1);
             tft.setTextSize(1);
             tft.setTextDatum(TC_DATUM);
-            tft.setTextColor(TFT_RED, clockBackgroundColor);
-            tft.drawString("NO WIFI", 160, 231);
+            int w = tft.textWidth(label);
+            // Clear rect + the 8px text cell both end at row 237: rows 238-239
+            // belong to the bottom quadrants' market progress bars.
+            tft.fillRect(160 - w / 2 - 2, 230, w + 4, 8, clockBackgroundColor);
+            tft.setTextColor(captive ? TFT_ORANGE : TFT_RED, clockBackgroundColor);
+            tft.drawString(label, 160, 230);
             drawn = true;
+            shownLabel = label;
             lastDrawMs = millis();
         }
     } else if (drawn) {
         drawn = false;
+        shownLabel = nullptr;
         firstDraw = true; // full repaint to restore what the label covered
         for (int i = 0; i < 4; i++) {
             worldZones[i].initialized = false;
@@ -1419,8 +1541,17 @@ void drawRollingClock()
     // Handle serial commands
     handleSerialCommands();
 
-    // Update flash state for market status messages
+    // Update flash state for market status messages, and advance the slow
+    // market/weather-alert alternation on the quadrant status line.
     updateFlashState();
+    updateWeatherAlertPhase();
+
+    // The web /wifi-login page can ask (from any screen) to open the on-device
+    // captive-portal login helper; honour it here on the main core.
+    if (wifiRelayRequested() && uiScreen != SCREEN_WIFI_LOGIN)
+    {
+        openWifiLoginHelper();
+    }
 
     // If a settings/status/timezone page is open, it owns the screen and the
     // touch input; the clock quadrants resume when the user navigates back.
@@ -1465,10 +1596,10 @@ void drawRollingClock()
         }
     }
 
-    // Likewise for the quadrant temperatures: repaint as soon as the
-    // background weather task delivers fresh data instead of waiting for the
-    // next minute tick.
-    if (projectConfig.quadWeather) {
+    // Likewise for the quadrant temperatures and weather alerts: repaint as
+    // soon as the background weather task delivers fresh data instead of
+    // waiting for the next minute tick.
+    if (projectConfig.quadWeather || projectConfig.weatherAlerts) {
         static uint32_t lastQuadWeatherVersion = 0;
         uint32_t weatherVersion = weatherDataVersion();
         if (weatherVersion != lastQuadWeatherVersion) {
@@ -1495,10 +1626,11 @@ void drawRollingClock()
                 // Full redraw needed (time, date, or market status changed)
                 CLOCK_DEBUG_PRINTLN("Calling DrawSingleTimeZone for " + worldZones[i].name);
                 DrawSingleTimeZone(worldZones[i], i);
-            } else if (!brightnessBarVisible && needsFlashOnlyUpdate(worldZones[i])) {
-                // Only market status flashing update needed (skipped while the
+            } else if (!brightnessBarVisible && needsStatusBandUpdate(worldZones[i])) {
+                // Only the status band changed - flashing market alert toggled,
+                // or the market/weather-alert line swapped (skipped while the
                 // brightness bar overlay owns the center of the screen)
-                updateMarketStatusOnly(worldZones[i], i);
+                updateStatusBandOnly(worldZones[i], i);
             }
         }
     }

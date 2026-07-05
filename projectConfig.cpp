@@ -45,6 +45,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_CLOCK_FACE] = c.clockFace;
   json[PROJECT_SHOW_GRID] = c.showGrid;
   json[PROJECT_HOSTNAME] = c.hostname;
+  json[PROJECT_MAC_OVERRIDE] = c.staMacOverride;
   json[PROJECT_NIGHT_START] = c.nightStartHour;
   json[PROJECT_NIGHT_END] = c.nightEndHour;
   json[PROJECT_NIGHT_BRIGHTNESS] = c.nightBrightness;
@@ -54,6 +55,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_QUAD_WEATHER] = c.quadWeather;
   json[PROJECT_DAYLIGHT_BAR] = c.daylightBar;
   json[PROJECT_MARKET_BAR] = c.marketProgressBar;
+  json[PROJECT_WEATHER_ALERTS] = c.weatherAlerts;
 }
 
 // Apply json onto the settings; missing keys keep their current values and
@@ -121,6 +123,12 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
     any = true;
   }
 
+  if (json.containsKey(PROJECT_MAC_OVERRIDE))
+  {
+    c.staMacOverride = String(json[PROJECT_MAC_OVERRIDE].as<String>());
+    any = true;
+  }
+
   if (json.containsKey(PROJECT_NIGHT_START))
   {
     c.nightStartHour = constrain(json[PROJECT_NIGHT_START].as<int>(), 0, 23);
@@ -147,6 +155,7 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
       {PROJECT_QUAD_WEATHER, &c.quadWeather},
       {PROJECT_DAYLIGHT_BAR, &c.daylightBar},
       {PROJECT_MARKET_BAR, &c.marketProgressBar},
+      {PROJECT_WEATHER_ALERTS, &c.weatherAlerts},
   };
   for (auto &extra : extras)
   {
