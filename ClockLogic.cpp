@@ -489,6 +489,19 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
 {
     gfx.fillRect(ox, oy, quadrantWidth, quadrantHeight, clockBackgroundColor);
 
+    // Optional divider grid between the quadrants (settings / web page). Each
+    // quadrant draws its own shared edges - the left edge in the right column,
+    // the top edge in the bottom row - so the lines are part of the quadrant
+    // content and survive single-quadrant redraws and blits.
+    if (projectConfig.showGrid) {
+        if (zoneIdx == 1 || zoneIdx == 3) {
+            gfx.drawFastVLine(ox, oy, quadrantHeight, TFT_DARKGREY);
+        }
+        if (zoneIdx == 2 || zoneIdx == 3) {
+            gfx.drawFastHLine(ox, oy, quadrantWidth, TFT_DARKGREY);
+        }
+    }
+
     time_t local = zone.tz.now();
     uint16_t timeColor = getDayNightColor(zone);
     uint16_t labelColor = getDayNightLabelColor(zone);

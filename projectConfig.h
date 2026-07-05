@@ -12,6 +12,7 @@
 #define PROJECT_ZONE_TZ_PREFIX "zoneTz"
 #define PROJECT_BRIGHTNESS "brightness"
 #define PROJECT_CLOCK_FACE "clockFace"
+#define PROJECT_SHOW_GRID "showGrid"
 #define PROJECT_HOSTNAME "hostname"
 #define PROJECT_NIGHT_START "nightStartHour"
 #define PROJECT_NIGHT_END "nightEndHour"
@@ -45,6 +46,9 @@ public:
   // Home-screen face (ClockFace enum in clockFaces.h): 0 = quad world clock,
   // 1 = big clock, 2 = calendar, 3 = weather, 4 = markets.
   int clockFace = 0;
+
+  // Divider grid between the four quadrants of the world-clock face.
+  bool showGrid = false;
 
   // mDNS / OTA hostname ("<hostname>.local"). Changeable from the web
   // settings page so two clocks on one network don't collide; applied on the
