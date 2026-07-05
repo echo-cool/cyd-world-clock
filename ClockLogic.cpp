@@ -6,6 +6,7 @@
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // holidaysBegin, getHolidayName
 #include "marketHolidays.h"
+#include "projectConfig.h" // home-screen extras toggles
 #include "serialCommands.h"
 #include "uiPages.h"
 #include "weatherService.h" // weatherBegin
@@ -188,21 +189,54 @@ static DayPhase zoneDayPhase(WorldClockZone &zone)
     return hr >= 18 ? PHASE_EVENING : PHASE_NIGHT;
 }
 
+// Cool "night sky" blues used for evening/night text when the readable
+// night-colors option (projectConfig.dayNightIcons) is on. The legacy greys
+// encoded the phase in brightness, but dark grey digits on the black
+// background - on top of the auto-dimmed backlight - made the time hardest
+// to read exactly when it's glanced at half-awake. With the option on, the
+// sun/moon icon carries the day/night meaning instead, so the text can stay
+// readable: warm by day, cool blue at night.
+static const uint16_t EVENING_TEXT_COLOR = 0x965F; // light ice blue
+static const uint16_t NIGHT_TEXT_COLOR = 0x7D5D;   // dimmer steel blue
+
 uint16_t getDayNightColor(WorldClockZone &zone)
 {
+    bool readable = projectConfig.dayNightIcons;
     switch (zoneDayPhase(zone)) {
     case PHASE_DAY: return TFT_ORANGE;
-    case PHASE_EVENING: return TFT_LIGHTGREY;
-    default: return TFT_DARKGREY;
+    case PHASE_EVENING: return readable ? EVENING_TEXT_COLOR : TFT_LIGHTGREY;
+    default: return readable ? NIGHT_TEXT_COLOR : TFT_DARKGREY;
     }
 }
 
 uint16_t getDayNightLabelColor(WorldClockZone &zone)
 {
+    bool readable = projectConfig.dayNightIcons;
     switch (zoneDayPhase(zone)) {
     case PHASE_DAY: return TFT_YELLOW;
-    case PHASE_EVENING: return TFT_LIGHTGREY;
-    default: return TFT_DARKGREY;
+    case PHASE_EVENING: return readable ? EVENING_TEXT_COLOR : TFT_LIGHTGREY;
+    default: return readable ? NIGHT_TEXT_COLOR : TFT_DARKGREY;
+    }
+}
+
+// ~12px sun (day) or crescent moon (evening/night) so the day/night state
+// doesn't ride on text color alone. Sized/positioned to clear the longest
+// centered city names (e.g. SANTA CLARA starts at quadrant x=14).
+static void drawDayNightIcon(TFT_eSPI &gfx, int cx, int cy, DayPhase phase)
+{
+    if (phase == PHASE_DAY) {
+        gfx.fillCircle(cx, cy, 3, TFT_YELLOW);
+        static const int8_t rays[8][4] = {
+            {5, 0, 6, 0}, {-5, 0, -6, 0}, {0, 5, 0, 6}, {0, -5, 0, -6},
+            {4, 4, 5, 5}, {-4, 4, -5, 5}, {4, -4, 5, -5}, {-4, -4, -5, -5}};
+        for (int i = 0; i < 8; i++) {
+            gfx.drawLine(cx + rays[i][0], cy + rays[i][1],
+                         cx + rays[i][2], cy + rays[i][3], TFT_YELLOW);
+        }
+    } else {
+        uint16_t c = (phase == PHASE_EVENING) ? EVENING_TEXT_COLOR : NIGHT_TEXT_COLOR;
+        gfx.fillCircle(cx, cy, 4, c);
+        gfx.fillCircle(cx + 3, cy - 1, 4, clockBackgroundColor); // carve the crescent
     }
 }
 
@@ -479,6 +513,94 @@ uint16_t getMarketStatusColor(String status)
     }
 }
 
+// Color for the daylight bar at a given solar elevation: deep blue night,
+// dark blue twilight, orange around the horizon, warm yellow midday.
+// Piecewise-linear blend between the anchor stops.
+static uint16_t daylightBarColor(float elevDeg)
+{
+    static const struct { float e; uint8_t r, g, b; } stops[] = {
+        {-18.0f, 8, 10, 35},    // astronomical night
+        {-6.0f, 30, 40, 90},    // civil twilight
+        {0.0f, 200, 90, 25},    // sunrise / sunset
+        {12.0f, 255, 160, 30},  // low sun
+        {40.0f, 255, 225, 90},  // high sun
+    };
+    const int n = sizeof(stops) / sizeof(stops[0]);
+    if (elevDeg <= stops[0].e) return tft.color565(stops[0].r, stops[0].g, stops[0].b);
+    for (int i = 1; i < n; i++) {
+        if (elevDeg <= stops[i].e) {
+            float f = (elevDeg - stops[i - 1].e) / (stops[i].e - stops[i - 1].e);
+            uint8_t r = stops[i - 1].r + f * (stops[i].r - stops[i - 1].r);
+            uint8_t g = stops[i - 1].g + f * (stops[i].g - stops[i - 1].g);
+            uint8_t b = stops[i - 1].b + f * (stops[i].b - stops[i - 1].b);
+            return tft.color565(r, g, b);
+        }
+    }
+    return tft.color565(stops[n - 1].r, stops[n - 1].g, stops[n - 1].b);
+}
+
+// 3px daylight gradient bar: the zone's local 00:00-24:00 mapped left to
+// right, each column colored by the sun's real elevation at that moment
+// today (same solar math as the day/night colors), with a white tick at the
+// current time. Shows at a glance how deep into day or night each city is.
+// Skipped for zones without preset coordinates.
+static void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone)
+{
+    float lat, lon;
+    if (!getCityCoords(zone.timezone, lat, lon)) return;
+
+    time_t local = zone.tz.now();
+    time_t utcNow = UTC.now();
+    long secOfDay = (long)hour(local) * 3600 + (long)minute(local) * 60 + second(local);
+
+    for (int i = 0; i < w; i++) {
+        long colSec = (long)i * 86400L / (w - 1);
+        time_t colUtc = utcNow + (colSec - secOfDay);
+        gfx.drawFastVLine(x + i, y, 3, daylightBarColor(solarElevationDeg(lat, lon, colUtc)));
+    }
+
+    // "Now" tick, with background-color gaps so it reads inside the bright
+    // midday section too
+    int tickX = x + (int)(secOfDay * (long)(w - 1) / 86400L);
+    gfx.drawFastVLine(tickX - 1, y - 2, 7, clockBackgroundColor);
+    gfx.drawFastVLine(tickX + 1, y - 2, 7, clockBackgroundColor);
+    gfx.drawFastVLine(tickX, y - 2, 7, TFT_WHITE);
+}
+
+// Fraction (0..1) of the exchange's regular trading day already elapsed;
+// false when the exchange is outside it (weekend, holiday, before open /
+// after close). The span runs from the first REGULAR open to the last
+// REGULAR close - the SSE lunch break stays inside the span - and half-day
+// early closes truncate it, matching getMarketStatus.
+static bool marketDayProgress(WorldClockZone &zone, float &frac)
+{
+    if (!zone.market.hasMarket) return false;
+
+    time_t local = zone.tz.now();
+    int wd = weekday(local);
+    if (wd == 1 || wd == 7) return false; // weekend
+    if (isMarketHoliday(zone.market.exchange, year(local), month(local), day(local))) return false;
+
+    int openMin = -1, closeMin = -1;
+    for (int i = 0; i < zone.market.sessionCount; i++) {
+        const TradingSession &s = zone.market.sessions[i];
+        if (s.sessionName != "REGULAR") continue;
+        int start = s.openHour * 60 + s.openMinute;
+        int end = s.closeHour * 60 + s.closeMinute;
+        if (openMin < 0 || start < openMin) openMin = start;
+        if (end > closeMin) closeMin = end;
+    }
+    if (openMin < 0) return false;
+
+    int early = marketEarlyCloseMinutes(zone.market.exchange, year(local), month(local), day(local));
+    if (early >= 0 && early < closeMin) closeMin = early;
+
+    int nowMin = hour(local) * 60 + minute(local);
+    if (closeMin <= openMin || nowMin < openMin || nowMin >= closeMin) return false;
+    frac = (float)(nowMin - openMin) / (float)(closeMin - openMin);
+    return true;
+}
+
 // Render one quadrant's full content (label, time, AM/PM, day/date, market
 // status) with gfx primitives at offset (ox, oy). gfx is normally the
 // off-screen quadSprite (ox = oy = 0), which is then pushed to the panel in
@@ -490,9 +612,23 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     gfx.fillRect(ox, oy, quadrantWidth, quadrantHeight, clockBackgroundColor);
 
     time_t local = zone.tz.now();
+    DayPhase phase = zoneDayPhase(zone);
     uint16_t timeColor = getDayNightColor(zone);
     uint16_t labelColor = getDayNightLabelColor(zone);
     int centerX = ox + quadrantWidth / 2;
+
+    // Accent border marking the home quadrant - the reference all the (+1)
+    // day offsets are computed against. Drawn first so the bars/text win any
+    // overlap along the edges.
+    if (projectConfig.homeMarker && zoneIdx == 0) {
+        gfx.drawRoundRect(ox, oy, quadrantWidth, quadrantHeight, 6, TFT_DARKCYAN);
+    }
+
+    // Sun/moon glyph in the top-left corner: the explicit day/night marker
+    // (the text colors alone used to carry this meaning)
+    if (projectConfig.dayNightIcons) {
+        drawDayNightIcon(gfx, ox + 7, oy + 11, phase);
+    }
 
     // Timezone label, top-center
     gfx.setTextFont(1);
@@ -517,6 +653,19 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         gfx.setTextDatum(TR_DATUM);
         gfx.setTextColor(timeColor, clockBackgroundColor);
         gfx.drawString(pm ? "PM" : "AM", ox + quadrantWidth - 4, oy + 6);
+    }
+
+    // Daylight gradient bar under the time. It needs a few extra rows, so the
+    // day/date lines shift down slightly while it is enabled; with it off the
+    // layout is exactly the classic one.
+    int dayY = oy + quadrantHeight - 50;     // day name (size 2)
+    int holidayY = oy + quadrantHeight - 46; // holiday day line (size 1)
+    int dateY = oy + quadrantHeight - 30;    // date (size 2)
+    if (projectConfig.daylightBar) {
+        renderDaylightBar(gfx, centerX - 60, oy + 69, 120, zone);
+        dayY = oy + 74;
+        holidayY = oy + 78;
+        dateY = oy + 92;
     }
 
     // Day name with the day-offset vs home (top-left quadrant). Compare actual
@@ -558,13 +707,40 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         }
         gfx.setTextSize(1);
         // Vertically centered in the slot the size-2 day name normally fills
-        gfx.drawString(dayLine, centerX, oy + quadrantHeight - 46);
+        gfx.drawString(dayLine, centerX, holidayY);
     } else {
         gfx.setTextSize(2);
-        gfx.drawString(dayText, centerX, oy + quadrantHeight - 50);
+        gfx.drawString(dayText, centerX, dayY);
     }
     gfx.setTextSize(2);
-    gfx.drawString(dateBuffer, centerX, oy + quadrantHeight - 30);
+    gfx.drawString(dateBuffer, centerX, dateY);
+
+    // Current temperature on the right of the date line (the centered date is
+    // always 8 chars, so this slot is guaranteed free). The condition rides
+    // in a color dot next to a white reading; sub -9 degree readings are a
+    // character wider, so they drop the dot and carry the condition in the
+    // digit color instead. Data comes from the background fetch task that
+    // already serves the weather face; nothing is shown until the first
+    // fetch lands (or for zones without preset coordinates).
+    if (projectConfig.quadWeather) {
+        ZoneWeather w = getZoneWeather(zoneIdx);
+        if (w.valid) {
+            String temp = String((int)lroundf(w.tempC));
+            uint16_t condColor = weatherCodeColor(w.weatherCode);
+            bool dotFits = temp.length() <= 2;
+            uint16_t tempColor = dotFits ? TFT_WHITE : condColor;
+            gfx.setTextFont(1);
+            gfx.setTextSize(1);
+            gfx.setTextDatum(TR_DATUM);
+            gfx.setTextColor(tempColor, clockBackgroundColor);
+            int tempRight = ox + quadrantWidth - 10;
+            gfx.drawString(temp, tempRight, dateY + 4);
+            gfx.drawCircle(ox + quadrantWidth - 7, dateY + 5, 2, tempColor); // degree mark
+            if (dotFits) {
+                gfx.fillCircle(tempRight - gfx.textWidth(temp) - 7, dateY + 8, 3, condColor);
+            }
+        }
+    }
 
     // Market status if this zone has a market. Uses the cached status
     // (refreshed once per minute in hasTimeChanged) rather than recomputing
@@ -578,6 +754,20 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         gfx.setTextDatum(TC_DATUM);
         gfx.setTextColor(getMarketStatusColor(marketStatus), clockBackgroundColor);
         gfx.drawString(marketStatus, centerX, oy + quadrantHeight - 10);
+    }
+
+    // Trading-day progress along the bottom edge while the exchange is inside
+    // regular hours: how much of the session is left, at a glance. Green like
+    // the "OPEN" status text; absent outside regular hours.
+    if (projectConfig.marketProgressBar) {
+        float frac;
+        if (marketDayProgress(zone, frac)) {
+            int barWidth = 120;
+            int barX = centerX - barWidth / 2;
+            int barY = oy + quadrantHeight - 2;
+            gfx.fillRect(barX, barY, barWidth, 2, 0x39E7 /* dim grey track */);
+            gfx.fillRect(barX, barY, (int)(barWidth * frac + 0.5f), 2, TFT_GREEN);
+        }
     }
 }
 
@@ -1245,6 +1435,20 @@ void drawRollingClock()
         lastQuadHolidayVersion = holidayVersion;
         for (int i = 0; i < 4; i++) {
             worldZones[i].initialized = false;
+        }
+    }
+
+    // Likewise for the quadrant temperatures: repaint as soon as the
+    // background weather task delivers fresh data instead of waiting for the
+    // next minute tick.
+    if (projectConfig.quadWeather) {
+        static uint32_t lastQuadWeatherVersion = 0;
+        uint32_t weatherVersion = weatherDataVersion();
+        if (weatherVersion != lastQuadWeatherVersion) {
+            lastQuadWeatherVersion = weatherVersion;
+            for (int i = 0; i < 4; i++) {
+                worldZones[i].initialized = false;
+            }
         }
     }
 

@@ -335,6 +335,15 @@ static void appendZoneSelect(String &page, const char *label, int slot)
     page += "</select></label>";
 }
 
+// On/Off <select> for one of the home-screen extras toggles.
+static void appendToggle(String &page, const char *label, const char *name, bool on)
+{
+    page += "<label>" + String(label) + "<select name=\"" + name + "\">";
+    page += String("<option value=\"1\"") + (on ? " selected" : "") + ">On</option>";
+    page += String("<option value=\"0\"") + (!on ? " selected" : "") + ">Off</option>";
+    page += "</select></label>";
+}
+
 // 0:00 .. 23:00 <option> rows for the night-window hour selects.
 static void appendHourOptions(String &page, int selected)
 {
@@ -383,6 +392,18 @@ static void handleSettingsPage()
     page += String("<option value=\"dmy\"") + (NOT_US_DATE ? " selected" : "") + ">DD/MM/YY</option>";
     page += String("<option value=\"mdy\"") + (!NOT_US_DATE ? " selected" : "") + ">MM/DD/YY</option>";
     page += "</select></label>";
+
+    // Home-screen extras: each new world-clock face element is individually
+    // revertible to the classic look.
+    page += "<p>Home-screen extras (world-clock face):</p>";
+    page += "<div class=\"row\">";
+    appendToggle(page, "Sun/moon icons + night colors", "qdn", projectConfig.dayNightIcons);
+    appendToggle(page, "Home quadrant border", "qhome", projectConfig.homeMarker);
+    page += "</div><div class=\"row\">";
+    appendToggle(page, "Weather in quadrants", "qwx", projectConfig.quadWeather);
+    appendToggle(page, "Daylight bar", "qdb", projectConfig.daylightBar);
+    page += "</div>";
+    appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
 
     int pct = map(backlightLevel, 5, 255, 0, 100);
     page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
@@ -502,6 +523,24 @@ static void handleSettingsPost()
         if (v >= 1 && v <= 255 && v != projectConfig.nightBrightness)
         {
             projectConfig.nightBrightness = v;
+            cfgDirty = true;
+        }
+    }
+    // Home-screen extras toggles
+    struct { const char *arg; bool *value; } extras[] = {
+        {"qdn", &projectConfig.dayNightIcons},
+        {"qhome", &projectConfig.homeMarker},
+        {"qwx", &projectConfig.quadWeather},
+        {"qdb", &projectConfig.daylightBar},
+        {"qmb", &projectConfig.marketProgressBar},
+    };
+    for (auto &extra : extras)
+    {
+        if (!webServer.hasArg(extra.arg)) continue;
+        bool v = webServer.arg(extra.arg) == "1";
+        if (v != *extra.value)
+        {
+            *extra.value = v;
             cfgDirty = true;
         }
     }
