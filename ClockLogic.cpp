@@ -805,8 +805,10 @@ void updateMarketStatusOnly(WorldClockZone &zone, int quadrantIndex)
         int textX = quad.centerX - textWidth / 2;
         int textY = quad.y + quadrantHeight - 10;
 
-        // Clear only the market status area
-        tft.fillRect(textX - 2, textY - 1, textWidth + 8, textHeight + 2, clockBackgroundColor);
+        // Clear only the market status area. Stops just above the bottom-edge
+        // market progress bar (its top row is textY + textHeight), which a
+        // "CLOSE IN" alert would otherwise notch on every flash.
+        tft.fillRect(textX - 2, textY - 1, textWidth + 8, textHeight + 1, clockBackgroundColor);
 
         // Redraw the market status with current flash state
         if (flashState) {
