@@ -43,6 +43,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
 
   json[PROJECT_BRIGHTNESS] = c.brightness;
   json[PROJECT_CLOCK_FACE] = c.clockFace;
+  json[PROJECT_SHOW_GRID] = c.showGrid;
   json[PROJECT_HOSTNAME] = c.hostname;
   json[PROJECT_NIGHT_START] = c.nightStartHour;
   json[PROJECT_NIGHT_END] = c.nightEndHour;
@@ -99,6 +100,12 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
   if (json.containsKey(PROJECT_CLOCK_FACE))
   {
     c.clockFace = constrain(json[PROJECT_CLOCK_FACE].as<int>(), 0, FACE_COUNT - 1);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_SHOW_GRID))
+  {
+    c.showGrid = json[PROJECT_SHOW_GRID].as<bool>();
     any = true;
   }
 

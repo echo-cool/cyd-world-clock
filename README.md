@@ -282,6 +282,8 @@ settings page (the choice is saved to flash):
 - **Clock face** — cycle between the four home-screen faces (see above).
 - **Clock format** — toggle between 24-hour and 12-hour (AM/PM) display.
 - **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
+- **Quadrant grid** — toggle divider lines between the four quadrants of the
+  world-clock face (default: off).
 - **Brightness** — `-` / `+` buttons adjust the backlight (also pauses
   auto-brightness for 2 hours, same as the home-screen gesture). The level is
   saved and restored on the next boot, and is used as the daytime target by
@@ -306,8 +308,8 @@ each zone currently has.
 
 Everything on the settings page can also be changed from a browser: go to
 `http://esp32worldclock.local/` (or the device IP shown on the System status
-page) to pick the four timezones, clock face, clock/date format and
-brightness without touching the device. The web page additionally exposes a
+page) to pick the four timezones, clock face, quadrant grid, clock/date
+format and brightness without touching the device. The web page additionally exposes a
 few settings that have no on-device UI:
 
 - **Night dimming** — the backlight level used at night (default: minimum)

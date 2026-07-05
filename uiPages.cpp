@@ -176,16 +176,17 @@ void drawButton(const UIButton &b, const String &label, uint16_t border, uint16_
     tft.drawString(label, b.x + b.w / 2, b.y + b.h / 2);
 }
 
-// Settings page layout (6 rows, 34px pitch, below the 26px title)
-const UIButton BTN_SET_TZ = {20, 30, 280, 28};
-const UIButton BTN_SET_FACE = {20, 64, 280, 28};
-const UIButton BTN_SET_CLK = {20, 98, 280, 28};
-const UIButton BTN_SET_DATE = {20, 132, 280, 28};
-const UIButton BTN_SET_DIM = {20, 166, 60, 28};
-const UIButton BTN_SET_BRI = {240, 166, 60, 28};
-const UIButton BTN_SET_STAT = {20, 200, 85, 28};
-const UIButton BTN_SET_LOGS = {113, 200, 89, 28};
-const UIButton BTN_SET_BACK = {210, 200, 90, 28};
+// Settings page layout (7 rows, 30px pitch, below the 26px title)
+const UIButton BTN_SET_TZ = {20, 28, 280, 26};
+const UIButton BTN_SET_FACE = {20, 58, 280, 26};
+const UIButton BTN_SET_CLK = {20, 88, 280, 26};
+const UIButton BTN_SET_DATE = {20, 118, 280, 26};
+const UIButton BTN_SET_GRID = {20, 148, 280, 26};
+const UIButton BTN_SET_DIM = {20, 178, 60, 26};
+const UIButton BTN_SET_BRI = {240, 178, 60, 26};
+const UIButton BTN_SET_STAT = {20, 208, 85, 26};
+const UIButton BTN_SET_LOGS = {113, 208, 89, 26};
+const UIButton BTN_SET_BACK = {210, 208, 90, 26};
 
 // Zone-pick page layout (2x2 grid mirroring the clock quadrants)
 const UIButton BTN_ZONE[4] = {
@@ -265,13 +266,13 @@ void saveDisplayPrefs()
 
 void drawSettingsBrightnessLabel()
 {
-    tft.fillRect(85, 166, 150, 28, clockBackgroundColor);
+    tft.fillRect(85, 178, 150, 26, clockBackgroundColor);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
     int pct = map(backlightLevel, 5, 255, 0, 100);
-    tft.drawString("Brightness " + String(pct) + "%", 160, 180);
+    tft.drawString("Brightness " + String(pct) + "%", 160, 191);
 }
 
 void adjustBacklightFromUi(int delta)
@@ -357,6 +358,9 @@ void renderSettingsPage()
                TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_DATE,
                NOT_US_DATE ? "Date format: DD/MM/YY" : "Date format: MM/DD/YY",
+               TFT_CYAN, TFT_WHITE);
+    drawButton(BTN_SET_GRID,
+               projectConfig.showGrid ? "Quadrant grid: On" : "Quadrant grid: Off",
                TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_DIM, "-", TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_BRI, "+", TFT_CYAN, TFT_WHITE);
@@ -844,6 +848,12 @@ void handleUiTouch()
             NOT_US_DATE = !NOT_US_DATE;
             saveDisplayPrefs();
             uiPageDrawn = false;
+        }
+        else if (buttonContains(BTN_SET_GRID, tx, ty))
+        {
+            projectConfig.showGrid = !projectConfig.showGrid;
+            projectConfig.saveConfigFile();
+            uiPageDrawn = false; // redraw with the new label
         }
         else if (buttonContains(BTN_SET_DIM, tx, ty))
         {

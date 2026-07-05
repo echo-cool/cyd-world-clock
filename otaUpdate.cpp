@@ -374,6 +374,11 @@ static void handleSettingsPage()
     }
     page += "</select></label>";
 
+    page += "<label>Quadrant grid (world clock face)<select name=\"grid\">";
+    page += String("<option value=\"off\"") + (!projectConfig.showGrid ? " selected" : "") + ">Off</option>";
+    page += String("<option value=\"on\"") + (projectConfig.showGrid ? " selected" : "") + ">On</option>";
+    page += "</select></label>";
+
     page += "<label>Clock format<select name=\"clk\">";
     page += String("<option value=\"24\"") + (SHOW_24HOUR ? " selected" : "") + ">24 hour</option>";
     page += String("<option value=\"12\"") + (!SHOW_24HOUR ? " selected" : "") + ">12 hour (AM/PM)</option>";
@@ -476,8 +481,17 @@ static void handleSettingsPost()
         projectConfig.saveConfigFile();
     }
 
-    // Night dimming + hostname: gathered into a single config save
+    // Grid, night dimming + hostname: gathered into a single config save
     bool cfgDirty = false;
+    if (webServer.hasArg("grid"))
+    {
+        bool wantsGrid = webServer.arg("grid") == "on";
+        if (wantsGrid != projectConfig.showGrid)
+        {
+            projectConfig.showGrid = wantsGrid;
+            cfgDirty = true;
+        }
+    }
     if (webServer.hasArg("nstart"))
     {
         int v = constrain(webServer.arg("nstart").toInt(), 0, 23);
