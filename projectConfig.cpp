@@ -47,6 +47,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_NIGHT_START] = c.nightStartHour;
   json[PROJECT_NIGHT_END] = c.nightEndHour;
   json[PROJECT_NIGHT_BRIGHTNESS] = c.nightBrightness;
+  json[PROJECT_SMOOTH_FONT] = c.smoothTimeFont;
   json[PROJECT_DAYNIGHT_ICONS] = c.dayNightIcons;
   json[PROJECT_HOME_MARKER] = c.homeMarker;
   json[PROJECT_QUAD_WEATHER] = c.quadWeather;
@@ -133,6 +134,7 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
 
   // Home-screen extras (bool toggles, see projectConfig.h)
   struct { const char *key; bool *value; } extras[] = {
+      {PROJECT_SMOOTH_FONT, &c.smoothTimeFont},
       {PROJECT_DAYNIGHT_ICONS, &c.dayNightIcons},
       {PROJECT_HOME_MARKER, &c.homeMarker},
       {PROJECT_QUAD_WEATHER, &c.quadWeather},

@@ -16,6 +16,7 @@
 #define PROJECT_NIGHT_START "nightStartHour"
 #define PROJECT_NIGHT_END "nightEndHour"
 #define PROJECT_NIGHT_BRIGHTNESS "nightBrightness"
+#define PROJECT_SMOOTH_FONT "smoothFont"
 #define PROJECT_DAYNIGHT_ICONS "dayNightIcons"
 #define PROJECT_HOME_MARKER "homeMarker"
 #define PROJECT_QUAD_WEATHER "quadWeather"
@@ -77,6 +78,9 @@ public:
   //    city's real solar position) with a tick at the current time
   //  - marketProgressBar: trading-day progress bar along a quadrant's
   //    bottom edge while its exchange is inside regular hours
+  //  - smoothTimeFont: anti-aliased digits (fontTimeDigits.h) for the quad
+  //    face's times instead of the pixel-doubled Font 4
+  bool smoothTimeFont = true;
   bool dayNightIcons = true;
   bool homeMarker = true;
   bool quadWeather = true;

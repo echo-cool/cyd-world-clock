@@ -402,8 +402,10 @@ static void handleSettingsPage()
     page += "</div><div class=\"row\">";
     appendToggle(page, "Weather in quadrants", "qwx", projectConfig.quadWeather);
     appendToggle(page, "Daylight bar", "qdb", projectConfig.daylightBar);
-    page += "</div>";
+    page += "</div><div class=\"row\">";
     appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
+    appendToggle(page, "Smooth time digits", "qsf", projectConfig.smoothTimeFont);
+    page += "</div>";
 
     int pct = map(backlightLevel, 5, 255, 0, 100);
     page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
@@ -528,6 +530,7 @@ static void handleSettingsPost()
     }
     // Home-screen extras toggles
     struct { const char *arg; bool *value; } extras[] = {
+        {"qsf", &projectConfig.smoothTimeFont},
         {"qdn", &projectConfig.dayNightIcons},
         {"qhome", &projectConfig.homeMarker},
         {"qwx", &projectConfig.quadWeather},

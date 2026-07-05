@@ -6,7 +6,8 @@
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // holidaysBegin, getHolidayName
 #include "marketHolidays.h"
-#include "projectConfig.h" // home-screen extras toggles
+#include "fontTimeDigits.h" // anti-aliased VLW digits for the quadrant times
+#include "projectConfig.h"  // home-screen extras toggles
 #include "serialCommands.h"
 #include "uiPages.h"
 #include "weatherService.h" // weatherBegin
@@ -640,11 +641,22 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Time (HH:MM), centered between the label and the date block
     bool pm;
     String hhmm = formatHHMM(local, pm);
-    gfx.setTextFont(clockFont);
-    gfx.setTextSize(clockSize);
     gfx.setTextDatum(TC_DATUM);
     gfx.setTextColor(timeColor, clockBackgroundColor);
-    gfx.drawString(hhmm, centerX, oy + 22);
+    if (projectConfig.smoothTimeFont) {
+        // Anti-aliased 52pt digits (fontTimeDigits.h) instead of the blocky
+        // pixel-doubled Font 4. The font's ascent equals the digit cap
+        // height, so with TC_DATUM the digit tops land exactly on this y
+        // (37px tall - clears the city name above and the daylight bar /
+        // day line below).
+        gfx.loadFont(TIME_DIGITS_VLW);
+        gfx.drawString(hhmm, centerX, oy + 26);
+        gfx.unloadFont();
+    } else {
+        gfx.setTextFont(clockFont);
+        gfx.setTextSize(clockSize);
+        gfx.drawString(hhmm, centerX, oy + 22);
+    }
 
     // In 12-hour mode, an AM/PM indicator in the top-right of the quadrant
     if (!SHOW_24HOUR) {

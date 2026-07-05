@@ -239,6 +239,10 @@ settings page (the choice is saved to flash):
     regular hours, a green bar along the quadrant's bottom edge fills from
     open to close (half-day early closes shorten it), showing how much of
     the trading day is left.
+  - **Smooth time digits** — the quadrant times render in an anti-aliased
+    52pt font (a digits-only Liberation Sans Bold subset, ~12KB of flash,
+    regenerable with `tools/make_time_font.py`) instead of the blocky
+    pixel-doubled built-in font. Off = the classic Font 4 look.
 - **Big clock** — the home zone (top-left quadrant) in 75px digits with date
   and market status, plus a mini strip of the other three zones' times along
   the bottom.
@@ -334,9 +338,10 @@ few settings that have no on-device UI:
 
 - **Home-screen extras** — On/Off toggles for the world-clock face's extra
   elements: sun/moon icons + readable night colors, the home-quadrant
-  border, per-quadrant weather, the daylight bar and the market-session
-  progress bar (see the face description above). All default to on;
-  switching one off restores the classic look of that element.
+  border, per-quadrant weather, the daylight bar, the market-session
+  progress bar and the smooth (anti-aliased) time digits (see the face
+  description above). All default to on; switching one off restores the
+  classic look of that element.
 - **Night dimming** — the backlight level used at night (default: minimum)
   and the fallback dim window (default 1–7 AM home-zone time, used when the
   light sensor is unavailable; the window may wrap midnight, and equal
