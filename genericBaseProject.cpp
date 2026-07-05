@@ -21,6 +21,11 @@
 #define WIFI_CONNECT_TIMEOUT 5000  // per-attempt timeout for the preconfigured WiFi connection
 #define WIFI_CONNECT_ATTEMPTS 10   // attempts before falling back to the WiFiManager portal
 
+// Cap on the initial blocking NTP sync at boot. Without a cap the device hangs
+// forever here on a network with no usable internet (e.g. an un-logged-in
+// captive portal), never reaching the main loop that serves the recovery UI.
+#define INITIAL_NTP_SYNC_TIMEOUT_S 20
+
 // ----------------------------
 // Standard Libraries
 // ----------------------------
@@ -65,6 +70,8 @@
 #include "uiPages.h" // getPosixFallback - offline timezone rules
 
 #include "wifiWatch.h" // runtime WiFi-loss supervision
+
+#include "netCheck.h" // captive-portal detection + MAC-clone
 
 // Number of seconds after reset during which a
 // subseqent reset will be considered a double reset.
@@ -166,6 +173,9 @@ void baseProjectSetup()
     {
         Log.println("Attempting to connect with preconfigured WiFi...");
         WiFi.mode(WIFI_STA);
+        // Present the cloned MAC (if configured) before the first WiFi.begin so
+        // a login-required network sees the authorized address from the start.
+        applyStaMacOverride();
 
         for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected; attempt++)
         {
@@ -245,6 +255,27 @@ void baseProjectSetup()
     Log.print("IP address: ");
     Log.println(WiFi.localIP());
 
+    // Association succeeds even on a login-required (captive-portal) network,
+    // where everything past this point (NTP, weather, holidays) would silently
+    // fail. Probe once so the reason is in the log; the runtime re-check on the
+    // weather task keeps the on-screen / API captive state current thereafter.
+    switch (netCheckNow())
+    {
+    case NET_ONLINE:
+        Log.println("Internet check: online");
+        break;
+    case NET_CAPTIVE:
+        Log.println("Internet check: CAPTIVE PORTAL - this network needs a "
+                    "browser login. See http://" + WiFi.localIP().toString() +
+                    "/wifi-login (NTP/weather stay unavailable until it is "
+                    "authorized for MAC " + WiFi.macAddress() + ")");
+        break;
+    default:
+        Log.println("Internet check: no response (network may be offline or "
+                    "blocking outbound traffic)");
+        break;
+    }
+
     // Enable over-the-air firmware updates now that the network is up
     setupOTA();
 
@@ -256,12 +287,24 @@ void baseProjectSetup()
 
     Log.println("Performing initial NTP sync...");
 
-    waitForSync();
-
-    Log.println("Initial NTP sync complete!");
-
-    Log.println();
-    Log.println("UTC:             " + UTC.dateTime());
+    // Bounded wait: the default waitForSync() (timeout 0) loops forever when
+    // NTP never completes, which on a login-required network would hang the
+    // whole device at boot - before the main loop starts, so the web page and
+    // the on-device Wi-Fi login helper would never come up. Time out instead
+    // and let setup() finish; ezTime's background events() keep retrying, so
+    // the clock syncs on its own once the network is actually authorized.
+    if (waitForSync(INITIAL_NTP_SYNC_TIMEOUT_S))
+    {
+        Log.println("Initial NTP sync complete!");
+        Log.println();
+        Log.println("UTC:             " + UTC.dateTime());
+    }
+    else
+    {
+        Log.println("Initial NTP sync timed out - continuing so the UI / web "
+                    "settings / Wi-Fi login helper are available; the clock "
+                    "will sync once it has real internet");
+    }
 
     // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in
     // ClockLogic.cpp), so this zone survives timezone-server outages too. The

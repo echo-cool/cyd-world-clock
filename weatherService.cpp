@@ -8,8 +8,11 @@
 #include "ClockLogic.h"     // worldZones
 #include "holidayService.h" // holidaysTick - shares this task's HTTPS stack
 #include "marketHolidays.h" // marketHolidaysTick - shares this task's HTTPS stack
+#include "netCheck.h"       // netCheckService - captive-portal re-check
 #include "otaUpdate.h"      // otaInProgress - pause fetching during an update
-#include "uiPages.h"        // getCityCoords
+#include "projectConfig.h"  // weatherAlerts toggle
+#include "uiPages.h"        // getCityCoords, getCountryForTimezone
+#include "wifiRelay.h"      // wifiRelayActive - the relay does its own probing
 
 const unsigned long WEATHER_REFRESH_MS = 20UL * 60UL * 1000UL; // after a success
 const unsigned long WEATHER_RETRY_MS = 5UL * 60UL * 1000UL;    // after a failure
@@ -21,6 +24,7 @@ const unsigned long WEATHER_TASK_TICK_MS = 2000;               // due-check cade
 struct WeatherLoc
 {
     bool has;
+    bool isUS; // US cities use the NWS alerts feed; others derive from the code
     float lat;
     float lon;
 };
@@ -31,6 +35,7 @@ static SemaphoreHandle_t weatherMutex = nullptr;
 static WeatherLoc weatherLocs[4] = {};
 static uint32_t locsGeneration = 0; // bumped on snapshot; stale fetches discard
 static ZoneWeather zoneWeather[4] = {};
+static String zoneAlert[4];         // weather alert text per zone ("" = none)
 static uint32_t dataVersion = 0;
 static bool fetchForced = true; // fetch as soon as the task starts
 static bool attempted = false;
@@ -58,6 +63,8 @@ static void snapshotLocationsLocked()
         weatherLocs[i].has = getCityCoords(worldZones[i].timezone, lat, lon);
         weatherLocs[i].lat = lat;
         weatherLocs[i].lon = lon;
+        const char *country = getCountryForTimezone(worldZones[i].timezone);
+        weatherLocs[i].isUS = (country && strcmp(country, "US") == 0);
     }
     locsGeneration++;
 }
@@ -69,6 +76,15 @@ ZoneWeather getZoneWeather(int i)
     ZoneWeather w = zoneWeather[i];
     weatherUnlock();
     return w;
+}
+
+String getZoneAlert(int i)
+{
+    if (i < 0 || i > 3) return "";
+    weatherLock();
+    String a = zoneAlert[i];
+    weatherUnlock();
+    return a;
 }
 
 long weatherAgeMinutes()
@@ -93,12 +109,111 @@ void weatherInvalidate()
 {
     weatherLock();
     snapshotLocationsLocked();
-    for (int i = 0; i < 4; i++) zoneWeather[i].valid = false;
+    for (int i = 0; i < 4; i++) { zoneWeather[i].valid = false; zoneAlert[i] = ""; }
     attempted = false;
     succeeded = false;
     fetchForced = true;
     dataVersion++; // the face repaints its rows as "--" right away
     weatherUnlock();
+}
+
+// Severe-weather alert derived from a WMO code, for non-US cities (which have
+// no NWS feed). "" for ordinary conditions - only genuinely rough weather is
+// surfaced, to keep the market line uncluttered. Kept short for the 160px
+// quadrant. WMO codes: https://open-meteo.com/en/docs
+static const char *severeWeatherText(int code)
+{
+    switch (code)
+    {
+    case 65: return "HEAVY RAIN";       // heavy rain
+    case 82: return "HEAVY SHOWERS";    // violent rain showers
+    case 66:
+    case 67: return "FREEZING RAIN";    // freezing rain
+    case 75:                            // heavy snowfall
+    case 86: return "HEAVY SNOW";       // heavy snow showers
+    case 95: return "STORM";            // thunderstorm
+    case 96:
+    case 99: return "HAIL STORM";       // thunderstorm with hail
+    default: return "";                 // not alert-worthy
+    }
+}
+
+// Uppercase, abbreviate the one long common phrase, and cap the width so a
+// long NWS event name still fits a quadrant.
+static String normalizeAlertText(String s)
+{
+    s.toUpperCase();
+    s.replace("THUNDERSTORM", "T-STORM");
+    if (s.length() > 26) s = s.substring(0, 26);
+    return s;
+}
+
+// Rank an NWS severity string so the most serious active alert wins.
+static int severityRank(const char *sev)
+{
+    if (!sev) return 0;
+    if (strcmp(sev, "Extreme") == 0) return 3;
+    if (strcmp(sev, "Severe") == 0) return 2;
+    if (strcmp(sev, "Moderate") == 0) return 1;
+    return 0; // Minor / Unknown
+}
+
+// Most severe active US National Weather Service alert for a point, or "".
+// api.weather.gov is free/no-key but requires a descriptive User-Agent. A
+// JSON filter keeps only each alert's event + severity, so the (potentially
+// large) response parses in a few KB.
+static String fetchUsAlert(float lat, float lon)
+{
+    String url = "https://api.weather.gov/alerts/active?point=" +
+                 String(lat, 4) + "," + String(lon, 4);
+
+    WiFiClientSecure client;
+    client.setInsecure(); // public alert data - certificate pinning not worth the upkeep
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(8000);
+    if (!http.begin(client, url)) return "";
+    http.addHeader("User-Agent",
+                   "ESP32WorldClock (github.com/echo-cool/cyd-world-clock)");
+    http.addHeader("Accept", "application/geo+json");
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK)
+    {
+        if (code != HTTP_CODE_NOT_FOUND) // 404 = point outside NWS coverage; quiet
+            Log.println("NWS alerts fetch failed, HTTP " + String(code));
+        http.end();
+        return "";
+    }
+
+    StaticJsonDocument<128> filter;
+    filter["features"][0]["properties"]["event"] = true;
+    filter["features"][0]["properties"]["severity"] = true;
+
+    DynamicJsonDocument doc(4096);
+    DeserializationError err =
+        deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+    http.end();
+    if (err)
+    {
+        Log.println(String("NWS alerts parse failed: ") + err.c_str());
+        return "";
+    }
+
+    const char *best = nullptr;
+    int bestRank = -1;
+    for (JsonObject f : doc["features"].as<JsonArray>())
+    {
+        const char *ev = f["properties"]["event"];
+        if (!ev) continue;
+        int rank = severityRank(f["properties"]["severity"]);
+        if (rank > bestRank)
+        {
+            bestRank = rank;
+            best = ev;
+        }
+    }
+    return best ? normalizeAlertText(String(best)) : "";
 }
 
 // One fetch attempt, run on the task core. The blocking network work happens
@@ -184,6 +299,22 @@ static bool performFetch()
         fresh[zi].valid = !cur.isNull();
     }
 
+    // Weather alerts (when enabled): US cities pull the NWS active-alerts feed;
+    // others derive a severe-condition alert from the code just fetched. Done
+    // outside the lock (NWS calls are slow) and committed with the weather.
+    String freshAlert[4];
+    if (projectConfig.weatherAlerts)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            int zi = zoneForSlot[k];
+            if (locs[zi].isUS)
+                freshAlert[zi] = fetchUsAlert(locs[zi].lat, locs[zi].lon);
+            else if (fresh[zi].valid)
+                freshAlert[zi] = String(severeWeatherText(fresh[zi].weatherCode));
+        }
+    }
+
     weatherLock();
     if (generation != locsGeneration)
     {
@@ -192,7 +323,11 @@ static bool performFetch()
         weatherUnlock();
         return false;
     }
-    for (int i = 0; i < 4; i++) zoneWeather[i] = fresh[i];
+    for (int i = 0; i < 4; i++)
+    {
+        zoneWeather[i] = fresh[i];
+        zoneAlert[i] = freshAlert[i];
+    }
     dataVersion++;
     weatherUnlock();
 
@@ -210,6 +345,12 @@ static void weatherTask(void *)
         // stack) instead of paying for further 16KB tasks of their own.
         marketHolidaysTick();
         holidaysTick();
+
+        // Distinguish "really online" from "associated but behind a captive
+        // portal" here on core 0 (self-rate-limited to ~60s) so the blocking
+        // probe never stalls the render loop on core 1. Skipped while the login
+        // relay is up, since it runs its own probe on the main core.
+        if (!otaInProgress && !wifiRelayActive()) netCheckService();
 
         if (otaInProgress) continue;                 // don't fetch mid-update
         if (WiFi.status() != WL_CONNECTED) continue; // recheck next tick

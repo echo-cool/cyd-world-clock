@@ -173,6 +173,35 @@ whole sequence (preconfigured credentials first). So after a power cut where
 the router comes back later than the clock, the clock reconnects on its own —
 no button pressing needed.
 
+## Login-required networks (captive portals)
+
+Some networks (hotels, offices, campuses, guest Wi-Fi) let a device join but
+block the internet until you sign in on a web page — and they grant that access
+per **MAC address**. The clock has no browser to complete such a login itself,
+so on these networks it associates fine but NTP, weather and holidays fail. The
+clock detects this and shows a steady `WIFI LOGIN REQUIRED` label at the bottom
+of the home screen (the System status page and `/api/status` also report
+`internet: captive`). There are three ways to get it online:
+
+- **Log in through the clock (easiest).** On the device, open **Settings →
+  WiFi**, or browse to `http://<device-ip>/wifi-login` and press *Start login
+  helper*. The clock brings up a temporary hotspot (SSID
+  `<hostname>-login`, password `12345678`) and routes its traffic through your
+  phone's login: join that hotspot on your phone, complete the network's login
+  in your browser, and the clock inherits the access (the network authorizes the
+  clock's own MAC). The clock's screen shows progress and returns to normal once
+  it is online. This works even for HTTPS / JavaScript portals, because the
+  clock only forwards packets — your phone talks to the portal directly.
+- **Register the clock's MAC.** If the network has a device-registration page,
+  add the clock's MAC (shown on `/wifi-login`, the Network status page, and
+  `/api/status`).
+- **Clone an authorized device's MAC.** Enter a MAC the network has already
+  authorized (e.g. your phone's) in **Custom MAC** on the web settings page or
+  the WiFiManager portal; the clock then presents that address. Disable your
+  phone's "private/random MAC" for the network first, and don't keep both on the
+  network at once with the same MAC. A cloned MAC is marked with `*` on the
+  Network status page and applies after a reboot.
+
 **If WiFi drops while the clock is running**, the clock keeps ticking (time
 runs locally between NTP syncs) and recovers in stages: after a minute
 offline a steady `NO WIFI` label appears at the bottom of the home screen
@@ -243,6 +272,17 @@ settings page (the choice is saved to flash):
     52pt font (a digits-only Liberation Sans Bold subset, ~12KB of flash,
     regenerable with `tools/make_time_font.py`) instead of the blocky
     pixel-doubled built-in font. Off = the classic Font 4 look.
+  - **Weather alerts** — a severe-weather alert on a quadrant's market status
+    line (in orange). For US cities the text comes from the official US
+    National Weather Service active-alerts feed
+    ([api.weather.gov](https://www.weather.gov/documentation/services-web-api),
+    e.g. `TORNADO WARNING`); for other cities it is derived from the weather
+    code the clock already fetches (`STORM`, `HEAVY SNOW`, `FREEZING RAIN`…).
+    If the quadrant has no market, the alert shows on its own; if it does, the
+    line alternates slowly between the market status (shown longer) and the
+    alert, so you still see both without either flickering. Refreshed every 20
+    minutes with the weather. (Shown on the four-quadrant face; the big-clock
+    face's single market line is unchanged.)
 - **Big clock** — the home zone (top-left quadrant) in 75px digits with date
   and market status, plus a mini strip of the other three zones' times along
   the bottom.
@@ -310,6 +350,8 @@ settings page (the choice is saved to flash):
 - **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
 - **Quadrant grid** — toggle divider lines between the four quadrants of the
   world-clock face (default: off).
+- **Wx alert** — toggle weather alerts on the quadrant market status lines
+  (see the *Weather alerts* extra above; default: on).
 - **Brightness** — `-` / `+` buttons adjust the backlight (also pauses
   auto-brightness for 2 hours, same as the home-screen gesture). The level is
   saved and restored on the next boot, and is used as the daytime target by
@@ -341,9 +383,11 @@ few settings that have no on-device UI:
 - **Home-screen extras** — On/Off toggles for the world-clock face's extra
   elements: sun/moon icons + readable night colors, the home-quadrant
   border, per-quadrant weather, the daylight bar, the market-session
-  progress bar and the smooth (anti-aliased) time digits (see the face
-  description above). All default to on; switching one off restores the
-  classic look of that element.
+  progress bar, the smooth (anti-aliased) time digits and weather alerts on
+  the market status line (see the face description above). All default to on;
+  switching one off restores the classic look of that element. (Weather
+  alerts and the quadrant grid also have on-device toggles on the settings
+  page.)
 - **Night dimming** — the backlight level used at night (default: minimum)
   and the fallback dim window (default 1–7 AM home-zone time, used when the
   light sensor is unavailable; the window may wrap midnight, and equal

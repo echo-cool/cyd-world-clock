@@ -27,6 +27,14 @@ void weatherBegin();
 // coordinates - see getCityCoords in uiPages).
 ZoneWeather getZoneWeather(int i);
 
+// Current weather alert text for zone/quadrant i (0-3), or "" when none.
+// US cities use the official US National Weather Service active-alerts feed
+// (api.weather.gov); other cities derive a severe-condition alert from the WMO
+// weather code (thunderstorm, heavy snow/rain, freezing rain). Refreshed by the
+// background task on the same cadence as the weather. Always "" while the
+// weatherAlerts setting is off. Uppercased and length-capped for the display.
+String getZoneAlert(int i);
+
 // Age of the current data in minutes, or -1 if no successful fetch yet.
 long weatherAgeMinutes();
 

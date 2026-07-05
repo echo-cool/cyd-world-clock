@@ -12,6 +12,8 @@
 #include "projectConfig.h"
 #include "weatherService.h"     // weatherInvalidate
 #include "wifiWatch.h"          // outage history rows on the status page
+#include "netCheck.h"           // captivePortalActive - Wi-Fi login helper
+#include "wifiRelay.h"          // captive-portal login relay
 
 UIScreen uiScreen = SCREEN_HOME;
 bool uiPageDrawn = false;      // false -> render the full page on the next loop
@@ -181,12 +183,19 @@ const UIButton BTN_SET_TZ = {20, 28, 280, 26};
 const UIButton BTN_SET_FACE = {20, 58, 280, 26};
 const UIButton BTN_SET_CLK = {20, 88, 280, 26};
 const UIButton BTN_SET_DATE = {20, 118, 280, 26};
-const UIButton BTN_SET_GRID = {20, 148, 280, 26};
+// Row 148 holds two toggles side by side: quadrant grid + weather alerts.
+const UIButton BTN_SET_GRID = {20, 148, 135, 26};
+const UIButton BTN_SET_WXALERT = {165, 148, 135, 26};
 const UIButton BTN_SET_DIM = {20, 178, 60, 26};
 const UIButton BTN_SET_BRI = {240, 178, 60, 26};
-const UIButton BTN_SET_STAT = {20, 208, 85, 26};
-const UIButton BTN_SET_LOGS = {113, 208, 89, 26};
-const UIButton BTN_SET_BACK = {210, 208, 90, 26};
+// Bottom row: four buttons across (Status / Logs / WiFi login helper / Back).
+const UIButton BTN_SET_STAT = {20, 208, 62, 26};
+const UIButton BTN_SET_LOGS = {88, 208, 46, 26};
+const UIButton BTN_SET_WIFI = {140, 208, 74, 26};
+const UIButton BTN_SET_BACK = {220, 208, 80, 26};
+
+// Wi-Fi login helper page: a single "Done" button (mirrors BTN_SET_BACK).
+const UIButton BTN_WIFI_DONE = {90, 202, 140, 32};
 
 // Zone-pick page layout (2x2 grid mirroring the clock quadrants)
 const UIButton BTN_ZONE[4] = {
@@ -239,6 +248,13 @@ bool uiNewTouch(int &tx, int &ty)
 
 void switchToScreen(UIScreen s)
 {
+    // Leaving the Wi-Fi login helper: always tear the helper AP + NAT back down
+    // so the clock returns to normal STA operation, whatever the exit path.
+    if (uiScreen == SCREEN_WIFI_LOGIN && s != SCREEN_WIFI_LOGIN)
+    {
+        wifiRelayStop();
+    }
+
     uiScreen = s;
     uiPageDrawn = false;
     touchSuppressedUntilRelease = true; // don't click through onto the new page
@@ -253,6 +269,12 @@ void switchToScreen(UIScreen s)
             worldZones[i].initialized = false;
         }
     }
+}
+
+void openWifiLoginHelper()
+{
+    wifiRelayStart(); // bring up the helper AP + NAT before showing the screen
+    switchToScreen(SCREEN_WIFI_LOGIN);
 }
 
 /*-------- Settings actions ----------*/
@@ -360,14 +382,85 @@ void renderSettingsPage()
                NOT_US_DATE ? "Date format: DD/MM/YY" : "Date format: MM/DD/YY",
                TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_GRID,
-               projectConfig.showGrid ? "Quadrant grid: On" : "Quadrant grid: Off",
+               projectConfig.showGrid ? "Grid: On" : "Grid: Off",
+               TFT_CYAN, TFT_WHITE);
+    drawButton(BTN_SET_WXALERT,
+               projectConfig.weatherAlerts ? "Wx alert: On" : "Wx alert: Off",
                TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_DIM, "-", TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_BRI, "+", TFT_CYAN, TFT_WHITE);
     drawSettingsBrightnessLabel();
     drawButton(BTN_SET_STAT, "Status", TFT_GREEN, TFT_WHITE);
     drawButton(BTN_SET_LOGS, "Logs", TFT_GREEN, TFT_WHITE);
+    // Amber when a captive portal is blocking the internet, to draw the eye.
+    drawButton(BTN_SET_WIFI, "WiFi",
+               captivePortalActive() ? TFT_ORANGE : TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
+}
+
+// The live status line of the Wi-Fi login helper (row 168), repainted once a
+// second from renderUiPage as the relay state changes.
+static void renderWifiLoginStatus()
+{
+    const char *text;
+    uint16_t color;
+    switch (wifiRelayState())
+    {
+    case RELAY_SUCCESS:
+        text = "Online! You're connected.";
+        color = TFT_GREEN;
+        break;
+    case RELAY_TIMEOUT:
+        text = "Timed out - tap Done and retry.";
+        color = TFT_RED;
+        break;
+    case RELAY_ACTIVE:
+        text = "Waiting for login...";
+        color = TFT_CYAN;
+        break;
+    default:
+        text = "";
+        color = clockBackgroundColor;
+        break;
+    }
+    tft.fillRect(0, 166, 320, 20, clockBackgroundColor);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(color, clockBackgroundColor);
+    tft.drawString(text, 160, 168);
+}
+
+// Full-screen helper for login-required networks: brings up a phone-joinable AP
+// that NATs the login out through the clock's MAC (wifiRelay.cpp). The relay is
+// serviced from renderUiPage; this only paints the current state.
+void renderWifiLoginPage()
+{
+    tft.fillScreen(clockBackgroundColor);
+
+    tft.setTextFont(4);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
+    tft.drawString("WI-FI LOGIN", 160, 2);
+
+    tft.setTextFont(2);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString("1. On your phone, join Wi-Fi:", 12, 40);
+
+    tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
+    tft.drawString(wifiRelayApSsid(), 24, 60);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString(String("password: ") + wifiRelayApPassword(), 24, 80);
+
+    tft.drawString("2. Open the login page, sign in.", 12, 104);
+    tft.drawString("3. Leave this screen open - it", 12, 124);
+    tft.drawString("   continues once you're online.", 12, 140);
+
+    renderWifiLoginStatus();
+
+    drawButton(BTN_WIFI_DONE, "Done", TFT_DARKGREY, TFT_WHITE);
 }
 
 void renderZonePickPage()
@@ -564,6 +657,11 @@ static void fillNetworkValues(String *values, uint16_t *colors)
     if (host.length() > 28) host = host.substring(0, 28);
     values[0] = host;
     values[1] = WiFi.macAddress();
+    if (projectConfig.staMacOverride.length() > 0)
+    {
+        values[1] += " *"; // "*" = a custom/cloned MAC is in use, not the factory one
+        colors[1] = TFT_CYAN;
+    }
     values[2] = WiFi.gatewayIP().toString();
     values[3] = WiFi.dnsIP().toString();
     values[4] = String(WiFi.channel());
@@ -855,6 +953,12 @@ void handleUiTouch()
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
+        else if (buttonContains(BTN_SET_WXALERT, tx, ty))
+        {
+            projectConfig.weatherAlerts = !projectConfig.weatherAlerts;
+            projectConfig.saveConfigFile();
+            uiPageDrawn = false; // redraw with the new label
+        }
         else if (buttonContains(BTN_SET_DIM, tx, ty))
         {
             adjustBacklightFromUi(-15);
@@ -872,9 +976,23 @@ void handleUiTouch()
         {
             switchToScreen(SCREEN_LOGS);
         }
+        else if (buttonContains(BTN_SET_WIFI, tx, ty))
+        {
+            openWifiLoginHelper();
+        }
         else if (buttonContains(BTN_SET_BACK, tx, ty))
         {
             switchToScreen(SCREEN_HOME);
+        }
+        break;
+
+    case SCREEN_WIFI_LOGIN:
+        // Any tap on the Done button (or, once online, anywhere) leaves the
+        // helper; switchToScreen tears the relay AP + NAT back down.
+        if (buttonContains(BTN_WIFI_DONE, tx, ty) ||
+            wifiRelayState() == RELAY_SUCCESS)
+        {
+            switchToScreen(SCREEN_SETTINGS);
         }
         break;
 
@@ -983,6 +1101,10 @@ void renderUiPage()
             renderLogsPage();
             lastStatusRefresh = millis();
             break;
+        case SCREEN_WIFI_LOGIN:
+            renderWifiLoginPage();
+            lastStatusRefresh = millis();
+            break;
         default:
             break;
         }
@@ -1002,5 +1124,32 @@ void renderUiPage()
             renderLogsLines();
         }
         lastStatusRefresh = millis();
+    }
+    else if (uiScreen == SCREEN_WIFI_LOGIN)
+    {
+        // Drive the login relay every loop (it self-rate-limits its polling);
+        // repaint the status line once a second as the state changes.
+        static unsigned long successAtMs = 0;
+        wifiRelayService();
+        if (millis() - lastStatusRefresh > 1000)
+        {
+            renderWifiLoginStatus();
+            lastStatusRefresh = millis();
+        }
+        // Once online, linger a few seconds so the "Online!" is seen, then
+        // return home on its own (unattended recovery needs no tap).
+        if (wifiRelayState() == RELAY_SUCCESS)
+        {
+            if (successAtMs == 0) successAtMs = millis();
+            if (millis() - successAtMs > 4000)
+            {
+                successAtMs = 0;
+                switchToScreen(SCREEN_HOME);
+            }
+        }
+        else
+        {
+            successAtMs = 0;
+        }
     }
 }

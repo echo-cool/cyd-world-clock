@@ -14,6 +14,8 @@
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
 #include "holidayService.h"     // holidayZonesLoaded - /api/status
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - /api/status
+#include "netCheck.h"           // captive state, MAC parse - /wifi-login + settings
+#include "wifiRelay.h"          // login-relay helper trigger + state
 #include "uiPages.h"            // TZ_PRESETS, applyZoneSelection, resetReasonText
 #include "weatherService.h"     // weatherAgeMinutes
 #include "wifiWatch.h"          // outage history - /api/status
@@ -364,7 +366,14 @@ static void handleSettingsPage()
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
             " &middot; <a href=\"/update\">Firmware update</a>"
             " &middot; <a href=\"/logs\">Logs</a>"
+            " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
             " &middot; <a href=\"/api/status\">Status JSON</a></p>";
+    if (captivePortalActive())
+    {
+        page += "<p style=\"color:#ff9f0a\">This network needs a browser login "
+                "&mdash; the clock is on Wi-Fi but has no internet. "
+                "<a href=\"/wifi-login\">Fix it</a>.</p>";
+    }
     page += "<form method=\"POST\" action=\"/settings\">";
 
     static const char *slotLabels[4] = {"Top-left clock (home)", "Top-right clock",
@@ -410,6 +419,8 @@ static void handleSettingsPage()
     page += "</div><div class=\"row\">";
     appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
     appendToggle(page, "Smooth time digits", "qsf", projectConfig.smoothTimeFont);
+    page += "</div><div class=\"row\">";
+    appendToggle(page, "Weather alerts on market line", "qwa", projectConfig.weatherAlerts);
     page += "</div>";
 
     int pct = map(backlightLevel, 5, 255, 0, 100);
@@ -437,6 +448,14 @@ static void handleSettingsPage()
     page += "<label>Hostname (mDNS \"&lt;name&gt;.local\", applied after reboot)"
             "<input type=\"text\" name=\"host\" maxlength=\"32\" value=\"" +
             projectConfig.hostname + "\"></label>";
+
+    // Custom MAC for login-required networks (reboots to apply). See /wifi-login.
+    page += "<label>Custom MAC for login networks "
+            "(blank = default, applied after reboot &middot; "
+            "<a href=\"/wifi-login\">help</a>)"
+            "<input type=\"text\" name=\"mac\" maxlength=\"17\" "
+            "placeholder=\"AA:BB:CC:DD:EE:FF\" value=\"" +
+            projectConfig.staMacOverride + "\"></label>";
 
     page += "<button type=\"submit\">Save</button></form>"
             "<p>Saving a brightness change pauses auto-brightness for 2 hours, "
@@ -550,6 +569,7 @@ static void handleSettingsPost()
         {"qwx", &projectConfig.quadWeather},
         {"qdb", &projectConfig.daylightBar},
         {"qmb", &projectConfig.marketProgressBar},
+        {"qwa", &projectConfig.weatherAlerts},
     };
     for (auto &extra : extras)
     {
@@ -571,6 +591,19 @@ static void handleSettingsPost()
             Log.println("Hostname changed to \"" + h + "\" - applies after the next reboot");
         }
     }
+    // Custom MAC changes need a reboot to take effect (the address is set once,
+    // before WiFi connects), so they are handled separately below.
+    bool macChanged = false;
+    if (webServer.hasArg("mac"))
+    {
+        String canon = normalizeMac(webServer.arg("mac"));
+        if (canon != projectConfig.staMacOverride)
+        {
+            projectConfig.staMacOverride = canon;
+            cfgDirty = true;
+            macChanged = true;
+        }
+    }
     if (cfgDirty)
     {
         projectConfig.saveConfigFile();
@@ -580,6 +613,18 @@ static void handleSettingsPost()
     // on-device UI was showing.
     switchToScreen(SCREEN_HOME);
     Log.println("Settings applied from the web page");
+
+    if (macChanged)
+    {
+        Log.println("Custom MAC changed to \"" + projectConfig.staMacOverride +
+                    "\" - rebooting to apply");
+        webServer.sendHeader("Connection", "close");
+        webServer.send(200, "text/plain",
+                       "Custom MAC saved - rebooting to apply it");
+        delay(750); // let the response reach the browser
+        ESP.restart();
+        return;
+    }
 
     webServer.sendHeader("Location", "/");
     webServer.send(303, "text/plain", "Saved");
@@ -635,6 +680,16 @@ static void handleApiStatus()
     doc["ssid"] = WiFi.SSID();
     doc["rssiDbm"] = WiFi.RSSI();
     doc["mac"] = WiFi.macAddress();
+    if (projectConfig.staMacOverride.length() > 0)
+    {
+        doc["macCloned"] = true;
+    }
+    switch (netReachability())
+    {
+    case NET_ONLINE: doc["internet"] = "online"; break;
+    case NET_CAPTIVE: doc["internet"] = "captive"; break;
+    default: doc["internet"] = "offline"; break;
+    }
     doc["gateway"] = WiFi.gatewayIP().toString();
     doc["dns"] = WiFi.dnsIP().toString();
     doc["wifiChannel"] = WiFi.channel();
@@ -752,10 +807,105 @@ static void handleApiLogs()
     webServer.send(200, "text/plain", logTail(6144));
 }
 
+/*-------- Wi-Fi login helper page ----------*/
+// Guidance for login-required (captive-portal) networks: shows the clock's
+// current MAC and internet status, and the two ways to get online, since portal
+// access is granted per MAC. Reachable at /wifi-login and linked from the
+// settings page (also the URL logged when a captive portal is detected).
+
+static void handleWifiLoginPage()
+{
+    if (!webAuthenticate()) return;
+
+    NetReachability net = netReachability();
+    const char *statusText = net == NET_ONLINE  ? "Online"
+                             : net == NET_CAPTIVE ? "Login required (captive portal)"
+                                                  : "No internet response";
+    const char *statusColor = net == NET_ONLINE  ? "#30d158"
+                              : net == NET_CAPTIVE ? "#ff9f0a"
+                                                   : "#ff6961";
+
+    String page;
+    page.reserve(4096);
+    page += FPSTR(SETTINGS_PAGE_HEAD); // shared dark card + <h1>
+    page += "<p><a href=\"/\">&larr; Settings</a></p>";
+    page += "<h1 style=\"font-size:1.05rem\">Wi-Fi login help</h1>";
+    page += "<p>Internet status: <b style=\"color:" + String(statusColor) +
+            "\">" + statusText + "</b></p>";
+    page += "<p>Some networks (hotels, offices, campuses, guest Wi-Fi) let a "
+            "device join but block the internet until you log in on a web page. "
+            "That access is granted per <b>MAC address</b>, and this clock has "
+            "no browser to complete the login itself.</p>";
+    page += "<p>This device's MAC address:<br><b>" + WiFi.macAddress() + "</b>" +
+            (projectConfig.staMacOverride.length() > 0
+                 ? " <span style=\"color:#0a84ff\">(cloned)</span>"
+                 : "") +
+            "</p>";
+    page += "<p><b>Option A &mdash; log in through the clock (recommended).</b> "
+            "Press the button below (or on-device: Settings &rarr; WiFi). The "
+            "clock opens a temporary hotspot; join it on your phone, complete "
+            "the network's login in your browser, and the clock inherits the "
+            "access. The on-device screen shows progress.</p>";
+    if (wifiRelayActive())
+    {
+        page += "<p style=\"color:#30d158\">Helper is running &mdash; join "
+                "<b>" + wifiRelayApSsid() + "</b> (password " +
+                wifiRelayApPassword() + ") on your phone and log in.</p>";
+    }
+    else
+    {
+        page += "<form method=\"POST\" action=\"/wifi-login/start\">"
+                "<button type=\"submit\">Start login helper</button></form>";
+    }
+    page += "<p><b>Option B &mdash; register this MAC.</b> If the network has a "
+            "device-registration page, add the MAC above so the network "
+            "authorizes this clock directly.</p>";
+    page += "<p><b>Option C &mdash; clone an authorized device.</b> Log a device "
+            "you control (e.g. your phone) into the network, note its Wi-Fi MAC, "
+            "and enter it below. The clock then presents that address and "
+            "inherits its access. Disable your phone's \"private/random MAC\" "
+            "for this network first, and don't keep both on the network at once "
+            "with the same MAC.</p>";
+    // Minimal form: the settings POST handler only touches fields that are
+    // present, so this changes just the MAC (and reboots to apply it).
+    page += "<form method=\"POST\" action=\"/settings\">"
+            "<label>Cloned MAC (blank = factory MAC)"
+            "<input type=\"text\" name=\"mac\" maxlength=\"17\" "
+            "placeholder=\"AA:BB:CC:DD:EE:FF\" value=\"" +
+            projectConfig.staMacOverride +
+            "\"></label>"
+            "<button type=\"submit\">Save &amp; reboot</button></form>";
+    page += "<p style=\"color:#aaa\">Saving a MAC reboots the clock so the new "
+            "address is used from the next connection.</p>";
+    page += "</div></body></html>";
+    webServer.send(200, "text/html", page);
+}
+
+// POST /wifi-login/start: ask the main loop to open the on-device login relay
+// helper (it can't switch WiFi modes from this web-server callback safely).
+static void handleWifiLoginStart()
+{
+    if (!webAuthenticate()) return;
+    wifiRelayRequest();
+    String page;
+    page.reserve(1024);
+    page += FPSTR(SETTINGS_PAGE_HEAD);
+    page += "<p><a href=\"/wifi-login\">&larr; Wi-Fi login</a></p>";
+    page += "<h1 style=\"font-size:1.05rem\">Login helper starting</h1>";
+    page += "<p>On your phone, join Wi-Fi <b>" + wifiRelayApSsid() +
+            "</b> (password " + wifiRelayApPassword() + "), then complete the "
+            "network's login in your browser. The clock's screen shows "
+            "progress and returns to normal once it is online.</p>";
+    page += "</div></body></html>";
+    webServer.send(200, "text/html", page);
+}
+
 static void setupWebUpdater()
 {
     webServer.on("/", HTTP_GET, handleSettingsPage);
     webServer.on("/settings", HTTP_POST, handleSettingsPost);
+    webServer.on("/wifi-login", HTTP_GET, handleWifiLoginPage);
+    webServer.on("/wifi-login/start", HTTP_POST, handleWifiLoginStart);
     webServer.on("/api/status", HTTP_GET, handleApiStatus);
     webServer.on("/api/config", HTTP_GET, handleApiConfigGet);
     webServer.on("/api/config", HTTP_POST, handleApiConfigPost);
