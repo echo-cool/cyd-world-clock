@@ -215,8 +215,34 @@ settings page (the choice is saved to flash):
   position at that city (computed from its coordinates — no network needed):
   daytime is orange/yellow from actual sunrise to actual sunset, so London
   correctly reads as night at 4:30 PM in December and as day at 9 PM in
-  June; after sunset the zone dims to grey (light before local midnight,
-  dark in the small hours).
+  June. This face also carries a set of extras, each individually
+  switchable from the web settings page (all on by default; turning one off
+  restores the classic look):
+  - **Sun/moon icons + night colors** — a small sun or crescent moon in each
+    quadrant's corner marks day/night explicitly, which frees the text
+    colors to stay readable around the clock: warm orange by day, cool ice
+    blue in the evening and a dimmer steel blue in the small hours (off =
+    the legacy grey-on-black night colors, no icons).
+  - **Home quadrant border** — a subtle accent border around the top-left
+    (home) quadrant, the reference all the `(+1)` day offsets are computed
+    against.
+  - **Weather in quadrants** — current temperature on each quadrant's date
+    line with a condition color dot (yellow clear, cyan rain, white
+    snow...), reusing the data the background weather task already fetches
+    every 20 minutes for the weather face.
+  - **Daylight bar** — a thin gradient bar under each time mapping that
+    city's full day (midnight to midnight) left to right, colored by the
+    sun's real elevation — deep blue night, orange sunrise/sunset, warm
+    yellow midday — with a white tick at "now". One glance shows how deep
+    into day or night each city is.
+  - **Market-session progress bar** — while an exchange is inside its
+    regular hours, a green bar along the quadrant's bottom edge fills from
+    open to close (half-day early closes shorten it), showing how much of
+    the trading day is left.
+  - **Smooth time digits** — the quadrant times render in an anti-aliased
+    52pt font (a digits-only Liberation Sans Bold subset, ~12KB of flash,
+    regenerable with `tools/make_time_font.py`) instead of the blocky
+    pixel-doubled built-in font. Off = the classic Font 4 look.
 - **Big clock** — the home zone (top-left quadrant) in 75px digits with date
   and market status, plus a mini strip of the other three zones' times along
   the bottom.
@@ -312,6 +338,12 @@ page) to pick the four timezones, clock face, quadrant grid, clock/date
 format and brightness without touching the device. The web page additionally exposes a
 few settings that have no on-device UI:
 
+- **Home-screen extras** — On/Off toggles for the world-clock face's extra
+  elements: sun/moon icons + readable night colors, the home-quadrant
+  border, per-quadrant weather, the daylight bar, the market-session
+  progress bar and the smooth (anti-aliased) time digits (see the face
+  description above). All default to on; switching one off restores the
+  classic look of that element.
 - **Night dimming** — the backlight level used at night (default: minimum)
   and the fallback dim window (default 1–7 AM home-zone time, used when the
   light sensor is unavailable; the window may wrap midnight, and equal

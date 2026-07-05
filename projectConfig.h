@@ -17,6 +17,12 @@
 #define PROJECT_NIGHT_START "nightStartHour"
 #define PROJECT_NIGHT_END "nightEndHour"
 #define PROJECT_NIGHT_BRIGHTNESS "nightBrightness"
+#define PROJECT_SMOOTH_FONT "smoothFont"
+#define PROJECT_DAYNIGHT_ICONS "dayNightIcons"
+#define PROJECT_HOME_MARKER "homeMarker"
+#define PROJECT_QUAD_WEATHER "quadWeather"
+#define PROJECT_DAYLIGHT_BAR "daylightBar"
+#define PROJECT_MARKET_BAR "marketBar"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -63,6 +69,27 @@ public:
   int nightStartHour = 1;
   int nightEndHour = 7;
   int nightBrightness = 1;
+
+  // Home-screen extras, each individually revertible from the web settings
+  // page (all default on; turning one off restores the previous look):
+  //  - dayNightIcons: sun/moon glyph per quadrant, and readable ice-blue
+  //    evening/night text colors on every face (off = the legacy greys,
+  //    no icons)
+  //  - homeMarker: accent border around the home (top-left) quadrant
+  //  - quadWeather: temperature + condition color on the quad face's date
+  //    lines (uses the weather data the background task already fetches)
+  //  - daylightBar: per-quadrant day gradient bar (sunrise/sunset from the
+  //    city's real solar position) with a tick at the current time
+  //  - marketProgressBar: trading-day progress bar along a quadrant's
+  //    bottom edge while its exchange is inside regular hours
+  //  - smoothTimeFont: anti-aliased digits (fontTimeDigits.h) for the quad
+  //    face's times instead of the pixel-doubled Font 4
+  bool smoothTimeFont = true;
+  bool dayNightIcons = true;
+  bool homeMarker = true;
+  bool quadWeather = true;
+  bool daylightBar = true;
+  bool marketProgressBar = true;
 
   bool fetchConfigFile();
   bool saveConfigFile();

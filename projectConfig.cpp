@@ -48,6 +48,12 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_NIGHT_START] = c.nightStartHour;
   json[PROJECT_NIGHT_END] = c.nightEndHour;
   json[PROJECT_NIGHT_BRIGHTNESS] = c.nightBrightness;
+  json[PROJECT_SMOOTH_FONT] = c.smoothTimeFont;
+  json[PROJECT_DAYNIGHT_ICONS] = c.dayNightIcons;
+  json[PROJECT_HOME_MARKER] = c.homeMarker;
+  json[PROJECT_QUAD_WEATHER] = c.quadWeather;
+  json[PROJECT_DAYLIGHT_BAR] = c.daylightBar;
+  json[PROJECT_MARKET_BAR] = c.marketProgressBar;
 }
 
 // Apply json onto the settings; missing keys keep their current values and
@@ -131,6 +137,24 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
   {
     c.nightBrightness = constrain(json[PROJECT_NIGHT_BRIGHTNESS].as<int>(), 1, 255);
     any = true;
+  }
+
+  // Home-screen extras (bool toggles, see projectConfig.h)
+  struct { const char *key; bool *value; } extras[] = {
+      {PROJECT_SMOOTH_FONT, &c.smoothTimeFont},
+      {PROJECT_DAYNIGHT_ICONS, &c.dayNightIcons},
+      {PROJECT_HOME_MARKER, &c.homeMarker},
+      {PROJECT_QUAD_WEATHER, &c.quadWeather},
+      {PROJECT_DAYLIGHT_BAR, &c.daylightBar},
+      {PROJECT_MARKET_BAR, &c.marketProgressBar},
+  };
+  for (auto &extra : extras)
+  {
+    if (json.containsKey(extra.key))
+    {
+      *extra.value = json[extra.key].as<bool>();
+      any = true;
+    }
   }
 
   return any;
