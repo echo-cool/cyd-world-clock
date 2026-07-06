@@ -17,6 +17,7 @@
 #define PROJECT_NIGHT_START "nightStartHour"
 #define PROJECT_NIGHT_END "nightEndHour"
 #define PROJECT_NIGHT_BRIGHTNESS "nightBrightness"
+#define PROJECT_AUTO_BRIGHTNESS "autoBrightness"
 #define PROJECT_SMOOTH_FONT "smoothFont"
 #define PROJECT_DAYNIGHT_ICONS "dayNightIcons"
 #define PROJECT_HOME_MARKER "homeMarker"
@@ -25,6 +26,10 @@
 #define PROJECT_MARKET_BAR "marketBar"
 #define PROJECT_WEATHER_ALERTS "weatherAlerts"
 #define PROJECT_MAC_OVERRIDE "macOverride"
+#define PROJECT_USE_FAHRENHEIT "useFahrenheit"
+#define PROJECT_FLIP_DISPLAY "flipDisplay"
+#define PROJECT_WEEK_START_MONDAY "weekStartMonday"
+#define PROJECT_WEATHER_REFRESH_MIN "weatherRefreshMin"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -71,10 +76,13 @@ public:
   String staMacOverride = "";
 
   // Night dimming, used by auto-brightness (ClockLogic.cpp):
+  //  - autoBrightness is the master switch: off = the backlight always stays
+  //    at the user's set brightness (light sensor and schedule both ignored).
   //  - nightBrightness (1-255) is the backlight target in a dark room (light
   //    sensor) or inside the schedule window below (sensor fallback).
   //  - The window is in home-zone hours; start == end disables the schedule
   //    (the light sensor, when trusted, works regardless).
+  bool autoBrightness = true;
   int nightStartHour = 1;
   int nightEndHour = 7;
   int nightBrightness = 1;
@@ -103,6 +111,21 @@ public:
   bool daylightBar = true;
   bool marketProgressBar = true;
   bool weatherAlerts = true;
+
+  // Temperatures in Fahrenheit instead of Celsius (weather face, quadrant
+  // weather). Stored values stay Celsius; only the display converts.
+  bool useFahrenheit = false;
+
+  // Rotate the whole UI 180 degrees (touch included) for displays mounted
+  // upside down. Applied from the first boot screen onward.
+  bool flipDisplay = false;
+
+  // Calendar face: start the week on Monday instead of Sunday.
+  bool weekStartMonday = false;
+
+  // Minutes between weather fetches (5-120). Failures retry sooner
+  // regardless (weatherService.cpp).
+  int weatherRefreshMin = 20;
 
   bool fetchConfigFile();
   bool saveConfigFile();

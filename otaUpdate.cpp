@@ -311,6 +311,8 @@ a{color:#0a84ff}
 label{display:block;color:#ccc;font-size:.85rem;margin:.8rem 0 0}
 select,input[type=range],input[type=text]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
 .row{display:flex;gap:.6rem}.row label{flex:1;margin-top:.8rem}
+fieldset{border:1px solid #333;border-radius:8px;margin:1.1rem 0 0;padding:.1rem .9rem .9rem}
+legend{color:#0a84ff;font-size:.75rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:0 .4rem}
 button{width:100%;margin-top:1.2rem;padding:.6rem;border:0;border-radius:6px;background:#0a84ff;color:#fff;font-size:1rem;cursor:pointer}
 </style></head><body><div class="card">
 <h1>ESP32 World Clock</h1>
@@ -337,7 +339,7 @@ static void appendZoneSelect(String &page, const char *label, int slot)
     page += "</select></label>";
 }
 
-// On/Off <select> for one of the home-screen extras toggles.
+// On/Off <select> for a boolean setting (home-screen extras, auto-dim).
 static void appendToggle(String &page, const char *label, const char *name, bool on)
 {
     page += "<label>" + String(label) + "<select name=\"" + name + "\">";
@@ -361,7 +363,7 @@ static void handleSettingsPage()
     if (!webAuthenticate()) return;
 
     String page;
-    page.reserve(12288);
+    page.reserve(14336);
     page += FPSTR(SETTINGS_PAGE_HEAD);
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
             " &middot; <a href=\"/update\">Firmware update</a>"
@@ -376,6 +378,8 @@ static void handleSettingsPage()
     }
     page += "<form method=\"POST\" action=\"/settings\">";
 
+    // --- Clocks & time ---
+    page += "<fieldset><legend>Clocks &amp; time</legend>";
     static const char *slotLabels[4] = {"Top-left clock (home)", "Top-right clock",
                                         "Bottom-left clock", "Bottom-right clock"};
     for (int i = 0; i < 4; i++)
@@ -383,6 +387,18 @@ static void handleSettingsPage()
         appendZoneSelect(page, slotLabels[i], i);
     }
 
+    page += "<div class=\"row\"><label>Clock format<select name=\"clk\">";
+    page += String("<option value=\"24\"") + (SHOW_24HOUR ? " selected" : "") + ">24 hour</option>";
+    page += String("<option value=\"12\"") + (!SHOW_24HOUR ? " selected" : "") + ">12 hour (AM/PM)</option>";
+    page += "</select></label>";
+    page += "<label>Date format<select name=\"date\">";
+    page += String("<option value=\"dmy\"") + (NOT_US_DATE ? " selected" : "") + ">DD/MM/YY</option>";
+    page += String("<option value=\"mdy\"") + (!NOT_US_DATE ? " selected" : "") + ">MM/DD/YY</option>";
+    page += "</select></label></div>";
+    page += "</fieldset>";
+
+    // --- Display ---
+    page += "<fieldset><legend>Display</legend>";
     page += "<label>Clock face<select name=\"face\">";
     for (int f = 0; f < FACE_COUNT; f++)
     {
@@ -391,45 +407,22 @@ static void handleSettingsPage()
                 clockFaceName(f) + "</option>";
     }
     page += "</select></label>";
+    appendToggle(page, "Flip display 180&deg; (upside-down mounting)", "flip",
+                 projectConfig.flipDisplay);
+    page += "</fieldset>";
 
-    page += "<label>Quadrant grid (world clock face)<select name=\"grid\">";
-    page += String("<option value=\"off\"") + (!projectConfig.showGrid ? " selected" : "") + ">Off</option>";
-    page += String("<option value=\"on\"") + (projectConfig.showGrid ? " selected" : "") + ">On</option>";
-    page += "</select></label>";
-
-    page += "<label>Clock format<select name=\"clk\">";
-    page += String("<option value=\"24\"") + (SHOW_24HOUR ? " selected" : "") + ">24 hour</option>";
-    page += String("<option value=\"12\"") + (!SHOW_24HOUR ? " selected" : "") + ">12 hour (AM/PM)</option>";
-    page += "</select></label>";
-
-    page += "<label>Date format<select name=\"date\">";
-    page += String("<option value=\"dmy\"") + (NOT_US_DATE ? " selected" : "") + ">DD/MM/YY</option>";
-    page += String("<option value=\"mdy\"") + (!NOT_US_DATE ? " selected" : "") + ">MM/DD/YY</option>";
-    page += "</select></label>";
-
-    // Home-screen extras: each new world-clock face element is individually
-    // revertible to the classic look.
-    page += "<p>Home-screen extras (world-clock face):</p>";
-    page += "<div class=\"row\">";
-    appendToggle(page, "Sun/moon icons + night colors", "qdn", projectConfig.dayNightIcons);
-    appendToggle(page, "Home quadrant border", "qhome", projectConfig.homeMarker);
-    page += "</div><div class=\"row\">";
-    appendToggle(page, "Weather in quadrants", "qwx", projectConfig.quadWeather);
-    appendToggle(page, "Daylight bar", "qdb", projectConfig.daylightBar);
-    page += "</div><div class=\"row\">";
-    appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
-    appendToggle(page, "Smooth time digits", "qsf", projectConfig.smoothTimeFont);
-    page += "</div><div class=\"row\">";
-    appendToggle(page, "Weather alerts on market line", "qwa", projectConfig.weatherAlerts);
-    page += "</div>";
-
+    // --- Brightness ---
+    page += "<fieldset><legend>Brightness</legend>";
     int pct = map(backlightLevel, 5, 255, 0, 100);
     page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
             "<input type=\"range\" name=\"bri\" min=\"5\" max=\"255\" value=\"" +
             String(backlightLevel) + "\" oninput=\"document.getElementById('bv')"
             ".textContent=Math.round((this.value-5)*100/250)\"></label>";
 
-    // Night dimming: window (home-zone hours) + the dimmed level
+    // Auto-dim master switch + night dimming: window (home-zone hours) and
+    // the dimmed level (all ignored while the switch is off).
+    appendToggle(page, "Auto-dim (light sensor / night window)", "adim",
+                 projectConfig.autoBrightness);
     page += "<div class=\"row\"><label>Night dim from<select name=\"nstart\">";
     appendHourOptions(page, projectConfig.nightStartHour);
     page += "</select></label><label>until<select name=\"nend\">";
@@ -443,8 +436,62 @@ static void handleSettingsPage()
             ".textContent=Math.round((this.value-1)*100/254)\"></label>";
     page += "<p>Night brightness is used when the room is dark (light sensor), "
             "or inside the window above (home-zone time) when the sensor is "
-            "unavailable. Equal hours disable the schedule.</p>";
+            "unavailable. Equal hours disable the schedule. Auto-dim Off keeps "
+            "the backlight at the brightness set above at all times. Saving a "
+            "brightness change pauses auto-dim for 2 hours, same as the "
+            "on-device controls.</p>";
+    page += "</fieldset>";
 
+    // --- World-clock face ---
+    // Home-screen extras: each new world-clock face element is individually
+    // revertible to the classic look.
+    page += "<fieldset><legend>World-clock face</legend>";
+    page += "<div class=\"row\">";
+    appendToggle(page, "Quadrant grid", "grid", projectConfig.showGrid);
+    appendToggle(page, "Sun/moon icons + night colors", "qdn", projectConfig.dayNightIcons);
+    page += "</div><div class=\"row\">";
+    appendToggle(page, "Home quadrant border", "qhome", projectConfig.homeMarker);
+    appendToggle(page, "Weather in quadrants", "qwx", projectConfig.quadWeather);
+    page += "</div><div class=\"row\">";
+    appendToggle(page, "Daylight bar", "qdb", projectConfig.daylightBar);
+    appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
+    page += "</div><div class=\"row\">";
+    appendToggle(page, "Smooth time digits", "qsf", projectConfig.smoothTimeFont);
+    appendToggle(page, "Weather alerts on market line", "qwa", projectConfig.weatherAlerts);
+    page += "</div>";
+    page += "</fieldset>";
+
+    // --- Weather & calendar ---
+    page += "<fieldset><legend>Weather &amp; calendar</legend>";
+    page += "<div class=\"row\"><label>Temperature unit<select name=\"tunit\">";
+    page += String("<option value=\"c\"") + (!projectConfig.useFahrenheit ? " selected" : "") + ">&deg;C</option>";
+    page += String("<option value=\"f\"") + (projectConfig.useFahrenheit ? " selected" : "") + ">&deg;F</option>";
+    page += "</select></label>";
+    page += "<label>Week starts on (calendar)<select name=\"wkstart\">";
+    page += String("<option value=\"sun\"") + (!projectConfig.weekStartMonday ? " selected" : "") + ">Sunday</option>";
+    page += String("<option value=\"mon\"") + (projectConfig.weekStartMonday ? " selected" : "") + ">Monday</option>";
+    page += "</select></label></div>";
+    page += "<label>Weather refresh<select name=\"wref\">";
+    static const int WREF_CHOICES[] = {5, 10, 15, 20, 30, 60, 120};
+    bool wrefListed = false;
+    for (int c : WREF_CHOICES)
+    {
+        bool sel = projectConfig.weatherRefreshMin == c;
+        wrefListed |= sel;
+        page += "<option value=\"" + String(c) + "\"" + (sel ? " selected" : "") +
+                ">every " + String(c) + " min</option>";
+    }
+    if (!wrefListed) // hand-edited config value outside the preset list
+    {
+        page += "<option value=\"" + String(projectConfig.weatherRefreshMin) +
+                "\" selected>every " + String(projectConfig.weatherRefreshMin) +
+                " min</option>";
+    }
+    page += "</select></label>";
+    page += "</fieldset>";
+
+    // --- Network ---
+    page += "<fieldset><legend>Network</legend>";
     page += "<label>Hostname (mDNS \"&lt;name&gt;.local\", applied after reboot)"
             "<input type=\"text\" name=\"host\" maxlength=\"32\" value=\"" +
             projectConfig.hostname + "\"></label>";
@@ -456,10 +503,9 @@ static void handleSettingsPage()
             "<input type=\"text\" name=\"mac\" maxlength=\"17\" "
             "placeholder=\"AA:BB:CC:DD:EE:FF\" value=\"" +
             projectConfig.staMacOverride + "\"></label>";
+    page += "</fieldset>";
 
-    page += "<button type=\"submit\">Save</button></form>"
-            "<p>Saving a brightness change pauses auto-brightness for 2 hours, "
-            "same as the on-device controls.</p>";
+    page += "<button type=\"submit\">Save</button></form>";
 
     // Config backup/restore (/api/config). Restore expects a previously
     // downloaded backup; the device saves it and reboots to apply.
@@ -523,14 +569,53 @@ static void handleSettingsPost()
         projectConfig.saveConfigFile();
     }
 
-    // Grid, night dimming + hostname: gathered into a single config save
+    // Everything below is gathered into a single config save
     bool cfgDirty = false;
-    if (webServer.hasArg("grid"))
+    if (webServer.hasArg("flip"))
     {
-        bool wantsGrid = webServer.arg("grid") == "on";
-        if (wantsGrid != projectConfig.showGrid)
+        bool v = webServer.arg("flip") == "1";
+        if (v != projectConfig.flipDisplay)
         {
-            projectConfig.showGrid = wantsGrid;
+            projectConfig.flipDisplay = v;
+            // Applies right away: switchToScreen below repaints everything in
+            // the new orientation, and touch reads follow the setting.
+            tft.setRotation(v ? 3 : 1);
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("tunit"))
+    {
+        bool f = webServer.arg("tunit") == "f";
+        if (f != projectConfig.useFahrenheit)
+        {
+            projectConfig.useFahrenheit = f;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("wkstart"))
+    {
+        bool mon = webServer.arg("wkstart") == "mon";
+        if (mon != projectConfig.weekStartMonday)
+        {
+            projectConfig.weekStartMonday = mon;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("wref"))
+    {
+        int v = constrain(webServer.arg("wref").toInt(), 5, 120);
+        if (v != projectConfig.weatherRefreshMin)
+        {
+            projectConfig.weatherRefreshMin = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("adim"))
+    {
+        bool v = webServer.arg("adim") == "1";
+        if (v != projectConfig.autoBrightness)
+        {
+            projectConfig.autoBrightness = v;
             cfgDirty = true;
         }
     }
@@ -561,8 +646,9 @@ static void handleSettingsPost()
             cfgDirty = true;
         }
     }
-    // Home-screen extras toggles
+    // World-clock face toggles (grid + home-screen extras)
     struct { const char *arg; bool *value; } extras[] = {
+        {"grid", &projectConfig.showGrid},
         {"qsf", &projectConfig.smoothTimeFont},
         {"qdn", &projectConfig.dayNightIcons},
         {"qhome", &projectConfig.homeMarker},
@@ -731,6 +817,7 @@ static void handleApiStatus()
     doc["holidayZonesLoaded"] = holidayZonesLoaded(holidayZonesEligible);
     doc["holidayZonesEligible"] = holidayZonesEligible;
 
+    doc["autoBrightness"] = projectConfig.autoBrightness;
     bool ldrTrusted, ldrDark;
     int ldrSmoothed;
     if (getLdrState(ldrTrusted, ldrDark, ldrSmoothed))
@@ -842,8 +929,8 @@ static void handleWifiLoginPage()
                  : "") +
             "</p>";
     page += "<p><b>Option A &mdash; log in through the clock (recommended).</b> "
-            "Press the button below (or on-device: Settings &rarr; WiFi). The "
-            "clock opens a temporary hotspot; join it on your phone, complete "
+            "Press the button below (or on-device: Settings &rarr; WiFi login). "
+            "The clock opens a temporary hotspot; join it on your phone, complete "
             "the network's login in your browser, and the clock inherits the "
             "access. The on-device screen shows progress.</p>";
     if (wifiRelayActive())

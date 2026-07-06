@@ -46,6 +46,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_SHOW_GRID] = c.showGrid;
   json[PROJECT_HOSTNAME] = c.hostname;
   json[PROJECT_MAC_OVERRIDE] = c.staMacOverride;
+  json[PROJECT_AUTO_BRIGHTNESS] = c.autoBrightness;
   json[PROJECT_NIGHT_START] = c.nightStartHour;
   json[PROJECT_NIGHT_END] = c.nightEndHour;
   json[PROJECT_NIGHT_BRIGHTNESS] = c.nightBrightness;
@@ -56,6 +57,10 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_DAYLIGHT_BAR] = c.daylightBar;
   json[PROJECT_MARKET_BAR] = c.marketProgressBar;
   json[PROJECT_WEATHER_ALERTS] = c.weatherAlerts;
+  json[PROJECT_USE_FAHRENHEIT] = c.useFahrenheit;
+  json[PROJECT_FLIP_DISPLAY] = c.flipDisplay;
+  json[PROJECT_WEEK_START_MONDAY] = c.weekStartMonday;
+  json[PROJECT_WEATHER_REFRESH_MIN] = c.weatherRefreshMin;
 }
 
 // Apply json onto the settings; missing keys keep their current values and
@@ -129,6 +134,12 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
     any = true;
   }
 
+  if (json.containsKey(PROJECT_AUTO_BRIGHTNESS))
+  {
+    c.autoBrightness = json[PROJECT_AUTO_BRIGHTNESS].as<bool>();
+    any = true;
+  }
+
   if (json.containsKey(PROJECT_NIGHT_START))
   {
     c.nightStartHour = constrain(json[PROJECT_NIGHT_START].as<int>(), 0, 23);
@@ -147,8 +158,8 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
     any = true;
   }
 
-  // Home-screen extras (bool toggles, see projectConfig.h)
-  struct { const char *key; bool *value; } extras[] = {
+  // Bool toggles (home-screen extras + display/weather preferences)
+  struct { const char *key; bool *value; } toggles[] = {
       {PROJECT_SMOOTH_FONT, &c.smoothTimeFont},
       {PROJECT_DAYNIGHT_ICONS, &c.dayNightIcons},
       {PROJECT_HOME_MARKER, &c.homeMarker},
@@ -156,14 +167,23 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
       {PROJECT_DAYLIGHT_BAR, &c.daylightBar},
       {PROJECT_MARKET_BAR, &c.marketProgressBar},
       {PROJECT_WEATHER_ALERTS, &c.weatherAlerts},
+      {PROJECT_USE_FAHRENHEIT, &c.useFahrenheit},
+      {PROJECT_FLIP_DISPLAY, &c.flipDisplay},
+      {PROJECT_WEEK_START_MONDAY, &c.weekStartMonday},
   };
-  for (auto &extra : extras)
+  for (auto &toggle : toggles)
   {
-    if (json.containsKey(extra.key))
+    if (json.containsKey(toggle.key))
     {
-      *extra.value = json[extra.key].as<bool>();
+      *toggle.value = json[toggle.key].as<bool>();
       any = true;
     }
+  }
+
+  if (json.containsKey(PROJECT_WEATHER_REFRESH_MIN))
+  {
+    c.weatherRefreshMin = constrain(json[PROJECT_WEATHER_REFRESH_MIN].as<int>(), 5, 120);
+    any = true;
   }
 
   return any;

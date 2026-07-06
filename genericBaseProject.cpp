@@ -133,20 +133,8 @@ static void handleTimeSync() {
 
 void baseProjectSetup()
 {
-    projectDisplay->displaySetup();
-
-    bool forceConfig = false;
-    bool wifiConnected = false;
-
-    // Initialize double reset detector
-    drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
-    if (drd->detectDoubleReset())
-    {
-        Log.println(F("Forcing config mode as there was a Double reset detected"));
-        forceConfig = true;
-    }
-
-    // Initialize SPIFFS
+    // SPIFFS and the saved config come up before the display so settings that
+    // affect the panel itself (flipDisplay) apply from the very first pixel.
     bool spiffsInitSuccess = SPIFFS.begin(false) || SPIFFS.begin(true);
     if (!spiffsInitSuccess)
     {
@@ -166,6 +154,24 @@ void baseProjectSetup()
     // network refresh is scheduled later from the main loop.
     marketHolidaysBegin();
 
+    projectDisplay->displaySetup();
+
+    // Give the init screen a Settings button: the wait loops below poll it,
+    // and a tap cuts the remaining network waits short so the main loop can
+    // start directly on the settings page (Wi-Fi login helper, status, logs).
+    bootUiBegin();
+
+    bool forceConfig = false;
+    bool wifiConnected = false;
+
+    // Initialize double reset detector
+    drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
+    if (drd->detectDoubleReset())
+    {
+        Log.println(F("Forcing config mode as there was a Double reset detected"));
+        forceConfig = true;
+    }
+
     // Step 1: Try preconfigured WiFi credentials first. A single attempt can
     // fail even when the network is fine (AP busy, weak signal on boot), so
     // retry several times before falling back to the config portal.
@@ -177,7 +183,7 @@ void baseProjectSetup()
         // a login-required network sees the authorized address from the start.
         applyStaMacOverride();
 
-        for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected; attempt++)
+        for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected && !bootUiPoll(); attempt++)
         {
             Log.print("WiFi connect attempt ");
             Log.print(attempt);
@@ -190,11 +196,17 @@ void baseProjectSetup()
             delay(100);
             WiFi.begin(PRECONFIGURED_SSID, PRECONFIGURED_PASSWORD);
 
+            // Poll every 50ms so a quick tap on the boot Settings button is
+            // never missed; keep the progress dots at their ~500ms cadence.
             unsigned long startTime = millis();
-            while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT)
+            int ticks = 0;
+            while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT && !bootUiPoll())
             {
-                delay(500);
-                Log.print(".");
+                delay(50);
+                if (++ticks % 10 == 0)
+                {
+                    Log.print(".");
+                }
             }
             Log.println();
 
@@ -219,6 +231,11 @@ void baseProjectSetup()
                 Log.println("Using preconfigured timezone and settings");
             }
         }
+        else if (bootUiSettingsRequested())
+        {
+            Log.println("Boot cut short before WiFi connected - the STA keeps "
+                        "retrying in the background");
+        }
         else
         {
             Log.println("All preconfigured WiFi attempts failed, falling back to WiFiManager");
@@ -227,7 +244,9 @@ void baseProjectSetup()
     }
 
     // Step 2: If preconfigured WiFi failed or forced config, use WiFiManager
-    if (!wifiConnected)
+    // (skipped when the user asked for the settings page - the config portal
+    // blocks for minutes and has its own reboot-to-retry recovery).
+    if (!wifiConnected && !bootUiSettingsRequested())
     {
         setupWiFiManager(forceConfig, projectConfig, projectDisplay);
     }
@@ -235,9 +254,11 @@ void baseProjectSetup()
     // Final check to ensure WiFi is connected. Bounded: both paths above are
     // supposed to have us connected by now, so if we're still offline after
     // 30 seconds something is wedged - reboot and run the whole sequence
-    // again rather than hanging here forever.
+    // again rather than hanging here forever. A boot Settings tap skips the
+    // wait (and the reboot) so the settings page stays reachable offline.
     unsigned long wifiWaitStart = millis();
-    while (WiFi.status() != WL_CONNECTED)
+    int waitTicks = 0;
+    while (WiFi.status() != WL_CONNECTED && !bootUiPoll())
     {
         if (millis() - wifiWaitStart > 30000UL)
         {
@@ -246,34 +267,46 @@ void baseProjectSetup()
             delay(1000);
             ESP.restart();
         }
-        Log.print(".");
-        delay(500);
+        if (++waitTicks % 10 == 0)
+        {
+            Log.print(".");
+        }
+        delay(50);
     }
 
-    Log.println("");
-    Log.println("WiFi connected");
-    Log.print("IP address: ");
-    Log.println(WiFi.localIP());
-
-    // Association succeeds even on a login-required (captive-portal) network,
-    // where everything past this point (NTP, weather, holidays) would silently
-    // fail. Probe once so the reason is in the log; the runtime re-check on the
-    // weather task keeps the on-screen / API captive state current thereafter.
-    switch (netCheckNow())
+    if (WiFi.status() == WL_CONNECTED)
     {
-    case NET_ONLINE:
-        Log.println("Internet check: online");
-        break;
-    case NET_CAPTIVE:
-        Log.println("Internet check: CAPTIVE PORTAL - this network needs a "
-                    "browser login. See http://" + WiFi.localIP().toString() +
-                    "/wifi-login (NTP/weather stay unavailable until it is "
-                    "authorized for MAC " + WiFi.macAddress() + ")");
-        break;
-    default:
-        Log.println("Internet check: no response (network may be offline or "
-                    "blocking outbound traffic)");
-        break;
+        Log.println("");
+        Log.println("WiFi connected");
+        Log.print("IP address: ");
+        Log.println(WiFi.localIP());
+
+        // Association succeeds even on a login-required (captive-portal) network,
+        // where everything past this point (NTP, weather, holidays) would silently
+        // fail. Probe once so the reason is in the log; the runtime re-check on the
+        // weather task keeps the on-screen / API captive state current thereafter.
+        switch (netCheckNow())
+        {
+        case NET_ONLINE:
+            Log.println("Internet check: online");
+            break;
+        case NET_CAPTIVE:
+            Log.println("Internet check: CAPTIVE PORTAL - this network needs a "
+                        "browser login. See http://" + WiFi.localIP().toString() +
+                        "/wifi-login (NTP/weather stay unavailable until it is "
+                        "authorized for MAC " + WiFi.macAddress() + ")");
+            break;
+        default:
+            Log.println("Internet check: no response (network may be offline or "
+                        "blocking outbound traffic)");
+            break;
+        }
+    }
+    else
+    {
+        Log.println("");
+        Log.println("Continuing to the settings page without WiFi - use the "
+                    "WiFi login helper / status / logs from there");
     }
 
     // Enable over-the-air firmware updates now that the network is up
@@ -291,9 +324,18 @@ void baseProjectSetup()
     // NTP never completes, which on a login-required network would hang the
     // whole device at boot - before the main loop starts, so the web page and
     // the on-device Wi-Fi login helper would never come up. Time out instead
+    // (open-coded so the boot Settings button stays responsive throughout)
     // and let setup() finish; ezTime's background events() keep retrying, so
     // the clock syncs on its own once the network is actually authorized.
-    if (waitForSync(INITIAL_NTP_SYNC_TIMEOUT_S))
+    unsigned long ntpStart = millis();
+    while (timeStatus() != timeSet &&
+           millis() - ntpStart < INITIAL_NTP_SYNC_TIMEOUT_S * 1000UL &&
+           !bootUiPoll())
+    {
+        events(); // drives the pending NTP query
+        delay(50);
+    }
+    if (timeStatus() == timeSet)
     {
         Log.println("Initial NTP sync complete!");
         Log.println();
@@ -301,9 +343,9 @@ void baseProjectSetup()
     }
     else
     {
-        Log.println("Initial NTP sync timed out - continuing so the UI / web "
-                    "settings / Wi-Fi login helper are available; the clock "
-                    "will sync once it has real internet");
+        Log.println("Initial NTP sync skipped or timed out - continuing so the "
+                    "UI / web settings / Wi-Fi login helper are available; the "
+                    "clock will sync once it has real internet");
     }
 
     // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in
@@ -312,7 +354,9 @@ void baseProjectSetup()
     if (!(myTZ.setCache(4 * EEPROM_CACHE_LEN) &&
           myTZ.getOlson().equalsIgnoreCase(projectConfig.timeZone)))
     {
-        if (!myTZ.setLocation(projectConfig.timeZone))
+        // On a boot cut short by the Settings button there is no internet
+        // worth waiting on - go straight to the built-in POSIX rules.
+        if (bootUiSettingsRequested() || !myTZ.setLocation(projectConfig.timeZone))
         {
             // Timezone server unreachable and nothing cached: preset zones
             // carry built-in POSIX rules so local time is still correct.
@@ -320,7 +364,7 @@ void baseProjectSetup()
             if (posix)
             {
                 myTZ.setPosix(posix);
-                Log.println("Timezone server unreachable - using built-in POSIX rules");
+                Log.println("Timezone server skipped/unreachable - using built-in POSIX rules");
             }
         }
     }

@@ -134,6 +134,11 @@ long daysFromCivil(int y, int m, int d);
 // walk forward over real calendar dates (weekends, market holidays).
 void civilFromDays(long days, int &y, int &m, int &d);
 
+// Touch read for all UI code: getTouch() mapped into screen pixels, mirrored
+// when the display is flipped 180 degrees (projectConfig.flipDisplay) so touch
+// zones always line up with what's drawn.
+TouchPoint readTouchPoint();
+
 // Dump the ambient-light sensor state to Serial (the LDR serial command).
 void printLdrStatus();
 

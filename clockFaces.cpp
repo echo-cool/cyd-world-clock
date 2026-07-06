@@ -156,7 +156,9 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
         tft.drawString(String(MONTH_ABBR[mo]) + " " + String(yr), 8, 4);
 
-        static const char *WD[7] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
+        static const char *WD_SUN[7] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
+        static const char *WD_MON[7] = {"MO", "TU", "WE", "TH", "FR", "SA", "SU"};
+        const char **WD = projectConfig.weekStartMonday ? WD_MON : WD_SUN;
         tft.setTextFont(1);
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
@@ -166,8 +168,10 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         }
 
         // 1970-01-01 (daysFromCivil == 0) was a Thursday, so +4 lands the
-        // week on 0 = Sunday.
+        // week on 0 = Sunday; one more rotation makes 0 = Monday when the
+        // week starts there.
         int firstDow = (int)((daysFromCivil(yr, mo, 1) + 4) % 7);
+        if (projectConfig.weekStartMonday) firstDow = (firstDow + 6) % 7;
         int dim = daysInMonth(yr, mo);
 
         tft.setTextFont(1);
@@ -188,7 +192,8 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
             } else if (holiday) {
                 tft.setTextColor(TFT_GOLD, clockBackgroundColor);
             } else {
-                bool weekend = (col == 0 || col == 6);
+                bool weekend = projectConfig.weekStartMonday ? (col >= 5)
+                                                             : (col == 0 || col == 6);
                 tft.setTextColor(weekend ? TFT_DARKGREY : TFT_WHITE, clockBackgroundColor);
             }
             tft.drawString(String(d), cx, cy);
@@ -299,11 +304,11 @@ static void renderWeatherFace(bool full)
             tft.setTextFont(4);
             tft.setTextDatum(TR_DATUM);
             tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-            tft.drawString(String((int)lroundf(w.tempC)), 284, ry);
+            tft.drawString(String(displayTemp(w.tempC)), 284, ry);
             tft.drawCircle(291, ry + 7, 3, TFT_WHITE);
             tft.setTextFont(2);
             tft.setTextDatum(TL_DATUM);
-            tft.drawString("C", 297, ry + 2);
+            tft.drawString(String(tempUnitLetter()), 297, ry + 2);
 
             tft.setTextFont(2);
             tft.setTextDatum(TR_DATUM);
