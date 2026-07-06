@@ -85,6 +85,18 @@ const char *resetReasonText();
 // "start" trigger (via the main loop). MAIN core only.
 void openWifiLoginHelper();
 
+// Boot-time UI on the "System initializing..." screen. The blocking boot
+// sequence (WiFi retries -> config portal -> NTP) can take minutes on a
+// network with no usable internet, so the init screen carries a Settings
+// button: bootUiBegin() starts the touch panel and draws it, the boot wait
+// loops call bootUiPoll() (edge -> sticky), and once it has been tapped the
+// remaining network waits are cut short so the main loop starts directly on
+// the settings page - from where the Wi-Fi login helper, status and logs are
+// reachable. bootUiSettingsRequested() reads the sticky flag without polling.
+void bootUiBegin();
+bool bootUiPoll();
+bool bootUiSettingsRequested();
+
 void switchToScreen(UIScreen s);
 void handleUiTouch();
 void renderUiPage();

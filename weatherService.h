@@ -4,9 +4,10 @@
 // ---------------------------------------------------------------------------
 // Current weather for the four configured zones, fetched from Open-Meteo
 // (https://open-meteo.com - free, no API key) in a single multi-location
-// request. A dedicated FreeRTOS task on core 0 does the fetching (every 20
-// minutes, retrying 5 minutes after a failure), so the clock and touch UI on
-// the main core never block. Used by the weather clock face.
+// request. A dedicated FreeRTOS task on core 0 does the fetching (every
+// weatherRefreshMin minutes - web settings, default 20 - retrying 5 minutes
+// after a failure), so the clock and touch UI on the main core never block.
+// Used by the weather clock face.
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>
@@ -47,6 +48,12 @@ uint32_t weatherDataVersion();
 // promptly. MAIN core only (reads the worldZones Strings) - call it when a
 // zone's timezone/city changes.
 void weatherInvalidate();
+
+// Temperature ready for display: rounded, converted to Fahrenheit when the
+// useFahrenheit setting is on (stored values stay Celsius). tempUnitLetter
+// gives the matching 'C' / 'F' for faces that print the unit.
+int displayTemp(float tempC);
+char tempUnitLetter();
 
 // Short display text / color for a WMO weather code, e.g. 61 -> "RAIN".
 const char *weatherCodeText(int code);

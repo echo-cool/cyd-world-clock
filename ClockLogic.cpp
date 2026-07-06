@@ -111,7 +111,7 @@ void SetupCYD()
     tft.fillScreen(clockBackgroundColor);
     tft.setTextColor(clockFontColor, clockBackgroundColor);
 
-    tft.setRotation(1);
+    tft.setRotation(projectConfig.flipDisplay ? 3 : 1);
     tft.setTextFont(clockFont);
     tft.setTextSize(clockSize);
     tft.setTextDatum(clockDatum);
@@ -804,7 +804,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     if (projectConfig.quadWeather) {
         ZoneWeather w = getZoneWeather(zoneIdx);
         if (w.valid) {
-            String temp = String((int)lroundf(w.tempC));
+            String temp = String(displayTemp(w.tempC));
             uint16_t condColor = weatherCodeColor(w.weatherCode);
             bool dotFits = temp.length() <= 2;
             uint16_t tempColor = dotFits ? TFT_WHITE : condColor;
@@ -1134,8 +1134,19 @@ void adjustBrightnessAuto()
     int dayTarget = constrain(projectConfig.brightness, 1, 255);
 
 #if USE_LDR_AUTOBRIGHTNESS
+    // Sample even while auto-brightness is switched off so the sensor stays
+    // calibrated (and the status pages stay live) for when it's re-enabled.
     ldrSample(currentTime);
-    if (ldrIsTrusted()) {
+#endif
+
+    // Master switch (web settings page): off = ignore the light sensor and
+    // the night schedule, hold the user's set brightness (fading back to it
+    // if a dim was in effect when the switch was flipped).
+    if (!projectConfig.autoBrightness) {
+        target = dayTarget;
+    }
+#if USE_LDR_AUTOBRIGHTNESS
+    else if (ldrIsTrusted()) {
         target = ldrDark ? nightTarget : dayTarget;
     }
 #endif
@@ -1302,7 +1313,10 @@ void rollingClockSetup(bool is24Hour, bool usDate)
 
         int retryCount = 0;
         const int maxRetries = 5;
-        while (!tzSuccess && retryCount < maxRetries) {
+        // When the boot Settings button cut the boot short there is no
+        // internet worth retrying against - skip straight to the POSIX
+        // fallback below so the settings page appears without a long stall.
+        while (!tzSuccess && retryCount < maxRetries && !bootUiSettingsRequested()) {
             // Show progress on screen
             String statusMsg = "Setting up ";
             statusMsg += worldZones[i].name;
@@ -1393,11 +1407,23 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     showStartupCommands();
 }
 
+TouchPoint readTouchPoint()
+{
+    TouchPoint t = touchscreen.getTouch();
+    if (projectConfig.flipDisplay) {
+        // Rotation 3 mirrors both axes relative to the touch panel's fixed
+        // orientation (calibrated for rotation 1).
+        t.x = 320 - 1 - t.x;
+        t.y = 240 - 1 - t.y;
+    }
+    return t;
+}
+
 void handleTouch()
 {
     static unsigned long lastTouchTime = 0;
 
-    TouchPoint touch = touchscreen.getTouch();
+    TouchPoint touch = readTouchPoint();
     bool down = (touch.zRaw > 800); // zRaw indicates pressure
 
     if (!down)

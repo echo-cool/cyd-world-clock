@@ -4,6 +4,7 @@
 
 #include "logBuffer.h" // Log
 #include "otaUpdate.h" // otaInProgress - never reboot mid-update
+#include "wifiRelay.h" // wifiRelayActive - never reboot mid-login
 
 // Cheap status poll cadence; WiFi.status() just reads a cached value.
 static const unsigned long WIFI_CHECK_MS = 2000;
@@ -85,7 +86,10 @@ void wifiWatchService()
     if (otaInProgress)
         return;
 
-    if (ms - downSinceMs >= WIFI_REBOOT_AFTER_MS)
+    // A running Wi-Fi login helper session is the user actively fixing the
+    // connection - keep the reconnect kicks (the relay needs the STA link)
+    // but hold the self-heal reboot until the helper closes or times out.
+    if (ms - downSinceMs >= WIFI_REBOOT_AFTER_MS && !wifiRelayActive())
     {
         Log.println("WiFi offline for " + String((ms - downSinceMs) / 60000UL) +
                     " min - rebooting to run the boot recovery sequence");

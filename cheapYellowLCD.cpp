@@ -6,6 +6,7 @@
 
 #include "cheapYellowLCD.h"
 #include "logBuffer.h"
+#include "projectConfig.h" // flipDisplay - panel orientation
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -16,9 +17,10 @@ void CheapYellowDisplay::displaySetup()
   setWidth(320);
   setHeight(240);
 
-  // Start the tft display and set it to black
+  // Start the tft display and set it to black. Rotation 1 is the CYD's
+  // native landscape; 3 is the same panel mounted upside down (flipDisplay).
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(projectConfig.flipDisplay ? 3 : 1);
   tft.fillScreen(TFT_BLACK);
 
   tft.setTextFont(2);

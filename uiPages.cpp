@@ -191,8 +191,8 @@ const UIButton BTN_SET_BRI = {240, 178, 60, 26};
 // Bottom row: four buttons across (Status / Logs / WiFi login helper / Back).
 const UIButton BTN_SET_STAT = {20, 208, 62, 26};
 const UIButton BTN_SET_LOGS = {88, 208, 46, 26};
-const UIButton BTN_SET_WIFI = {140, 208, 74, 26};
-const UIButton BTN_SET_BACK = {220, 208, 80, 26};
+const UIButton BTN_SET_WIFI = {140, 208, 92, 26};
+const UIButton BTN_SET_BACK = {238, 208, 62, 26};
 
 // Wi-Fi login helper page: a single "Done" button (mirrors BTN_SET_BACK).
 const UIButton BTN_WIFI_DONE = {90, 202, 140, 32};
@@ -225,7 +225,7 @@ bool uiNewTouch(int &tx, int &ty)
     static bool wasDown = false;
     static unsigned long lastFire = 0;
 
-    TouchPoint t = touchscreen.getTouch();
+    TouchPoint t = readTouchPoint();
     bool down = (t.zRaw > 800);
     bool fired = false;
 
@@ -275,6 +275,62 @@ void openWifiLoginHelper()
 {
     wifiRelayStart(); // bring up the helper AP + NAT before showing the screen
     switchToScreen(SCREEN_WIFI_LOGIN);
+}
+
+/*-------- Boot-time settings button ----------*/
+// See uiPages.h: a Settings button on the "System initializing..." screen so
+// the blocking boot waits can be cut short on networks with no usable
+// internet (e.g. login-required WiFi), landing the main loop directly on the
+// settings page.
+
+const UIButton BTN_BOOT_SETTINGS = {90, 192, 140, 32};
+
+static bool bootUiActive = false;       // button drawn, polling enabled
+static bool bootSettingsWanted = false; // sticky once the button is tapped
+
+void bootUiBegin()
+{
+    // The touch controller normally starts later (rollingClockSetup), but
+    // begin() only sets pin modes, so starting it early here is harmless.
+    touchscreen.begin();
+
+    drawButton(BTN_BOOT_SETTINGS, "Settings", TFT_CYAN, TFT_WHITE);
+    tft.setTextFont(1);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString("WiFi login / status / logs", 160, 230);
+
+    bootUiActive = true;
+}
+
+bool bootUiSettingsRequested()
+{
+    return bootSettingsWanted;
+}
+
+bool bootUiPoll()
+{
+    if (!bootUiActive || bootSettingsWanted)
+        return bootSettingsWanted;
+
+    TouchPoint t = readTouchPoint();
+    if (t.zRaw > 800 && buttonContains(BTN_BOOT_SETTINGS, t.x, t.y))
+    {
+        bootSettingsWanted = true;
+        // Acknowledge right away - the remaining boot steps can still take a
+        // few seconds before the settings page actually appears.
+        drawButton(BTN_BOOT_SETTINGS, "Settings", TFT_GREEN, TFT_GREEN);
+        tft.setTextFont(2);
+        tft.setTextSize(1);
+        tft.setTextDatum(TC_DATUM);
+        tft.setTextColor(TFT_GREEN, clockBackgroundColor);
+        tft.fillRect(0, 160, 320, 20, clockBackgroundColor);
+        tft.drawString("Opening settings...", 160, 162);
+        Log.println("Settings requested from the init screen - cutting the "
+                    "remaining boot waits short");
+    }
+    return bootSettingsWanted;
 }
 
 /*-------- Settings actions ----------*/
@@ -392,8 +448,9 @@ void renderSettingsPage()
     drawSettingsBrightnessLabel();
     drawButton(BTN_SET_STAT, "Status", TFT_GREEN, TFT_WHITE);
     drawButton(BTN_SET_LOGS, "Logs", TFT_GREEN, TFT_WHITE);
-    // Amber when a captive portal is blocking the internet, to draw the eye.
-    drawButton(BTN_SET_WIFI, "WiFi",
+    // Enables the device's helper AP + captive-portal login relay. Amber when
+    // a captive portal is blocking the internet, to draw the eye.
+    drawButton(BTN_SET_WIFI, "WiFi login",
                captivePortalActive() ? TFT_ORANGE : TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
 }
@@ -415,7 +472,10 @@ static void renderWifiLoginStatus()
         color = TFT_RED;
         break;
     case RELAY_ACTIVE:
-        text = "Waiting for login...";
+        // The relay only routes once the clock itself is associated to the
+        // upstream network - say so while that link is still coming up.
+        text = (WiFi.status() == WL_CONNECTED) ? "Waiting for login..."
+                                               : "Waiting for WiFi link...";
         color = TFT_CYAN;
         break;
     default:
@@ -715,7 +775,9 @@ static void fillDataValues(String *values, uint16_t *colors)
     else
     {
         values[3] = "updated " + String(weatherAge) + " min ago";
-        if (weatherAge > 60) colors[3] = TFT_YELLOW; // fetches every 20 min
+        // Yellow once ~3 fetch intervals have gone by without fresh data
+        if (weatherAge > 3 * constrain(projectConfig.weatherRefreshMin, 5, 120))
+            colors[3] = TFT_YELLOW;
     }
 
     long calAgeDays = -1;
@@ -748,7 +810,12 @@ static void fillDataValues(String *values, uint16_t *colors)
 
     bool ldrTrusted, ldrDark;
     int ldrSmoothed;
-    if (!getLdrState(ldrTrusted, ldrDark, ldrSmoothed))
+    if (!projectConfig.autoBrightness)
+    {
+        values[7] = "off (web settings)";
+        colors[7] = TFT_YELLOW;
+    }
+    else if (!getLdrState(ldrTrusted, ldrDark, ldrSmoothed))
     {
         values[7] = "schedule only (no LDR)";
     }

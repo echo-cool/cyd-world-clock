@@ -10,13 +10,19 @@
 #include "marketHolidays.h" // marketHolidaysTick - shares this task's HTTPS stack
 #include "netCheck.h"       // netCheckService - captive-portal re-check
 #include "otaUpdate.h"      // otaInProgress - pause fetching during an update
-#include "projectConfig.h"  // weatherAlerts toggle
+#include "projectConfig.h"  // weatherAlerts / useFahrenheit / weatherRefreshMin
 #include "uiPages.h"        // getCityCoords, getCountryForTimezone
 #include "wifiRelay.h"      // wifiRelayActive - the relay does its own probing
 
-const unsigned long WEATHER_REFRESH_MS = 20UL * 60UL * 1000UL; // after a success
-const unsigned long WEATHER_RETRY_MS = 5UL * 60UL * 1000UL;    // after a failure
-const unsigned long WEATHER_TASK_TICK_MS = 2000;               // due-check cadence
+// Success-path refresh interval comes from projectConfig.weatherRefreshMin
+// (web settings page, default 20 minutes, re-read every due-check).
+const unsigned long WEATHER_RETRY_MS = 5UL * 60UL * 1000UL; // after a failure
+const unsigned long WEATHER_TASK_TICK_MS = 2000;            // due-check cadence
+
+static unsigned long weatherRefreshMs()
+{
+    return (unsigned long)constrain(projectConfig.weatherRefreshMin, 5, 120) * 60000UL;
+}
 
 // City coordinates the fetch task works from. Snapshotted from worldZones on
 // the MAIN core (weatherBegin / weatherInvalidate), so the task never reads
@@ -358,7 +364,7 @@ static void weatherTask(void *)
         unsigned long now = millis();
         weatherLock();
         bool due = fetchForced || !attempted ||
-                   (now - lastAttemptMillis >= (succeeded ? WEATHER_REFRESH_MS : WEATHER_RETRY_MS));
+                   (now - lastAttemptMillis >= (succeeded ? weatherRefreshMs() : WEATHER_RETRY_MS));
         if (due)
         {
             fetchForced = false;
@@ -388,6 +394,17 @@ void weatherBegin()
     // Core 0 (the Arduino loop runs on core 1). 16KB stack: HTTPS through
     // WiFiClientSecure needs far more headroom than the FreeRTOS default.
     xTaskCreatePinnedToCore(weatherTask, "weather", 16384, nullptr, 1, nullptr, 0);
+}
+
+int displayTemp(float tempC)
+{
+    float t = projectConfig.useFahrenheit ? tempC * 9.0f / 5.0f + 32.0f : tempC;
+    return (int)lroundf(t);
+}
+
+char tempUnitLetter()
+{
+    return projectConfig.useFahrenheit ? 'F' : 'C';
 }
 
 // WMO weather interpretation codes:

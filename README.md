@@ -184,8 +184,8 @@ of the home screen (the System status page and `/api/status` also report
 `internet: captive`). There are three ways to get it online:
 
 - **Log in through the clock (easiest).** On the device, open **Settings →
-  WiFi**, or browse to `http://<device-ip>/wifi-login` and press *Start login
-  helper*. The clock brings up a temporary hotspot (SSID
+  WiFi login**, or browse to `http://<device-ip>/wifi-login` and press *Start
+  login helper*. The clock brings up a temporary hotspot (SSID
   `<hostname>-login`, password `12345678`) and routes its traffic through your
   phone's login: join that hotspot on your phone, complete the network's login
   in your browser, and the clock inherits the access (the network authorizes the
@@ -201,6 +201,15 @@ of the home screen (the System status page and `/api/status` also report
   phone's "private/random MAC" for the network first, and don't keep both on the
   network at once with the same MAC. A cloned MAC is marked with `*` on the
   Network status page and applies after a reboot.
+
+**Skipping a stuck boot.** The `System initializing...` boot screen carries a
+**Settings** button. Booting on a network with no usable internet (or none at
+all) normally means minutes of connection retries, portal waits and reboot
+loops — tap the button instead and the clock cuts the remaining network waits
+short and opens the settings page directly, so the **WiFi login** helper,
+**Status** and **Logs** are immediately reachable at the new location. The
+WiFi link keeps retrying in the background meanwhile, and time falls back to
+the built-in timezone rules until real internet arrives.
 
 **If WiFi drops while the clock is running**, the clock keeps ticking (time
 runs locally between NTP syncs) and recovers in stages: after a minute
@@ -287,17 +296,18 @@ settings page (the choice is saved to flash):
   and market status, plus a mini strip of the other three zones' times along
   the bottom.
 - **Calendar** — a month calendar for the home zone with today highlighted,
-  and the current time in the header. Public holidays are marked in gold
-  (today's highlight box also turns gold on a holiday), and a footer line
-  names today's holiday — or the next upcoming one (`NEXT: 25 DEC -
-  CHRISTMAS DAY`).
+  and the current time in the header. The week starts on Sunday (or Monday —
+  web settings page). Public holidays are marked in gold (today's highlight
+  box also turns gold on a holiday), and a footer line names today's holiday
+  — or the next upcoming one (`NEXT: 25 DEC - CHRISTMAS DAY`).
 - **Weather** — current temperature and conditions for all four configured
   cities (with each city's local time), from the free
   [Open-Meteo](https://open-meteo.com) API — no API key needed. A background
-  task fetches every 20 minutes regardless of which face is showing, so the
-  data is ready the moment the face opens and the clock never pauses. Weather
-  is only available for cities picked from the preset timezone list, since it
-  needs their coordinates.
+  task fetches every 20 minutes (configurable on the web settings page, in
+  °C or °F) regardless of which face is showing, so the data is ready the
+  moment the face opens and the clock never pauses. Weather is only available
+  for cities picked from the preset timezone list, since it needs their
+  coordinates.
 - **Markets** — every exchange the clock knows about (NYSE, LSE, SSE, TSE,
   HKEX) at a glance, independent of which cities occupy the quadrants: one
   row per exchange with its local time and the same colored
@@ -377,24 +387,34 @@ each zone currently has.
 Everything on the settings page can also be changed from a browser: go to
 `http://esp32worldclock.local/` (or the device IP shown on the System status
 page) to pick the four timezones, clock face, quadrant grid, clock/date
-format and brightness without touching the device. The web page additionally exposes a
-few settings that have no on-device UI:
+format and brightness without touching the device. The page is organized
+into categories:
 
-- **Home-screen extras** — On/Off toggles for the world-clock face's extra
-  elements: sun/moon icons + readable night colors, the home-quadrant
-  border, per-quadrant weather, the daylight bar, the market-session
-  progress bar, the smooth (anti-aliased) time digits and weather alerts on
-  the market status line (see the face description above). All default to on;
-  switching one off restores the classic look of that element. (Weather
-  alerts and the quadrant grid also have on-device toggles on the settings
-  page.)
-- **Night dimming** — the backlight level used at night (default: minimum)
-  and the fallback dim window (default 1–7 AM home-zone time, used when the
-  light sensor is unavailable; the window may wrap midnight, and equal
-  start/end hours disable it).
-- **Hostname** — the mDNS name the device advertises (`<hostname>.local`,
-  default `esp32worldclock`). Change it when running two clocks on one
-  network; it is applied on the next reboot.
+- **Clocks & time** — the four timezones and the clock/date formats.
+- **Display** — the clock face, plus *Flip display 180°* for clocks mounted
+  upside down (rotates the whole UI including touch; applies immediately and
+  from the first boot screen).
+- **Brightness** — the brightness slider, the auto-dim master switch
+  (default: on; Off keeps the backlight at the set brightness at all times,
+  ignoring both the light sensor and the night window), the night backlight
+  level (default: minimum) and the fallback dim window (default 1–7 AM
+  home-zone time, used when the light sensor is unavailable; the window may
+  wrap midnight, and equal start/end hours disable it).
+- **World-clock face** — On/Off toggles for the quadrant grid and the
+  face's extra elements: sun/moon icons + readable night colors, the
+  home-quadrant border, per-quadrant weather, the daylight bar, the
+  market-session progress bar, the smooth (anti-aliased) time digits and
+  weather alerts on the market status line (see the face description above).
+  The extras all default to on; switching one off restores the classic look
+  of that element. (Weather alerts and the quadrant grid also have on-device
+  toggles on the settings page.)
+- **Weather & calendar** — temperatures in °C or °F (weather face and
+  per-quadrant weather), the weather refresh interval (default: every 20
+  minutes) and whether the calendar face's week starts on Sunday or Monday.
+- **Network** — the mDNS hostname the device advertises (`<hostname>.local`,
+  default `esp32worldclock`; change it when running two clocks on one
+  network, applied on the next reboot) and the custom MAC for login-required
+  networks.
 - **Config backup / restore** — the *Backup config* link downloads all
   settings as JSON (also available at `/api/config`); picking a backup file
   next to *restore* uploads it back, after which the device saves it and
@@ -421,7 +441,8 @@ brightness, and it fades back to the saved brightness when the lights come
 on. The LDR circuit is unreliable on some CYD board revisions, so the sensor
 is only trusted after its reading has actually been seen to move; until then
 the clock falls back to a time schedule (default: dim between 1–7 AM
-home-zone time). Both the night brightness and the schedule window are
+home-zone time). The night brightness, the schedule window and the auto-dim
+master switch (Off = the backlight never changes on its own) are all
 configurable on the web settings page. Type `LDR` in the serial monitor to
 see the live readings, and set `LDR_DARK_IS_HIGH` to 0 in `ClockLogic.h` if
 your board's sensor reads inverted. Manual brightness changes (touch gesture
