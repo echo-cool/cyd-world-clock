@@ -13,12 +13,10 @@ void setup()
 
     rollingClockSetup(projectConfig.twentyFourHour, projectConfig.usDateFormat);
 
-    // A Settings tap on the init screen skips straight to the settings page,
-    // where the WiFi login helper, status and logs are one tap away.
-    if (bootUiSettingsRequested())
-    {
-        switchToScreen(SCREEN_SETTINGS);
-    }
+    // A Settings tap on the init screen lands on the settings page; WiFi
+    // credentials from the portal that failed to join land on the failure
+    // page (reason + Reboot / Settings buttons). Normal boots do nothing.
+    bootOpenPendingScreen();
 
     Log.println("Setup complete. Main loop will run on core " + String(xPortGetCoreID()));
 }

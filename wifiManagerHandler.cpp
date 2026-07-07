@@ -10,6 +10,7 @@
 #include "projectConfig.h"
 #include "projectDisplay.h"
 #include "netCheck.h" // applyStaMacOverride, normalizeMac
+#include "uiPages.h"  // bootReportWifiFailure - on-screen join-failure page
 
 DoubleResetDetector *drd;
 ProjectDisplay *wm_Display;
@@ -92,45 +93,66 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   WiFi.mode(WIFI_STA);
   applyStaMacOverride();
 
+  // Exit the portal as soon as the user saves credentials, even when the
+  // join fails - the on-screen failure page below then explains why, instead
+  // of the portal silently sitting there until its timeout reboots the clock.
+  wm.setBreakAfterConfig(true);
+
+  bool portalOk;
   if (forceConfig)
   {
     // IF we forced config this time, lets stop the double reset so it doesn't get stuck in a loop
     drd->stop();
-    if (!wm.startConfigPortal("esp32Project", "12345678"))
-    {
-      Log.println("Config portal timed out with no WiFi - rebooting to retry");
-      delay(3000);
-      // reset and try again (preconfigured credentials get retried first)
-      ESP.restart();
-      delay(5000);
-    }
+    portalOk = wm.startConfigPortal("esp32Project", "12345678");
   }
   else
   {
-    if (!wm.autoConnect("esp32Project", "12345678"))
-    {
-      Log.println("Config portal timed out with no WiFi - rebooting to retry");
-      delay(3000);
-      // Stop the double-reset detector first: its RTC flag is still armed
-      // (drd->loop() never ran during setup), so restarting without this
-      // would read as a "double reset" and force the portal open again,
-      // looping forever instead of retrying the preconfigured WiFi.
-      drd->stop();
-      ESP.restart();
-      delay(5000);
-    }
+    portalOk = wm.autoConnect("esp32Project", "12345678");
   }
 
-  // save the custom parameters to FS
+  // Persist the portal's extra fields (timezone, formats, custom MAC)
+  // whenever the user pressed Save - whether or not the WiFi join worked.
   if (shouldSaveConfig)
   {
-
     config.timeZone = String(timeZoneParam.getValue());
     config.twentyFourHour = (strncmp(isTwentyFourHour.getValue(), "T", 1) == 0);
     config.usDateFormat = (strncmp(isUsDateFormat.getValue(), "T", 1) == 0);
     config.staMacOverride = normalizeMac(String(macParam.getValue()));
 
     config.saveConfigFile();
+  }
+
+  if (!portalOk)
+  {
+    if (shouldSaveConfig && WiFi.status() != WL_CONNECTED)
+    {
+      // The user just typed credentials into the portal and the join failed.
+      // Don't reboot-loop: hand the details to the UI, which shows a page
+      // with the reason plus Reboot / Settings (status & logs) buttons; the
+      // rest of boot continues with its network waits skipped.
+      int st = wm.getLastConxResult();
+      Log.println("Portal WiFi \"" + wm.getWiFiSSID() + "\" failed to join "
+                  "(wifi status " + String(st) + ") - showing the failure page");
+      bootReportWifiFailure(wm.getWiFiSSID(), st);
+      return;
+    }
+
+    Log.println("Config portal timed out with no WiFi - rebooting to retry");
+    delay(3000);
+    // Stop the double-reset detector first: its RTC flag is still armed
+    // (drd->loop() never ran during setup), so restarting without this
+    // would read as a "double reset" and force the portal open again,
+    // looping forever instead of retrying the preconfigured WiFi.
+    drd->stop();
+    // reset and try again (preconfigured credentials get retried first)
+    ESP.restart();
+    delay(5000);
+  }
+
+  if (shouldSaveConfig)
+  {
+    // Connected with freshly saved settings: reboot so hostname, custom MAC
+    // and timezone all apply through the normal boot path.
     drd->stop();
     ESP.restart();
     delay(5000);

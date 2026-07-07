@@ -22,7 +22,8 @@ enum UIScreen
     SCREEN_TZ_LIST,
     SCREEN_STATUS,
     SCREEN_LOGS,
-    SCREEN_WIFI_LOGIN
+    SCREEN_WIFI_LOGIN,
+    SCREEN_WIFI_FAIL // portal-configured WiFi failed to join (see below)
 };
 
 extern UIScreen uiScreen;
@@ -96,6 +97,20 @@ void openWifiLoginHelper();
 void bootUiBegin();
 bool bootUiPoll();
 bool bootUiSettingsRequested();
+
+// Called from setupWiFiManager when WiFi credentials the user just entered in
+// the config portal fail to join: records the network name and wl_status so
+// the rest of boot skips its network waits (like a boot Settings tap) and the
+// main loop opens SCREEN_WIFI_FAIL - a page explaining why the join failed,
+// with a Reboot button and a Settings button (status / logs). The page
+// reboots on its own after 5 minutes untouched (unattended recovery), and
+// returns to the clock by itself if the WiFi comes up in the background.
+void bootReportWifiFailure(const String &ssid, int wlStatus);
+
+// Open whichever page a boot event asked for (WiFi-failure page wins over
+// the Settings shortcut; no-op on a normal boot). Called once from setup()
+// after rollingClockSetup.
+void bootOpenPendingScreen();
 
 // Remote UI driving for the /api/screen debug endpoint (otaUpdate.cpp): open
 // a page by name ("home", "settings", "zones", "tzlist", "status", "logs",
