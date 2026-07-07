@@ -507,16 +507,19 @@ void renderWifiLoginPage()
     tft.setTextFont(2);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString("1. On your phone, join Wi-Fi:", 12, 40);
+    tft.drawString("1. On your phone, join this Wi-Fi:", 12, 30);
 
     tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
-    tft.drawString(wifiRelayApSsid(), 24, 60);
+    tft.drawString(wifiRelayApSsid(), 24, 48);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString(String("password: ") + wifiRelayApPassword(), 24, 80);
+    tft.drawString(String("password: ") + wifiRelayApPassword(), 24, 64);
 
-    tft.drawString("2. Open the login page, sign in.", 12, 104);
-    tft.drawString("3. Leave this screen open - it", 12, 124);
-    tft.drawString("   continues once you're online.", 12, 140);
+    tft.drawString("2. Sign in on the login page that", 12, 84);
+    tft.drawString("   opens (none? try neverssl.com).", 12, 100);
+    // Phones love to flee a hotspot that has "no internet" - that warning is
+    // expected here and leaving the hotspot is the #1 way the login fails.
+    tft.drawString("3. Stay on that Wi-Fi - ignore any", 12, 120);
+    tft.drawString("   'no internet' warning, wait here.", 12, 136);
 
     renderWifiLoginStatus();
 
@@ -677,7 +680,10 @@ static void fillSystemValues(String *values, uint16_t *colors)
     if (ssid.length() > 14) ssid = ssid.substring(0, 14);
 
     uint32_t sketch = ESP.getSketchSize();
-    uint32_t slot = sketch + ESP.getFreeSketchSpace();
+    // getFreeSketchSpace() returns the size of the (equal-sized) OTA update
+    // partition - i.e. the app slot's capacity, not "slot minus sketch" -
+    // so it is the right denominator for the percentage on its own.
+    uint32_t slot = ESP.getFreeSketchSpace();
 
     bool wifiUp = (WiFi.status() == WL_CONNECTED);
     int rssi = WiFi.RSSI();
@@ -979,6 +985,63 @@ void renderLogsPage()
     tft.drawString("tap anywhere to go back", 316, 4);
 
     renderLogsLines();
+}
+
+/*-------- Remote UI driving (/api/screen) ----------*/
+// Open a page by name, exactly as the touch UI would - see uiPages.h.
+
+bool uiOpenScreenByName(const String &name, int page, int slot)
+{
+    if (name == "home")
+    {
+        switchToScreen(SCREEN_HOME);
+    }
+    else if (name == "settings")
+    {
+        switchToScreen(SCREEN_SETTINGS);
+    }
+    else if (name == "zones")
+    {
+        switchToScreen(SCREEN_ZONE_PICK);
+    }
+    else if (name == "tzlist")
+    {
+        zoneSlotBeingEdited = constrain(slot, 0, 3);
+        tzListPage = page; // renderTzListPage clamps the range itself
+        switchToScreen(SCREEN_TZ_LIST);
+    }
+    else if (name == "status")
+    {
+        statusPageIndex = constrain(page, 0, STATUS_PAGE_COUNT - 1);
+        switchToScreen(SCREEN_STATUS);
+    }
+    else if (name == "logs")
+    {
+        switchToScreen(SCREEN_LOGS);
+    }
+    else if (name == "wifilogin")
+    {
+        openWifiLoginHelper(); // brings up the helper AP + NAT, like the button
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
+const char *uiScreenName()
+{
+    switch (uiScreen)
+    {
+    case SCREEN_SETTINGS: return "settings";
+    case SCREEN_ZONE_PICK: return "zones";
+    case SCREEN_TZ_LIST: return "tzlist";
+    case SCREEN_STATUS: return "status";
+    case SCREEN_LOGS: return "logs";
+    case SCREEN_WIFI_LOGIN: return "wifilogin";
+    default: return "home";
+    }
 }
 
 /*-------- Touch routing + page loop ----------*/

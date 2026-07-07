@@ -97,6 +97,16 @@ void bootUiBegin();
 bool bootUiPoll();
 bool bootUiSettingsRequested();
 
+// Remote UI driving for the /api/screen debug endpoint (otaUpdate.cpp): open
+// a page by name ("home", "settings", "zones", "tzlist", "status", "logs",
+// "wifilogin"); "page" picks the status / tz-list page and "slot" the tz-list
+// quadrant where those apply. Returns false for an unknown name.
+// uiScreenName() reports the current page for the same endpoint. Paired with
+// /screenshot this lets a developer capture any UI page without touching the
+// device. MAIN core only (the web handlers run there).
+bool uiOpenScreenByName(const String &name, int page, int slot);
+const char *uiScreenName();
+
 void switchToScreen(UIScreen s);
 void handleUiTouch();
 void renderUiPage();

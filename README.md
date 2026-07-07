@@ -424,10 +424,18 @@ into categories:
   `curl -X POST --data-binary @backup.json http://esp32worldclock.local/api/config`.
 
 The page also links to the firmware updater (`/update`), the log viewer
-(`/logs`) and a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
-RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...). If
-`OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic credentials
-(username `admin`) protect these pages.
+(`/logs`), a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
+RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...) and
+a live screenshot of the panel (`/screenshot`, a 320x240 BMP read back from
+the display controller — see exactly what a remote clock is showing:
+`curl http://esp32worldclock.local/screenshot -o clock.bmp`; the clock UI
+pauses for the 1–2 s read). `/api/screen?name=<page>` switches the on-device
+UI to any page remotely (`home`, `settings`, `zones`, `tzlist`, `status`,
+`logs`, `wifilogin`, plus `&page=`/`&slot=` for the status/timezone pages;
+without `?name` it reports the current page) — together with `/screenshot`
+this drives and captures the whole touch UI for debugging without touching
+the device. If `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic
+credentials (username `admin`) protect these pages.
 
 <p align="center">
   <img src="img/web-settings.png" alt="Web settings page" width="40%"/>

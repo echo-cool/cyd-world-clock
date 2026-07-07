@@ -176,7 +176,11 @@ static String fetchUsAlert(float lat, float lon)
     WiFiClientSecure client;
     client.setInsecure(); // public alert data - certificate pinning not worth the upkeep
     HTTPClient http;
-    http.setConnectTimeout(4000);
+    // api.weather.gov presents a long RSA chain whose TLS handshake takes the
+    // ESP32 several seconds of crypto - with the whole handshake inside the
+    // connect window, 4s aborts it (-1) whenever the CPU is busy (always, at
+    // boot). Open-meteo's small ECDSA chain never hit this.
+    http.setConnectTimeout(12000);
     http.setTimeout(8000);
     if (!http.begin(client, url)) return "";
     http.addHeader("User-Agent",
@@ -184,6 +188,21 @@ static String fetchUsAlert(float lat, float lon)
     http.addHeader("Accept", "application/geo+json");
 
     int code = http.GET();
+    if (code < 0)
+    {
+        // Connection-layer failure (TLS handshake starved of heap right after
+        // boot is the usual culprit). One short-delay retry usually succeeds,
+        // and beats sitting on a stale/absent storm alert until the next
+        // weather cycle comes around.
+        Log.println("NWS alerts fetch failed (" + String(code) + ") - retrying once");
+        http.end();
+        delay(1500);
+        if (!http.begin(client, url)) return "";
+        http.addHeader("User-Agent",
+                       "ESP32WorldClock (github.com/echo-cool/cyd-world-clock)");
+        http.addHeader("Accept", "application/geo+json");
+        code = http.GET();
+    }
     if (code != HTTP_CODE_OK)
     {
         if (code != HTTP_CODE_NOT_FOUND) // 404 = point outside NWS coverage; quiet
@@ -261,6 +280,11 @@ static bool performFetch()
     HTTPClient http;
     http.setConnectTimeout(4000);
     http.setTimeout(6000);
+    // No keep-alive: with the default reuse, end() below parks the connection
+    // instead of closing it, so this client's ~45KB TLS context stays
+    // allocated for the rest of performFetch - and fetchUsAlert()'s second
+    // TLS handshake then starves of heap and fails (-1) every single time.
+    http.setReuse(false);
     if (!http.begin(client, url)) return false;
     int code = http.GET();
     if (code != HTTP_CODE_OK)

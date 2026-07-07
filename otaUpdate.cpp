@@ -369,7 +369,8 @@ static void handleSettingsPage()
             " &middot; <a href=\"/update\">Firmware update</a>"
             " &middot; <a href=\"/logs\">Logs</a>"
             " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
-            " &middot; <a href=\"/api/status\">Status JSON</a></p>";
+            " &middot; <a href=\"/api/status\">Status JSON</a>"
+            " &middot; <a href=\"/screenshot\">Screenshot</a></p>";
     if (captivePortalActive())
     {
         page += "<p style=\"color:#ff9f0a\">This network needs a browser login "
@@ -792,7 +793,8 @@ static void handleApiStatus()
 #endif
     doc["flashSizeBytes"] = ESP.getFlashChipSize();
     doc["sketchSizeBytes"] = ESP.getSketchSize();
-    doc["sketchSlotBytes"] = ESP.getSketchSize() + ESP.getFreeSketchSpace();
+    // getFreeSketchSpace() is the OTA slot's capacity (see fillSystemValues)
+    doc["sketchSlotBytes"] = ESP.getFreeSketchSpace();
     doc["uptimeSec"] = millis() / 1000UL;
     doc["freeHeapBytes"] = ESP.getFreeHeap();
     doc["minFreeHeapBytes"] = ESP.getMinFreeHeap();
@@ -892,6 +894,105 @@ static void handleApiLogs()
 {
     if (!webAuthenticate()) return;
     webServer.send(200, "text/plain", logTail(6144));
+}
+
+/*-------- Screenshot (debug) ----------*/
+// GET /screenshot streams the panel's current contents as a 24-bit BMP
+// (320x240, ~226 KB), read back from the display controller over SPI one
+// line at a time. Lets a developer see exactly what a remote clock is
+// showing (bug reports, UI work) without standing in front of it. Runs on
+// the main loop core between frame updates like every other handler, so the
+// clock UI just pauses for the ~1-2 s transfer.
+
+static void handleScreenshot()
+{
+    if (!webAuthenticate()) return;
+    if (otaInProgress)
+    {
+        webServer.send(503, "text/plain", "update in progress");
+        return;
+    }
+
+    const int w = tft.width();  // 320x240 in both mounting orientations
+    const int h = tft.height();
+    const uint32_t rowBytes = (uint32_t)w * 3; // 24bpp; 320*3 is 4-aligned
+    const uint32_t imgBytes = rowBytes * h;
+    const uint32_t fileSize = 54 + imgBytes;
+
+    // BITMAPFILEHEADER + BITMAPINFOHEADER, little-endian
+    uint8_t hdr[54] = {0};
+    auto put32 = [&hdr](int off, uint32_t v) {
+        hdr[off] = v & 0xFF;
+        hdr[off + 1] = (v >> 8) & 0xFF;
+        hdr[off + 2] = (v >> 16) & 0xFF;
+        hdr[off + 3] = (v >> 24) & 0xFF;
+    };
+    hdr[0] = 'B';
+    hdr[1] = 'M';
+    put32(2, fileSize);
+    hdr[10] = 54; // pixel data offset
+    hdr[14] = 40; // BITMAPINFOHEADER size
+    put32(18, (uint32_t)w);
+    put32(22, (uint32_t)h);
+    hdr[26] = 1;  // planes
+    hdr[28] = 24; // bits per pixel, BI_RGB
+    put32(34, imgBytes);
+
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.sendHeader("Content-Disposition", "inline; filename=\"worldclock.bmp\"");
+    webServer.setContentLength(fileSize);
+    webServer.send(200, "image/bmp", "");
+    webServer.sendContent((const char *)hdr, sizeof(hdr));
+
+    uint16_t line[320];
+    uint8_t row[320 * 3];
+    for (int y = h - 1; y >= 0; y--) // BMP pixel rows run bottom-up
+    {
+        tft.readRect(0, y, w, 1, line);
+        for (int x = 0; x < w; x++)
+        {
+            // The CYD's ILI9341 clone returns its 18-bit RAMRD stream shifted
+            // by one channel, so the field the driver stores as red actually
+            // carries the drawn GREEN, green carries BLUE and blue carries
+            // RED (verified by sampling known TFT_BLUE / GREEN / ORANGE /
+            // YELLOW screen elements; greys are unaffected). Rotate the
+            // channels back while packing the BGR888 BMP row.
+            uint16_t c = line[x];
+            row[x * 3 + 0] = ((c >> 5) & 0x3F) << 2; // BMP blue  <- "G" field
+            row[x * 3 + 1] = (c >> 11) << 3;         // BMP green <- "R" field
+            row[x * 3 + 2] = (c & 0x1F) << 3;        // BMP red   <- "B" field
+        }
+        webServer.sendContent((const char *)row, rowBytes);
+    }
+}
+
+/*-------- Remote UI navigation (debug) ----------*/
+// GET/POST /api/screen?name=<page>[&page=N][&slot=N] switches the on-device
+// UI to the named page (home, settings, zones, tzlist, status, logs,
+// wifilogin), exactly as tapping through the touch UI would; without ?name
+// it just reports the page currently showing. Paired with /screenshot this
+// lets a developer capture and review any UI page remotely.
+
+static void handleApiScreen()
+{
+    if (!webAuthenticate()) return;
+
+    String name = webServer.arg("name");
+    if (name.length() > 0)
+    {
+        int page = webServer.arg("page").toInt(); // 0 when absent
+        int slot = webServer.arg("slot").toInt();
+        if (!uiOpenScreenByName(name, page, slot))
+        {
+            webServer.send(400, "text/plain",
+                           "unknown page - use one of: home, settings, zones, "
+                           "tzlist, status, logs, wifilogin");
+            return;
+        }
+        Log.println("UI page \"" + name + "\" opened via /api/screen");
+    }
+    webServer.send(200, "application/json",
+                   String("{\"screen\":\"") + uiScreenName() + "\"}");
 }
 
 /*-------- Wi-Fi login helper page ----------*/
@@ -998,6 +1099,8 @@ static void setupWebUpdater()
     webServer.on("/api/config", HTTP_POST, handleApiConfigPost);
     webServer.on("/logs", HTTP_GET, handleLogsPage);
     webServer.on("/api/logs", HTTP_GET, handleApiLogs);
+    webServer.on("/screenshot", HTTP_GET, handleScreenshot);
+    webServer.on("/api/screen", handleApiScreen);
     webServer.on("/update", HTTP_GET, handleUpdatePage);
     webServer.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
     webServer.onNotFound([]() {

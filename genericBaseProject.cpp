@@ -337,6 +337,12 @@ void baseProjectSetup()
     }
     if (timeStatus() == timeSet)
     {
+        // Count the boot-time sync too - it used to be invisible to the sync
+        // counters, so the status pages claimed "none since boot" for the
+        // first half hour even though the clock was synced all along.
+        syncCount++;
+        lastSyncTime = millis();
+        ntpSyncStatus = true;
         Log.println("Initial NTP sync complete!");
         Log.println();
         Log.println("UTC:             " + UTC.dateTime());

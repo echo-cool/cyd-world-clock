@@ -1526,7 +1526,10 @@ static void serviceWifiIndicator()
 
     bool captive = captivePortalActive();
     bool offline = wifiOfflineDurationMs() >= WIFI_INDICATOR_AFTER_MS;
-    const char *label = captive ? "WIFI LOGIN REQUIRED" : (offline ? "NO WIFI" : nullptr);
+    // The captive label doubles as a signpost to the fix: tapping the center
+    // of the screen opens Settings, where the "WiFi login" helper lives.
+    const char *label = captive ? "WIFI LOGIN REQUIRED - TAP CENTER > WIFI LOGIN"
+                                : (offline ? "NO WIFI" : nullptr);
 
     if (label) {
         bool labelChanged = (shownLabel != label);
