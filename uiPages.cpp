@@ -197,6 +197,10 @@ const UIButton BTN_SET_BACK = {238, 208, 62, 26};
 // Wi-Fi login helper page: a single "Done" button (mirrors BTN_SET_BACK).
 const UIButton BTN_WIFI_DONE = {90, 202, 140, 32};
 
+// Wi-Fi failure page: Reboot / Settings side by side.
+const UIButton BTN_FAIL_REBOOT = {30, 192, 120, 34};
+const UIButton BTN_FAIL_SET = {170, 192, 120, 34};
+
 // Zone-pick page layout (2x2 grid mirroring the clock quadrants)
 const UIButton BTN_ZONE[4] = {
     {10, 36, 145, 76},
@@ -331,6 +335,113 @@ bool bootUiPoll()
                     "remaining boot waits short");
     }
     return bootSettingsWanted;
+}
+
+/*-------- Boot-time Wi-Fi failure page ----------*/
+// See uiPages.h: when credentials just entered in the config portal fail to
+// join, the boot path records the details here and the main loop shows
+// SCREEN_WIFI_FAIL instead of the old silent reboot loop.
+
+static String wifiFailSsid;
+static int wifiFailStatus = 0;
+static bool wifiFailPending = false;
+static unsigned long wifiFailShownAt = 0;
+
+// Auto-reboot the failure page after this long untouched, so an unattended
+// clock still runs the boot recovery sequence (portal included) on its own.
+static const unsigned long WIFI_FAIL_AUTO_REBOOT_MS = 5UL * 60UL * 1000UL;
+
+void bootReportWifiFailure(const String &ssid, int wlStatus)
+{
+    wifiFailSsid = ssid;
+    wifiFailStatus = wlStatus;
+    wifiFailPending = true;
+    // Cut the remaining boot network waits short, same as a Settings tap on
+    // the init screen; bootOpenPendingScreen then opens the failure page.
+    bootSettingsWanted = true;
+}
+
+void bootOpenPendingScreen()
+{
+    if (wifiFailPending)
+    {
+        wifiFailPending = false;
+        switchToScreen(SCREEN_WIFI_FAIL);
+    }
+    else if (bootSettingsWanted)
+    {
+        switchToScreen(SCREEN_SETTINGS);
+    }
+}
+
+// One-line diagnosis + one-line detail for a wl_status_t join result.
+static void wifiFailReason(int st, const char *&problem, const char *&detail)
+{
+    switch (st)
+    {
+    case WL_NO_SSID_AVAIL:
+        problem = "network not found";
+        detail = "Out of range, hidden, or name typo.";
+        break;
+    case WL_CONNECT_FAILED:
+        problem = "join rejected";
+        detail = "Almost always a wrong password.";
+        break;
+    case WL_CONNECTION_LOST:
+        problem = "connection lost mid-join";
+        detail = "Weak signal? Move nearer the router.";
+        break;
+    default:
+        problem = "no response";
+        detail = "Bad password, weak signal or filter.";
+        break;
+    }
+}
+
+void renderWifiFailPage()
+{
+    tft.fillScreen(clockBackgroundColor);
+
+    tft.setTextFont(4);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_RED, clockBackgroundColor);
+    tft.drawString("WIFI CONNECT FAILED", 160, 2);
+
+    const char *problem, *detail;
+    wifiFailReason(wifiFailStatus, problem, detail);
+
+    String ssid = wifiFailSsid.length() ? wifiFailSsid : "(no network name)";
+    if (ssid.length() > 24) ssid = ssid.substring(0, 24);
+
+    tft.setTextFont(2);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString("Network:", 12, 36);
+    tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
+    tft.drawString(ssid, 90, 36);
+
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString("Problem:", 12, 56);
+    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
+    tft.drawString(String(problem) + " (" + String(wifiFailStatus) + ")", 90, 56);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString(detail, 12, 76);
+
+    tft.drawString("Reboot: try again now (the setup", 12, 104);
+    tft.drawString("portal reopens if it fails again).", 12, 120);
+    tft.drawString("Settings: open status & logs; WiFi", 12, 144);
+    tft.drawString("keeps retrying in the background.", 12, 160);
+
+    drawButton(BTN_FAIL_REBOOT, "Reboot", TFT_RED, TFT_WHITE);
+    drawButton(BTN_FAIL_SET, "Settings", TFT_CYAN, TFT_WHITE);
+
+    tft.setTextFont(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString("reboots by itself after 5 minutes", 160, 232);
+
+    wifiFailShownAt = millis();
 }
 
 /*-------- Settings actions ----------*/
@@ -1023,6 +1134,16 @@ bool uiOpenScreenByName(const String &name, int page, int slot)
     {
         openWifiLoginHelper(); // brings up the helper AP + NAT, like the button
     }
+    else if (name == "wififail")
+    {
+        // Preview support: seed demo details when no real failure is stored.
+        if (wifiFailSsid.length() == 0)
+        {
+            wifiFailSsid = "example-network";
+            wifiFailStatus = WL_CONNECT_FAILED;
+        }
+        switchToScreen(SCREEN_WIFI_FAIL);
+    }
     else
     {
         return false;
@@ -1040,6 +1161,7 @@ const char *uiScreenName()
     case SCREEN_STATUS: return "status";
     case SCREEN_LOGS: return "logs";
     case SCREEN_WIFI_LOGIN: return "wifilogin";
+    case SCREEN_WIFI_FAIL: return "wififail";
     default: return "home";
     }
 }
@@ -1121,6 +1243,19 @@ void handleUiTouch()
         // helper; switchToScreen tears the relay AP + NAT back down.
         if (buttonContains(BTN_WIFI_DONE, tx, ty) ||
             wifiRelayState() == RELAY_SUCCESS)
+        {
+            switchToScreen(SCREEN_SETTINGS);
+        }
+        break;
+
+    case SCREEN_WIFI_FAIL:
+        if (buttonContains(BTN_FAIL_REBOOT, tx, ty))
+        {
+            Log.println("WiFi failure page: Reboot tapped - restarting");
+            delay(300); // let the log line reach the serial port
+            ESP.restart();
+        }
+        else if (buttonContains(BTN_FAIL_SET, tx, ty))
         {
             switchToScreen(SCREEN_SETTINGS);
         }
@@ -1235,6 +1370,10 @@ void renderUiPage()
             renderWifiLoginPage();
             lastStatusRefresh = millis();
             break;
+        case SCREEN_WIFI_FAIL:
+            renderWifiFailPage();
+            lastStatusRefresh = millis();
+            break;
         default:
             break;
         }
@@ -1254,6 +1393,43 @@ void renderUiPage()
             renderLogsLines();
         }
         lastStatusRefresh = millis();
+    }
+    else if (uiScreen == SCREEN_WIFI_FAIL && millis() - lastStatusRefresh > 1000)
+    {
+        lastStatusRefresh = millis();
+        static unsigned long connectedAtMs = 0;
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            // The background retries got us on after all - show the good
+            // news for a few seconds, then resume the clock on our own.
+            if (connectedAtMs == 0)
+            {
+                connectedAtMs = millis();
+                tft.fillRect(0, 174, 320, 17, clockBackgroundColor);
+                tft.setTextFont(2);
+                tft.setTextSize(1);
+                tft.setTextDatum(TC_DATUM);
+                tft.setTextColor(TFT_GREEN, clockBackgroundColor);
+                tft.drawString("WiFi connected - resuming...", 160, 175);
+                Log.println("WiFi failure page: link came up - resuming");
+            }
+            else if (millis() - connectedAtMs > 6000)
+            {
+                connectedAtMs = 0;
+                switchToScreen(SCREEN_HOME);
+            }
+        }
+        else
+        {
+            connectedAtMs = 0;
+            if (millis() - wifiFailShownAt > WIFI_FAIL_AUTO_REBOOT_MS)
+            {
+                Log.println("WiFi failure page: untouched for 5 min - "
+                            "rebooting to rerun the boot recovery sequence");
+                delay(300);
+                ESP.restart();
+            }
+        }
     }
     else if (uiScreen == SCREEN_WIFI_LOGIN)
     {

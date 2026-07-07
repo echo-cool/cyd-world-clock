@@ -986,7 +986,7 @@ static void handleApiScreen()
         {
             webServer.send(400, "text/plain",
                            "unknown page - use one of: home, settings, zones, "
-                           "tzlist, status, logs, wifilogin");
+                           "tzlist, status, logs, wifilogin, wififail");
             return;
         }
         Log.println("UI page \"" + name + "\" opened via /api/screen");

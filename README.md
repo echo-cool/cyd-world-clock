@@ -173,6 +173,15 @@ whole sequence (preconfigured credentials first). So after a power cut where
 the router comes back later than the clock, the clock reconnects on its own —
 no button pressing needed.
 
+If you *do* enter credentials in the portal and the join fails, the clock no
+longer reboot-loops silently: it shows a **WiFi connect failed** page with the
+network name and the likely reason (network not found / join rejected — wrong
+password? / no response), plus a **Reboot** button (retry now; the portal
+reopens if it keeps failing) and a **Settings** button to browse the status
+pages and logs. WiFi keeps retrying in the background — if it comes up, the
+page returns to the clock on its own; untouched for 5 minutes, it reboots so
+unattended recovery still works.
+
 ## Login-required networks (captive portals)
 
 Some networks (hotels, offices, campuses, guest Wi-Fi) let a device join but
@@ -431,7 +440,7 @@ the display controller — see exactly what a remote clock is showing:
 `curl http://esp32worldclock.local/screenshot -o clock.bmp`; the clock UI
 pauses for the 1–2 s read). `/api/screen?name=<page>` switches the on-device
 UI to any page remotely (`home`, `settings`, `zones`, `tzlist`, `status`,
-`logs`, `wifilogin`, plus `&page=`/`&slot=` for the status/timezone pages;
+`logs`, `wifilogin`, `wififail`, plus `&page=`/`&slot=` for the status/timezone pages;
 without `?name` it reports the current page) — together with `/screenshot`
 this drives and captures the whole touch UI for debugging without touching
 the device. If `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic
