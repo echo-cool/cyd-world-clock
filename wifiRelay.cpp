@@ -2,7 +2,6 @@
 
 #include <WiFi.h>
 #include <esp_netif.h>
-#include <lwip/lwip_napt.h>
 
 #include "logBuffer.h"     // Log
 #include "netCheck.h"      // netCheckNow - success detection
@@ -61,7 +60,11 @@ static void configureApDns()
 static void teardown()
 {
     // Disable NAT on the AP interface, drop the AP, and go back to STA-only.
-    ip_napt_enable((uint32_t)WiFi.softAPIP(), 0);
+    // NAT must be toggled through esp_netif (which hops onto the lwIP task):
+    // the raw ip_napt_enable() trips IDF 5.x's LWIP_CHECK_THREAD_SAFETY
+    // assert when called from this task and reboots the clock.
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap) esp_netif_napt_disable(ap);
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
 }
@@ -81,8 +84,17 @@ void wifiRelayStart()
     configureApDns();
 
     // NAT AP-side clients out through the STA interface, so their portal login
-    // is attributed to the clock's (STA) MAC.
-    ip_napt_enable((uint32_t)WiFi.softAPIP(), 1);
+    // is attributed to the clock's (STA) MAC (see teardown() for why this
+    // must use esp_netif rather than the raw lwIP call).
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    esp_err_t naptErr = ap ? esp_netif_napt_enable(ap) : ESP_ERR_INVALID_STATE;
+    if (naptErr != ESP_OK)
+    {
+        // Keep the helper up anyway - the AP still shows the instructions -
+        // but say why a login on the phone wouldn't reach the internet.
+        Log.println("Wi-Fi login helper: enabling NAT failed (err " +
+                    String((int)naptErr) + ") - relaying will not work");
+    }
 
     g_state = RELAY_ACTIVE;
     g_startedMs = millis();

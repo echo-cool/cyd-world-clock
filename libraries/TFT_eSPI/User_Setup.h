@@ -361,8 +361,11 @@
 #define SPI_FREQUENCY  55000000 // STM32 SPI1 only (SPI2 maximum is 27MHz)
 // #define SPI_FREQUENCY  80000000
 
-// Optional reduced SPI frequency for reading TFT
-#define SPI_READ_FREQUENCY  20000000
+// Optional reduced SPI frequency for reading TFT. The CYD's ILI9341 clone
+// returns bit-shifted (wrong-hue) pixel data when read at 20MHz; 6MHz reads
+// back accurate colors. Only the /screenshot endpoint reads the panel, so
+// the lower clock costs nothing in normal operation.
+#define SPI_READ_FREQUENCY  6000000
 
 // The XPT2046 requires a lower SPI clock rate of 2.5MHz so we define that here:
 #define SPI_TOUCH_FREQUENCY  2500000

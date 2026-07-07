@@ -192,8 +192,20 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     String payload = http.getString();
     http.end();
 
+    // Parse with a filter that keeps only the fields read below. The
+    // unfiltered US payload carries per-state "counties" arrays large enough
+    // to overflow any sane document budget - the old unfiltered parse died
+    // with NoMemory every time, so US holidays never loaded at all.
+    StaticJsonDocument<256> filter;
+    JsonObject filterEntry = filter.createNestedObject();
+    filterEntry["date"] = true;
+    filterEntry["name"] = true;
+    filterEntry["global"] = true;
+    filterEntry["types"] = true;
+
     DynamicJsonDocument doc(16384);
-    DeserializationError err = deserializeJson(doc, payload);
+    DeserializationError err =
+        deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (err)
     {
         Log.println(String("Public holiday JSON parse failed: ") + err.c_str());
