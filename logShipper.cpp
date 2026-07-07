@@ -43,7 +43,7 @@ void logShipperPrintStatus(Print &out)
 // NTP sync. Overflow drops the OLDEST lines - the newest ones are the ones
 // worth having when the network comes back.
 static const size_t QUEUE_SIZE = 6144;
-static const size_t LINE_MAX = 384;          // longer lines are truncated
+static const size_t SHIP_LINE_MAX = 384;          // longer lines are truncated
 static const size_t BATCH_MAX = 3072;        // raw line bytes per push
 static const size_t REC_HDR = 8 + 2;         // u64 line-millis + u16 length
 static const uint32_t SHIP_INTERVAL_MS = 30000;
@@ -62,7 +62,7 @@ static uint32_t queuedLines = 0;
 static uint32_t dropGeneration = 0; // bumped when overflow moves the tail
 
 // Line assembly (same "stamp at line boundary" idea as the log ring).
-static char lineBuf[LINE_MAX];
+static char lineBuf[SHIP_LINE_MAX];
 static size_t lineLen = 0;
 static bool lineTruncated = false;
 
@@ -152,13 +152,13 @@ void logShipperFeed(const uint8_t *buffer, size_t size)
             lineTruncated = false;
             continue;
         }
-        if (lineLen < LINE_MAX)
+        if (lineLen < SHIP_LINE_MAX)
         {
             lineBuf[lineLen++] = c;
         }
         else if (!lineTruncated)
         {
-            lineTruncated = true; // keep the first LINE_MAX bytes, drop the rest
+            lineTruncated = true; // keep the first SHIP_LINE_MAX bytes, drop the rest
         }
     }
     portEXIT_CRITICAL(&shipMux);
@@ -205,7 +205,7 @@ static void appendJsonEscaped(String &out, const char *s, size_t len)
 // the queue). Returns false only for retryable failures.
 static bool shipBatch()
 {
-    static uint8_t batch[BATCH_MAX + LINE_MAX + REC_HDR];
+    static uint8_t batch[BATCH_MAX + SHIP_LINE_MAX + REC_HDR];
 
     // Peek (copy without popping): if the POST fails, the records stay
     // queued. dropGeneration tells us whether overflow moved the tail while
