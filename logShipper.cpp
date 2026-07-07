@@ -4,18 +4,25 @@
 #include "secrets.h"
 #endif
 
-#ifndef LOG_PUSH_URL
+#ifdef LOG_PUSH_DISABLE
 
-// Shipping not configured: no queue, no task, no RAM spent.
+// Shipping opted out in secrets.h: no queue, no task, no RAM spent.
 void logShipperFeed(const uint8_t *, size_t) {}
 void logShipperBegin() {}
 void logShipperService() {}
 void logShipperPrintStatus(Print &out)
 {
-    out.println("Log shipping disabled (LOG_PUSH_URL not set in secrets.h)");
+    out.println("Log shipping disabled (LOG_PUSH_DISABLE set in secrets.h)");
 }
 
-#else // LOG_PUSH_URL
+#else // !LOG_PUSH_DISABLE
+
+// Every device ships to the project's fleet log server by default; set
+// LOG_PUSH_URL in secrets.h to point at your own server (or a Loki
+// instance), or define LOG_PUSH_DISABLE to compile shipping out entirely.
+#ifndef LOG_PUSH_URL
+#define LOG_PUSH_URL "http://esp32-clock-log-collect.echo.cool:3100/loki/api/v1/push"
+#endif
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -372,4 +379,4 @@ void logShipperPrintStatus(Print &out)
                                      : String("")));
 }
 
-#endif // LOG_PUSH_URL
+#endif // !LOG_PUSH_DISABLE

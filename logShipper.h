@@ -8,8 +8,10 @@
 // (github.com/echo-cool/cyd-world-clock-logs) or a real Loki instance,
 // interchangeably.
 //
-// Enabled by defining LOG_PUSH_URL in secrets.h (see secrets.h.example);
-// without it every function here compiles to a no-op and no RAM is spent.
+// ON BY DEFAULT: every build ships to the project's fleet log server at
+// esp32-clock-log-collect.echo.cool:3100. Set LOG_PUSH_URL in secrets.h to
+// use your own server, or define LOG_PUSH_DISABLE there to compile all of
+// this out (every function becomes a no-op and no RAM is spent).
 //
 // How it works: LogBuffer::write tees complete lines into a drop-oldest
 // queue (logShipperFeed). A core-0 task batches queued lines every ~30s
