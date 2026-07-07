@@ -1,4 +1,5 @@
 #include "logBuffer.h"
+#include "logShipper.h" // optional remote log push (no-op unless configured)
 
 LogBuffer Log;
 
@@ -60,6 +61,9 @@ size_t LogBuffer::write(const uint8_t *buffer, size_t size)
     portENTER_CRITICAL(&logMux);
     ringWrite(buffer, size);
     portEXIT_CRITICAL(&logMux);
+    // Tee into the remote-shipping queue (its own lock; never nested with
+    // logMux, and a no-op when LOG_PUSH_URL isn't configured).
+    logShipperFeed(buffer, size);
     return n;
 }
 

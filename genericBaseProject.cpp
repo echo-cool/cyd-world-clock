@@ -73,6 +73,8 @@
 
 #include "netCheck.h" // captive-portal detection + MAC-clone
 
+#include "logShipper.h" // remote log push - anchor capture runs on the main loop
+
 // Number of seconds after reset during which a
 // subseqent reset will be considered a double reset.
 #define DRD_TIMEOUT 10
@@ -466,4 +468,7 @@ void baseProjectLoop()
     marketHolidaysService();
     // Track the zones' local years for the public-holiday tables
     holidaysService();
+    // Anchor the log shipper's timestamps once NTP has really synced
+    // (ezTime access must stay on this core)
+    logShipperService();
 }

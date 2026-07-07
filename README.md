@@ -508,6 +508,31 @@ without a USB cable:
 
 The buffer holds the most recent couple hundred lines; it resets on reboot.
 
+### Remote log shipping (optional)
+
+For a fleet of clocks (or a clock on another network), the firmware can push
+its log to a central server so reboots don't lose history and no device needs
+to be reachable inbound. Set in `secrets.h`:
+
+```c
+#define LOG_PUSH_URL "http://esp32-clock-log-collect.echo.cool:3100/loki/api/v1/push"
+// #define LOG_PUSH_TOKEN "..."   // if the server requires auth
+```
+
+The device then batches log lines every ~30 seconds and POSTs them in the
+**Grafana Loki JSON push format**, labeled
+`{job="cyd-world-clock", device="<hostname>", boot_id="<random per boot>"}` —
+so the target can be the companion
+[cyd-world-clock-logs](https://github.com/echo-cool/cyd-world-clock-logs)
+server (a one-container FastAPI + SQLite sink with a web viewer, sized for a
+tiny VM) or any real Loki instance, interchangeably. Shipping starts after
+the first NTP sync (timestamps are anchored to it; lines logged earlier,
+including the whole boot sequence, are queued and shipped retroactively).
+Batches are retried with backoff and deduplicated server-side, and when the
+queue overflows while offline the oldest lines are dropped first. Type
+`LOGSHIP` in the serial monitor to see the shipper's status. Without
+`LOG_PUSH_URL` defined, all of this compiles out to nothing.
+
 <p align="center">
   <img src="img/log.jpg" alt="On-device log viewer" width="45%"/>
 </p>

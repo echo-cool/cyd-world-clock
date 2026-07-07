@@ -11,6 +11,7 @@
 #include "serialCommands.h"
 #include "uiPages.h"
 #include "weatherService.h" // weatherBegin
+#include "logShipper.h"     // logShipperBegin - remote log push
 #include "wifiWatch.h"      // offline indicator on the home faces
 #include "netCheck.h"       // captivePortalActive - login-required indicator
 #include "wifiRelay.h"      // wifiRelayRequested - web-triggered login helper
@@ -1402,6 +1403,10 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // them), then the weather fetch task itself.
     holidaysBegin();
     weatherBegin();
+    // Remote log push (no-op unless LOG_PUSH_URL is set in secrets.h). The
+    // boot lines logged before this point are already queued and ship once
+    // the first NTP sync anchors their timestamps.
+    logShipperBegin();
 
     // Show ready status
     showWiFiStatus("World Clock Ready!", TFT_GREEN);

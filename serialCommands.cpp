@@ -6,6 +6,7 @@
 #include "ClockLogic.h"         // backlightLevel, worldZones, manualBrightnessUntil
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // public holiday status
+#include "logShipper.h"         // remote log push status
 #include "marketHolidays.h"     // holiday calendar status / refresh
 #include "weatherService.h"     // weatherAgeMinutes, weatherInvalidate
 
@@ -97,6 +98,9 @@ void handleSerialCommands()
             marketHolidaysForceRefresh();
             printPublicHolidaysStatus();
         }
+        else if (command == "LOGSHIP") {
+            logShipperPrintStatus(Log);
+        }
         else if (command == "HELP" || command == "?") {
             Log.println("=== Available Commands ===");
             Log.println("BRIGHTNESS <5-255>  - Set display brightness");
@@ -105,6 +109,7 @@ void handleSerialCommands()
             Log.println("LDR                 - Show ambient light sensor state");
             Log.println("WEATHER             - Force a weather refetch");
             Log.println("HOLIDAYS            - Show/refresh market holiday calendars");
+            Log.println("LOGSHIP             - Show remote log shipping status");
             Log.println("HELP or ?           - Show this help message");
         }
         else if (command.length() > 0) {
