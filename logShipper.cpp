@@ -34,8 +34,12 @@ void logShipperPrintStatus(Print &out)
 #include "otaUpdate.h"    // otaInProgress
 #include "projectConfig.h" // hostname -> the "device" label
 
+// Default push token for the fleet server (its AUTH_TOKEN). It authorizes
+// pushing only - reading logs requires the server's separate WEB_PASSWORD -
+// so baking it into a public repo costs little and keeps random scanners
+// from filling the fleet's database. Override alongside LOG_PUSH_URL.
 #ifndef LOG_PUSH_TOKEN
-#define LOG_PUSH_TOKEN ""
+#define LOG_PUSH_TOKEN "1a7359c51e6cfe3ad4280dcac2f20e0f428b5effa1d3b580"
 #endif
 
 // Queue sizing. 6KB holds a whole boot's worth of lines (the log ring is the
