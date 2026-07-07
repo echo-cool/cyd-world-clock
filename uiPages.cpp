@@ -823,7 +823,7 @@ static void fillSystemValues(String *values, uint16_t *colors)
     values[9] = (syncCount > 0)
                     ? String(syncCount) + " (" +
                           String((millis() - lastSyncTime) / 60000UL) + " min ago)"
-                    : "none since boot";
+                    : "none (" + String(currentNtpServer()) + ")";
     values[10] = UTC.dateTime("H:i:s") + " UTC";
 }
 

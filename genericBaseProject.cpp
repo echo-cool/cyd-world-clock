@@ -131,17 +131,49 @@ static void handleTimeSync() {
     }
 }
 
-// UTC epoch of this firmware build, parsed from the compiler's __DATE__
-// ("Jul  7 2026") and __TIME__ ("12:34:56"). Used to seed the clock when NTP
-// is unreachable; build-machine local time is close enough for a placeholder.
-static time_t firmwareBuildEpoch()
+/*-------- NTP server pool ----------*/
+// ezTime only queries a single server, and its default (pool.ntp.org) is
+// slow or unreachable for users in mainland China. Keep a pool that includes
+// servers with good connectivity there, and walk it while syncs keep
+// failing: the boot wait below steps through it directly, and
+// ntpServerService() keeps rotating ahead of ezTime's automatic retries
+// until the first real sync lands. Whichever server answered stays selected.
+static const char *NTP_SERVERS[] = {
+    "pool.ntp.org",     // worldwide anycast pool (ezTime's default)
+    "ntp.aliyun.com",   // Alibaba Cloud - fast inside mainland China
+    "ntp.tencent.com",  // Tencent Cloud - fast inside mainland China
+    "ntp.ntsc.ac.cn",   // National Time Service Center, Chinese Academy of Sciences
+    "time.windows.com", // extra global fallback
+};
+static const int NTP_SERVER_COUNT = sizeof(NTP_SERVERS) / sizeof(NTP_SERVERS[0]);
+static int ntpServerIdx = 0;
+
+const char *currentNtpServer()
 {
-    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    const char monStr[4] = {__DATE__[0], __DATE__[1], __DATE__[2], '\0'};
-    const char *m = strstr(months, monStr);
-    uint8_t month = m ? (m - months) / 3 + 1 : 1;
-    return makeTime(atoi(__TIME__), atoi(__TIME__ + 3), atoi(__TIME__ + 6),
-                    atoi(__DATE__ + 4), month, atoi(__DATE__ + 7));
+    return NTP_SERVERS[ntpServerIdx];
+}
+
+// Point ezTime at the next server in the pool.
+static void ntpNextServer()
+{
+    ntpServerIdx = (ntpServerIdx + 1) % NTP_SERVER_COUNT;
+    setServer(NTP_SERVERS[ntpServerIdx]);
+    Log.println("NTP: switching to server " + String(NTP_SERVERS[ntpServerIdx]));
+}
+
+// While the clock has never truly synced, rotate the NTP server between
+// ezTime's automatic retries (every NTP_RETRY = 20s), so consecutive retries
+// each hit a different server instead of hammering one that never answers.
+// After the first successful sync the rotation stops - the current server
+// demonstrably works, and the half-hourly resyncs keep using it.
+static void ntpServerService()
+{
+    if (ntpSyncStatus) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+    static unsigned long lastRotate = 0;
+    if (millis() - lastRotate < (NTP_RETRY + 10) * 1000UL) return;
+    lastRotate = millis();
+    ntpNextServer();
 }
 
 void baseProjectSetup()
@@ -341,11 +373,24 @@ void baseProjectSetup()
     // and let setup() finish; ezTime's background events() keep retrying, so
     // the clock syncs on its own once the network is actually authorized.
     unsigned long ntpStart = millis();
+    unsigned long lastNtpAttempt = millis(); // events() below fires the first query
     while (timeStatus() != timeSet &&
            millis() - ntpStart < INITIAL_NTP_SYNC_TIMEOUT_S * 1000UL &&
            !bootUiPoll())
     {
         events(); // drives the pending NTP query
+        // A failed query would otherwise sit out ezTime's 20-second retry -
+        // as long as the whole boot budget. Step through the server pool
+        // instead (each query gives up after NTP_TIMEOUT = 1.5s), so a boot
+        // on a network where the default pool is unreachable - typically
+        // mainland China - still syncs within the boot window.
+        if (timeStatus() != timeSet && WiFi.status() == WL_CONNECTED &&
+            millis() - lastNtpAttempt >= 2000)
+        {
+            ntpNextServer();
+            updateNTP();
+            lastNtpAttempt = millis();
+        }
         delay(50);
     }
     if (timeStatus() == timeSet)
@@ -356,7 +401,8 @@ void baseProjectSetup()
         syncCount++;
         lastSyncTime = millis();
         ntpSyncStatus = true;
-        Log.println("Initial NTP sync complete!");
+        Log.println("Initial NTP sync complete! (server: " +
+                    String(currentNtpServer()) + ")");
         Log.println();
         Log.println("UTC:             " + UTC.dateTime());
     }
@@ -374,7 +420,7 @@ void baseProjectSetup()
         // to February 2106. A recent-but-unsynced time keeps all zones
         // positive and mutually consistent; the pending NTP retries correct
         // the clock the moment real internet appears.
-        UTC.setTime(firmwareBuildEpoch());
+        UTC.setTime(compileTime());
         Log.println("Clock seeded with firmware build time: " + UTC.dateTime());
     }
 
@@ -409,6 +455,9 @@ void baseProjectLoop()
     drd->loop();
     // Handle ezTime NTP events on the main core (ezTime is not thread-safe).
     handleTimeSync();
+    // Until the first real sync lands, walk the NTP server pool so ezTime's
+    // retries don't keep hammering a server that never answers.
+    ntpServerService();
     // Service over-the-air update requests
     handleOTA();
     // Watch the WiFi link: offline indicator, reconnect kicks, self-heal reboot

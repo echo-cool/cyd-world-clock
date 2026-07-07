@@ -41,14 +41,21 @@ void handleSerialCommands()
             }
         }
         else if (command == "SYNC") {
-            Log.println("Forcing NTP time synchronization...");
-            // Force immediate sync by calling updateNTP manually
-            if (waitForSync(10)) { // Wait up to 10 seconds for sync
+            // Query the current NTP server directly. (waitForSync() can't be
+            // used as the check here: it returns true whenever the clock is
+            // merely set - which since the build-time seeding it always is -
+            // without proving the server answered.)
+            Log.println("Forcing NTP time synchronization (server: " +
+                        String(currentNtpServer()) + ")...");
+            time_t t;
+            unsigned long measuredAt;
+            if (queryNTP(currentNtpServer(), t, measuredAt)) {
+                UTC.setTime(t, millis() - measuredAt);
                 Log.println("Time sync successful!");
                 Log.println("UTC: " + UTC.dateTime());
                 Log.println("Santa Clara: " + worldZones[0].tz.dateTime());
             } else {
-                Log.println("Time sync failed or timed out");
+                Log.println("Time sync failed: " + errorString());
             }
         }
         else if (command == "WIFI" || command == "IP") {
