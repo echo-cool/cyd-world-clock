@@ -131,6 +131,19 @@ static void handleTimeSync() {
     }
 }
 
+// UTC epoch of this firmware build, parsed from the compiler's __DATE__
+// ("Jul  7 2026") and __TIME__ ("12:34:56"). Used to seed the clock when NTP
+// is unreachable; build-machine local time is close enough for a placeholder.
+static time_t firmwareBuildEpoch()
+{
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char monStr[4] = {__DATE__[0], __DATE__[1], __DATE__[2], '\0'};
+    const char *m = strstr(months, monStr);
+    uint8_t month = m ? (m - months) / 3 + 1 : 1;
+    return makeTime(atoi(__TIME__), atoi(__TIME__ + 3), atoi(__TIME__ + 6),
+                    atoi(__DATE__ + 4), month, atoi(__DATE__ + 7));
+}
+
 void baseProjectSetup()
 {
     // SPIFFS and the saved config come up before the display so settings that
@@ -352,6 +365,17 @@ void baseProjectSetup()
         Log.println("Initial NTP sync skipped or timed out - continuing so the "
                     "UI / web settings / Wi-Fi login helper are available; the "
                     "clock will sync once it has real internet");
+
+        // Seed the clock with the firmware build time. Unseeded, ezTime starts
+        // at the 1970 epoch, and every zone west of UTC then lives at a
+        // NEGATIVE local time_t for the first hours of uptime: ezTime's
+        // hour()/minute() return a negative remainder through a uint8_t (a
+        // Santa Clara afternoon renders as "249:199") and its date math wraps
+        // to February 2106. A recent-but-unsynced time keeps all zones
+        // positive and mutually consistent; the pending NTP retries correct
+        // the clock the moment real internet appears.
+        UTC.setTime(firmwareBuildEpoch());
+        Log.println("Clock seeded with firmware build time: " + UTC.dateTime());
     }
 
     // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in

@@ -144,8 +144,11 @@ String formatHHMM(time_t local, bool &pm)
         hr = hr % 12;
         if (hr == 0) hr = 12; // midnight / noon shown as 12, not 0
     }
-    char buf[6];
-    sprintf(buf, "%02d:%02d", hr, minute(local));
+    // Sized for out-of-range values too: ezTime's hour()/minute() return a
+    // uint8_t, and on a negative pre-sync time_t that can be a 3-digit
+    // wraparound (e.g. 249) - it must render as garbage, not smash the stack.
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02d:%02d", hr, minute(local));
     return String(buf);
 }
 
