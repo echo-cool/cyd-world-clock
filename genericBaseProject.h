@@ -15,6 +15,11 @@ extern unsigned long lastSyncTime;
 extern unsigned long syncCount;
 extern bool ntpSyncStatus;
 
+// Hostname of the NTP server currently in use. The pool behind it includes
+// mainland-China-reachable servers; while the clock has never synced, the
+// selection rotates through the pool until a server answers.
+const char *currentNtpServer();
+
 extern ProjectDisplay *projectDisplay;
 
 extern Timezone myTZ;

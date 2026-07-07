@@ -515,6 +515,15 @@ The buffer holds the most recent couple hundred lines; it resets on reboot.
 # Timekeeping
 
 - Time is synced over NTP every 30 minutes (ezTime).
+- Until the first sync lands, the clock walks a pool of NTP servers
+  (`pool.ntp.org`, `ntp.aliyun.com`, `ntp.tencent.com`, `ntp.ntsc.ac.cn`,
+  `time.windows.com`) so it also syncs on networks where the default pool is
+  slow or unreachable — typically mainland China. Whichever server answered
+  stays selected for the periodic resyncs; the server being tried is shown on
+  the system status page and in `/api/status` until then.
+- Before the first sync the clock ticks from the firmware build time instead
+  of the 1970 epoch, so all four zones show consistent (if not yet synced)
+  local times rather than garbled ones.
 - Timezone definitions are cached in flash after the first successful lookup,
   so later boots get correct local times even when the timezone server
   (`timezoned.rop.nl`) or the network is unreachable. Cached entries refresh

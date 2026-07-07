@@ -803,6 +803,7 @@ static void handleApiStatus()
     doc["lastSyncAgoMin"] = (syncCount > 0)
                                 ? (long)((millis() - lastSyncTime) / 60000UL)
                                 : -1;
+    doc["ntpServer"] = currentNtpServer();
     doc["utc"] = UTC.dateTime("Y-m-d H:i:s");
     doc["build"] = String(__DATE__) + " " + __TIME__;
     doc["clockFace"] = clockFaceName(projectConfig.clockFace);
