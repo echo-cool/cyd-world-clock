@@ -30,7 +30,38 @@ permissions:
   contents: write # create releases on tag builds
 
 jobs:
+  # Host unit tests for the hardware-independent logic modules (Unity via
+  # PlatformIO's native platform - Ubuntu's system g++ needs no extra setup).
+  # The build/release job below gates on this, so a logic regression fails CI
+  # before any firmware is published.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-test-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-test-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run host unit tests
+        run: pio test -e native
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out

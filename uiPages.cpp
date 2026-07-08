@@ -281,16 +281,109 @@ void openWifiLoginHelper()
     switchToScreen(SCREEN_WIFI_LOGIN);
 }
 
-/*-------- Boot-time settings button ----------*/
+/*-------- Boot-time settings button + boot console ----------*/
 // See uiPages.h: a Settings button on the "System initializing..." screen so
 // the blocking boot waits can be cut short on networks with no usable
 // internet (e.g. login-required WiFi), landing the main loop directly on the
 // settings page.
+//
+// The rest of that screen is a boot console: it mirrors the newest log lines
+// (WiFi attempts with SSID and failure reason, portal, NTP, timezone setup)
+// so the boot never looks frozen and failures are diagnosable on the device.
 
 const UIButton BTN_BOOT_SETTINGS = {90, 192, 140, 32};
 
 static bool bootUiActive = false;       // button drawn, polling enabled
 static bool bootSettingsWanted = false; // sticky once the button is tapped
+
+// Console geometry: font 1 (6x8 px) rows between the title rule (y=20, drawn
+// in displaySetup) and the Settings button (y=192).
+static const int BOOT_CON_TOP = 24;
+static const int BOOT_CON_LINE_H = 8;
+static const int BOOT_CON_ROWS = 20;
+static const int BOOT_CON_COLS = 52; // 6 px glyphs, 2 px left margin
+
+static String bootConShown[BOOT_CON_ROWS]; // what each row currently displays
+static uint32_t bootConLastBytes = 0;
+static unsigned long bootConLastDraw = 0;
+
+// Mirror the tail of the log ring into the console area. Rows are cached and
+// only repainted when their text changes, so the frequent polls stay cheap
+// and the screen doesn't flicker. force repaints everything (after another
+// page wiped the screen).
+static void bootConsoleRender(bool force)
+{
+    if (!bootUiActive)
+        return;
+    uint32_t bytes = logBytesWritten();
+    if (!force)
+    {
+        if (bytes == bootConLastBytes)
+            return;
+        // Throttle repaints; the 50ms boot polls pick the change up shortly.
+        if (millis() - bootConLastDraw < 100)
+            return;
+    }
+    bootConLastBytes = bytes;
+    bootConLastDraw = millis();
+
+    // Generous byte budget so even long (later-truncated) lines still leave a
+    // full screen of rows - logTail starts at a line boundary and drops a
+    // clipped first line itself.
+    String tail = logTail(BOOT_CON_ROWS * 96);
+    // A trailing newline would show as a phantom empty last line; without it
+    // the last line is the newest (possibly still-forming) one.
+    if (tail.endsWith("\n"))
+        tail.remove(tail.length() - 1);
+
+    // Keep the last BOOT_CON_ROWS lines (ring over rows[], oldest overwritten).
+    String rows[BOOT_CON_ROWS];
+    int total = 0;
+    if (tail.length() > 0)
+    {
+        int start = 0;
+        while (start <= (int)tail.length())
+        {
+            int nl = tail.indexOf('\n', start);
+            int end = (nl < 0) ? tail.length() : nl;
+            rows[total % BOOT_CON_ROWS] = tail.substring(start, end);
+            total++;
+            if (nl < 0)
+                break;
+            start = nl + 1;
+        }
+    }
+
+    tft.setTextFont(1);
+    tft.setTextSize(1);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_SILVER, clockBackgroundColor);
+    for (int i = 0; i < BOOT_CON_ROWS; i++)
+    {
+        int idx = total - BOOT_CON_ROWS + i; // log line shown on row i
+        String line = (idx >= 0) ? rows[idx % BOOT_CON_ROWS] : String();
+        if (line.length() > BOOT_CON_COLS)
+            line = line.substring(0, BOOT_CON_COLS);
+        if (!force && line == bootConShown[i])
+            continue;
+        bootConShown[i] = line;
+        int y = BOOT_CON_TOP + i * BOOT_CON_LINE_H;
+        tft.fillRect(0, y, 320, BOOT_CON_LINE_H, clockBackgroundColor);
+        tft.drawString(line, 2, y);
+    }
+}
+
+static void bootUiDrawChrome()
+{
+    bool tapped = bootSettingsWanted;
+    drawButton(BTN_BOOT_SETTINGS, "Settings",
+               tapped ? TFT_GREEN : TFT_CYAN, tapped ? TFT_GREEN : TFT_WHITE);
+    tft.setTextFont(1);
+    tft.setTextSize(1);
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString("WiFi login / status / logs", 160, 230);
+}
 
 void bootUiBegin()
 {
@@ -298,14 +391,31 @@ void bootUiBegin()
     // begin() only sets pin modes, so starting it early here is harmless.
     touchscreen.begin();
 
-    drawButton(BTN_BOOT_SETTINGS, "Settings", TFT_CYAN, TFT_WHITE);
-    tft.setTextFont(1);
+    bootUiActive = true;
+    bootUiDrawChrome();
+    bootConsoleRender(true); // show the lines logged before the display came up
+}
+
+void bootUiRefresh()
+{
+    if (!bootUiActive)
+        return;
+    // Another page (conf-mode screen, SetupCYD) painted over the boot screen:
+    // rebuild it wholesale, title included.
+    tft.fillScreen(clockBackgroundColor);
+    tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
-    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("WiFi login / status / logs", 160, 230);
+    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
+    tft.drawString("System initializing...", 160, 2);
+    tft.drawFastHLine(0, 20, 320, TFT_DARKGREY);
+    bootUiDrawChrome();
+    bootConsoleRender(true);
+}
 
-    bootUiActive = true;
+void bootUiEnd()
+{
+    bootUiActive = false;
 }
 
 bool bootUiSettingsRequested()
@@ -315,8 +425,13 @@ bool bootUiSettingsRequested()
 
 bool bootUiPoll()
 {
-    if (!bootUiActive || bootSettingsWanted)
+    if (!bootUiActive)
         return bootSettingsWanted;
+
+    bootConsoleRender(false); // mirror any new log lines onto the screen
+
+    if (bootSettingsWanted)
+        return true;
 
     TouchPoint t = readTouchPoint();
     if (t.zRaw > 800 && buttonContains(BTN_BOOT_SETTINGS, t.x, t.y))
@@ -325,14 +440,9 @@ bool bootUiPoll()
         // Acknowledge right away - the remaining boot steps can still take a
         // few seconds before the settings page actually appears.
         drawButton(BTN_BOOT_SETTINGS, "Settings", TFT_GREEN, TFT_GREEN);
-        tft.setTextFont(2);
-        tft.setTextSize(1);
-        tft.setTextDatum(TC_DATUM);
-        tft.setTextColor(TFT_GREEN, clockBackgroundColor);
-        tft.fillRect(0, 160, 320, 20, clockBackgroundColor);
-        tft.drawString("Opening settings...", 160, 162);
         Log.println("Settings requested from the init screen - cutting the "
                     "remaining boot waits short");
+        bootConsoleRender(true);
     }
     return bootSettingsWanted;
 }
@@ -363,6 +473,10 @@ void bootReportWifiFailure(const String &ssid, int wlStatus)
 
 void bootOpenPendingScreen()
 {
+    // Boot is over: the main loop owns the screen from here (clock or one of
+    // the pages below); stop the console/button so they can't paint over it.
+    bootUiEnd();
+
     if (wifiFailPending)
     {
         wifiFailPending = false;

@@ -11,6 +11,7 @@
 
 #include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
 #include "clockFaces.h"         // FACE_COUNT, clockFaceName
+#include "factoryReset.h"       // factoryReset - /api/factory-reset
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
 #include "holidayService.h"     // holidayZonesLoaded - /api/status
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - /api/status
@@ -518,6 +519,16 @@ static void handleSettingsPage()
             "var r=await fetch('/api/config',{method:'POST',body:await this.files[0].text()});"
             "alert(await r.text());});</script>";
 
+    // Factory reset (/api/factory-reset). Danger action: wipes settings AND
+    // WiFi credentials, then reboots. Confirm before firing.
+    page += "<p style=\"margin-top:1.5em\"><button type=\"button\" "
+            "style=\"background:#d11;border-color:#d11;color:#fff\" "
+            "onclick=\"if(confirm('Erase ALL settings and WiFi credentials and "
+            "reboot to a clean, first-boot state?')){"
+            "fetch('/api/factory-reset',{method:'POST'})"
+            ".then(async r=>alert(await r.text()));}\">"
+            "Factory reset</button></p>";
+
     page += "</div></body></html>";
     webServer.send(200, "text/html", page);
 }
@@ -754,6 +765,21 @@ static void handleApiConfigPost()
     webServer.send(200, "text/plain", "OK - config saved, rebooting to apply it");
     delay(750); // let the response reach the client
     ESP.restart();
+}
+
+// POST /api/factory-reset wipes every saved setting and WiFi credential and
+// reboots to a first-boot state (see factoryReset.h). Handy for re-testing the
+// out-of-box flow. Reply first, then erase - factoryReset() takes the radio
+// down and never returns.
+static void handleApiFactoryReset()
+{
+    if (!webAuthenticate()) return;
+    Log.println("Factory reset requested via /api/factory-reset");
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/plain",
+                   "OK - erasing all settings and WiFi credentials, rebooting");
+    delay(750); // let the response reach the client before the radio drops
+    factoryReset();
 }
 
 // Diagnostics as JSON - the System status page, but scriptable.
@@ -1098,6 +1124,7 @@ static void setupWebUpdater()
     webServer.on("/api/status", HTTP_GET, handleApiStatus);
     webServer.on("/api/config", HTTP_GET, handleApiConfigGet);
     webServer.on("/api/config", HTTP_POST, handleApiConfigPost);
+    webServer.on("/api/factory-reset", HTTP_POST, handleApiFactoryReset);
     webServer.on("/logs", HTTP_GET, handleLogsPage);
     webServer.on("/api/logs", HTTP_GET, handleApiLogs);
     webServer.on("/screenshot", HTTP_GET, handleScreenshot);

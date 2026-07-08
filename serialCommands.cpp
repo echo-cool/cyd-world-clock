@@ -4,6 +4,7 @@
 #include <ezTime.h>
 
 #include "ClockLogic.h"         // backlightLevel, worldZones, manualBrightnessUntil
+#include "factoryReset.h"       // factoryReset - FACTORYRESET command
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // public holiday status
 #include "logShipper.h"         // remote log push status
@@ -101,6 +102,10 @@ void handleSerialCommands()
         else if (command == "LOGSHIP") {
             logShipperPrintStatus(Log);
         }
+        else if (command == "FACTORYRESET") {
+            Log.println("Factory reset: erasing all settings and WiFi credentials...");
+            factoryReset(); // wipes NVS + SPIFFS and reboots - does not return
+        }
         else if (command == "HELP" || command == "?") {
             Log.println("=== Available Commands ===");
             Log.println("BRIGHTNESS <5-255>  - Set display brightness");
@@ -110,6 +115,7 @@ void handleSerialCommands()
             Log.println("WEATHER             - Force a weather refetch");
             Log.println("HOLIDAYS            - Show/refresh market holiday calendars");
             Log.println("LOGSHIP             - Show remote log shipping status");
+            Log.println("FACTORYRESET        - Erase all settings + WiFi creds, then reboot");
             Log.println("HELP or ?           - Show this help message");
         }
         else if (command.length() > 0) {

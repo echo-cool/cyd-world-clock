@@ -7,6 +7,7 @@
 
 #include "logBuffer.h"    // Log
 #include "projectConfig.h" // staMacOverride
+#include "textSanitize.h"  // puretext::parseMac / normalizeMac - host-tested cores
 
 // Re-probe cadence while running (the boot probe is one-shot).
 static const unsigned long NET_CHECK_EVERY_MS = 60UL * 1000UL;
@@ -128,40 +129,16 @@ void netCheckService()
 NetReachability netReachability() { return g_reachability; }
 bool captivePortalActive() { return g_captive; }
 
+// parseMac / normalizeMac are thin String wrappers over the host-tested
+// puretext cores (textSanitize.cpp).
 bool parseMac(const String &s, uint8_t out[6])
 {
-    unsigned int v[6];
-    int n = sscanf(s.c_str(), "%x:%x:%x:%x:%x:%x",
-                   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
-    if (n != 6)
-    {
-        n = sscanf(s.c_str(), "%x-%x-%x-%x-%x-%x",
-                   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
-    }
-    if (n != 6)
-        return false;
-    for (int i = 0; i < 6; i++)
-    {
-        if (v[i] > 0xFF)
-            return false;
-        out[i] = (uint8_t)v[i];
-    }
-    return true;
+    return puretext::parseMac(s.c_str(), out);
 }
 
 String normalizeMac(const String &s)
 {
-    String t = s;
-    t.trim();
-    if (t.length() == 0)
-        return "";
-    uint8_t m[6];
-    if (!parseMac(t, m))
-        return t; // keep the typo visible so the user can fix it
-    char buf[18];
-    sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
-            m[0], m[1], m[2], m[3], m[4], m[5]);
-    return String(buf);
+    return String(puretext::normalizeMac(s.c_str()).c_str());
 }
 
 void applyStaMacOverride()

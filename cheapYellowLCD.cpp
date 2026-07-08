@@ -23,11 +23,14 @@ void CheapYellowDisplay::displaySetup()
   tft.setRotation(projectConfig.flipDisplay ? 3 : 1);
   tft.fillScreen(TFT_BLACK);
 
+  // Compact title at the top: the area below is the boot console (uiPages),
+  // which mirrors the log so startup progress is visible on the device.
   tft.setTextFont(2);
-  tft.setTextSize(2);
-  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
+  tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("System initializing...", 160, 120);
+  tft.drawString("System initializing...", 160, 2);
+  tft.drawFastHLine(0, 20, 320, TFT_DARKGREY);
 }
 
 void CheapYellowDisplay::drawWifiManagerMessage(WiFiManager *myWiFiManager)

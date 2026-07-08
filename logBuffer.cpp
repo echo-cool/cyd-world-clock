@@ -9,6 +9,7 @@ static size_t head = 0; // next write position
 static bool wrapped = false;
 static bool atLineStart = true;
 static volatile uint32_t lineVersion = 0;
+static volatile uint32_t bytesWritten = 0;
 
 // Spinlock, not a FreeRTOS mutex: writes come from both cores and must also
 // work before the logger has been "begun" (there is no begin - static init
@@ -60,6 +61,7 @@ size_t LogBuffer::write(const uint8_t *buffer, size_t size)
     size_t n = Serial.write(buffer, size);
     portENTER_CRITICAL(&logMux);
     ringWrite(buffer, size);
+    bytesWritten = bytesWritten + size;
     portEXIT_CRITICAL(&logMux);
     // Tee into the remote-shipping queue (its own lock; never nested with
     // logMux, and a no-op when LOG_PUSH_URL isn't configured).
@@ -70,6 +72,11 @@ size_t LogBuffer::write(const uint8_t *buffer, size_t size)
 uint32_t logVersion()
 {
     return lineVersion; // 32-bit reads are atomic on the ESP32
+}
+
+uint32_t logBytesWritten()
+{
+    return bytesWritten;
 }
 
 String logTail(size_t maxBytes)

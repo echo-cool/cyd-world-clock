@@ -4,27 +4,16 @@
 #include "SPIFFS.h"
 #include <ArduinoJson.h>
 
-#include "clockFaces.h" // FACE_COUNT - clamp the saved face index
-#include "logBuffer.h"  // Log
+#include "clockFaces.h"    // FACE_COUNT - clamp the saved face index
+#include "logBuffer.h"     // Log
+#include "textSanitize.h"  // puretext::sanitizeHostname - host-tested core
 
 ProjectConfig projectConfig;
 
+// Thin String wrapper over the host-tested puretext::sanitizeHostname.
 String sanitizeHostname(const String &raw)
 {
-  String out;
-  for (unsigned int i = 0; i < raw.length() && out.length() < 32; i++)
-  {
-    char c = raw[i];
-    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
-    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
-    {
-      out += c;
-    }
-  }
-  while (out.startsWith("-")) out.remove(0, 1);
-  while (out.endsWith("-")) out.remove(out.length() - 1);
-  if (out.length() == 0) out = "esp32worldclock";
-  return out;
+  return String(puretext::sanitizeHostname(raw.c_str()).c_str());
 }
 
 // Serialize all settings into json. Shared by saveConfigFile and the

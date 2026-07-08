@@ -94,7 +94,15 @@ void openWifiLoginHelper();
 // remaining network waits are cut short so the main loop starts directly on
 // the settings page - from where the Wi-Fi login helper, status and logs are
 // reachable. bootUiSettingsRequested() reads the sticky flag without polling.
+//
+// The screen doubles as a boot console: bootUiPoll() mirrors the newest log
+// lines onto it, so every call also keeps the on-screen startup log moving.
+// bootUiRefresh() rebuilds the whole boot screen after another page painted
+// over it (the portal's conf-mode screen, SetupCYD); bootUiEnd() deactivates
+// the boot UI once the main loop takes over the display.
 void bootUiBegin();
+void bootUiRefresh();
+void bootUiEnd();
 bool bootUiPoll();
 bool bootUiSettingsRequested();
 

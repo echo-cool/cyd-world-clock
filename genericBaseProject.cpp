@@ -10,8 +10,9 @@
 
 // Preconfigured WiFi credentials live in an untracked "secrets.h" so they are
 // never committed to the repository. Copy secrets.h.example to secrets.h and
-// fill in your own values. These are tried first on boot, with a fallback to
-// the WiFiManager captive portal if the connection fails.
+// fill in your own values. On boot they are tried alongside the credentials
+// saved through the config portal (portal-saved first), with a fallback to
+// the WiFiManager captive portal if nothing connects.
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -30,6 +31,7 @@
 // Standard Libraries
 // ----------------------------
 #include <WiFi.h>
+#include <esp_wifi.h> // esp_wifi_get_config - read the portal-saved credentials
 
 #include <FS.h>
 #include "SPIFFS.h"
@@ -74,6 +76,8 @@
 #include "netCheck.h" // captive-portal detection + MAC-clone
 
 #include "logShipper.h" // remote log push - anchor capture runs on the main loop
+
+#include "wifiCredentials.h" // host-tested saved-vs-built-in ordering (the boot bug)
 
 // Number of seconds after reset during which a
 // subseqent reset will be considered a double reset.
@@ -178,6 +182,21 @@ static void ntpServerService()
     ntpNextServer();
 }
 
+// Short human text for a wl_status_t, for the boot log / boot console.
+static const char *wlStatusText(int st)
+{
+    switch (st)
+    {
+    case WL_IDLE_STATUS:     return "idle";
+    case WL_NO_SSID_AVAIL:   return "network not found";
+    case WL_CONNECT_FAILED:  return "join rejected (wrong password?)";
+    case WL_CONNECTION_LOST: return "connection lost";
+    case WL_DISCONNECTED:    return "no link";
+    case WL_CONNECTED:       return "connected";
+    default:                 return "unknown";
+    }
+}
+
 void baseProjectSetup()
 {
     // SPIFFS and the saved config come up before the display so settings that
@@ -219,53 +238,103 @@ void baseProjectSetup()
         forceConfig = true;
     }
 
-    // Step 1: Try preconfigured WiFi credentials first. A single attempt can
-    // fail even when the network is fine (AP busy, weak signal on boot), so
-    // retry several times before falling back to the config portal.
+    // Step 1: Try the known WiFi credentials before falling back to the config
+    // portal. The pair saved by the config portal (in the WiFi stack's NVS) is
+    // tried first - the user typed that one in on purpose - then the
+    // compiled-in secrets.h pair. See the ordering/dedup comment below.
     if (!forceConfig)
     {
-        Log.println("Attempting to connect with preconfigured WiFi...");
         WiFi.mode(WIFI_STA);
         // Present the cloned MAC (if configured) before the first WiFi.begin so
         // a login-required network sees the authorized address from the start.
         applyStaMacOverride();
 
-        for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS && !wifiConnected && !bootUiPoll(); attempt++)
+        // Portal-saved credentials live in the WiFi stack's NVS (not in our
+        // SPIFFS config); esp_wifi has just loaded them into RAM as part of
+        // WiFi.mode(WIFI_STA) above, so read them straight from there. Empty
+        // until the portal has saved a network once.
+        //
+        // The ordering (saved before built-in, dedup, skip empties) is the
+        // actual bug fix and lives in wifiCredentials.cpp so it can be
+        // unit-tested on the host: boot used to try only the secrets.h pair
+        // and jump to the portal when it failed, so a network saved through
+        // the phone was never retried after the post-save reboot - the clock
+        // looped "System initializing..." -> portal forever.
+        wifi_config_t staConf = {};
+        char savedSsid[sizeof(staConf.sta.ssid) + 1] = "";
+        char savedPass[sizeof(staConf.sta.password) + 1] = "";
+        if (esp_wifi_get_config(WIFI_IF_STA, &staConf) == ESP_OK)
         {
-            Log.print("WiFi connect attempt ");
-            Log.print(attempt);
-            Log.print("/");
-            Log.print(WIFI_CONNECT_ATTEMPTS);
-            Log.print(" ");
+            memcpy(savedSsid, staConf.sta.ssid, sizeof(staConf.sta.ssid));
+            savedSsid[sizeof(staConf.sta.ssid)] = 0;
+            memcpy(savedPass, staConf.sta.password, sizeof(staConf.sta.password));
+            savedPass[sizeof(staConf.sta.password)] = 0;
+        }
 
-            // Reset any half-finished connection state from the previous attempt
-            WiFi.disconnect();
-            delay(100);
-            WiFi.begin(PRECONFIGURED_SSID, PRECONFIGURED_PASSWORD);
+        WifiCandidate creds[2];
+        int credCount = orderWifiCandidates(savedSsid, savedPass,
+                                            PRECONFIGURED_SSID, PRECONFIGURED_PASSWORD,
+                                            creds, 2);
 
-            // Poll every 50ms so a quick tap on the boot Settings button is
-            // never missed; keep the progress dots at their ~500ms cadence.
-            unsigned long startTime = millis();
-            int ticks = 0;
-            while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT && !bootUiPoll())
+        if (credCount == 0)
+        {
+            Log.println("No WiFi credentials known yet (no portal-saved network, "
+                        "empty secrets.h) - going to the config portal");
+        }
+
+        // Try each known network in turn, saved before built-in, with several
+        // attempts each (a single attempt can fail on a fine network - AP busy,
+        // weak signal on boot). The saved network is exhausted before the
+        // built-in one is touched at all, so on a normal boot (saved network
+        // present) WiFi.begin is only ever called with the saved credentials -
+        // it never overwrites the portal-saved NVS entry with the built-in one.
+        // Only a saved network that truly can't be reached falls through to
+        // built-in, where adopting whatever actually connects is what we want.
+        for (int c = 0; c < credCount && !wifiConnected && !bootUiPoll(); c++)
+        {
+            const WifiCandidate &cred = creds[c];
+            Log.println(String("Trying WiFi \"") + cred.ssid + "\" (" + cred.source +
+                        "), up to " + String(WIFI_CONNECT_ATTEMPTS) + " attempts");
+
+            for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS &&
+                                  !wifiConnected && !bootUiPoll(); attempt++)
             {
-                delay(50);
-                if (++ticks % 10 == 0)
+                Log.print("  attempt " + String(attempt) + "/" + String(WIFI_CONNECT_ATTEMPTS) + " ");
+
+                // Reset any half-finished connection state from the previous attempt
+                WiFi.disconnect();
+                delay(100);
+                WiFi.begin(cred.ssid, cred.pass);
+
+                // Poll every 50ms so a quick tap on the boot Settings button is
+                // never missed; keep the progress dots at their ~500ms cadence.
+                unsigned long startTime = millis();
+                int ticks = 0;
+                while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT && !bootUiPoll())
                 {
-                    Log.print(".");
+                    delay(50);
+                    if (++ticks % 10 == 0)
+                    {
+                        Log.print(".");
+                    }
                 }
-            }
-            Log.println();
 
-            if (WiFi.status() == WL_CONNECTED)
-            {
-                wifiConnected = true;
+                if (WiFi.status() == WL_CONNECTED)
+                {
+                    Log.println(" connected");
+                    wifiConnected = true;
+                }
+                else
+                {
+                    Log.println(String(" failed: ") + wlStatusText(WiFi.status()));
+                }
             }
         }
 
         if (wifiConnected)
         {
-            Log.println("Connected with preconfigured WiFi!");
+            Log.println("WiFi up: \"" + WiFi.SSID() + "\", RSSI " +
+                        String(WiFi.RSSI()) + " dBm");
             Log.print("IP address: ");
             Log.println(WiFi.localIP());
 
@@ -285,7 +354,19 @@ void baseProjectSetup()
         }
         else
         {
-            Log.println("All preconfigured WiFi attempts failed, falling back to WiFiManager");
+            // Nothing we knew about connected. Undo any credentials the failed
+            // WiFi.begin() attempts just wrote to NVS. The esp_wifi stack keeps
+            // FLASH storage here (WiFi.persistent() is a no-op after init), so
+            // *every* begin() - even one that never links - persists its
+            // SSID/password. Left in place, a dead built-in/secrets.h SSID (for
+            // example an old "YOUR_WIFI_SSID" placeholder from a previous build)
+            // is read back by esp_wifi_get_config as a bogus "saved" network on
+            // the next boot and burns the whole retry budget before the real
+            // fallback is even tried. Restoring the staConf we read before the
+            // connect loop keeps a genuine portal-saved network intact across a
+            // transient outage while dropping the dead one.
+            esp_wifi_set_config(WIFI_IF_STA, &staConf);
+            Log.println("All WiFi attempts failed - opening the config portal");
             forceConfig = true;
         }
     }
@@ -305,6 +386,10 @@ void baseProjectSetup()
     // wait (and the reboot) so the settings page stays reachable offline.
     unsigned long wifiWaitStart = millis();
     int waitTicks = 0;
+    if (WiFi.status() != WL_CONNECTED && !bootUiSettingsRequested())
+    {
+        Log.println("Waiting for the WiFi link (reboot after 30 s without one)");
+    }
     while (WiFi.status() != WL_CONNECTED && !bootUiPoll())
     {
         if (millis() - wifiWaitStart > 30000UL)
@@ -332,6 +417,8 @@ void baseProjectSetup()
         // where everything past this point (NTP, weather, holidays) would silently
         // fail. Probe once so the reason is in the log; the runtime re-check on the
         // weather task keeps the on-screen / API captive state current thereafter.
+        Log.println("Checking internet reachability...");
+        bootUiPoll(); // paint the console before the blocking probe
         switch (netCheckNow())
         {
         case NET_ONLINE:
@@ -357,15 +444,15 @@ void baseProjectSetup()
     }
 
     // Enable over-the-air firmware updates now that the network is up
+    bootUiPoll();
     setupOTA();
-
-    Log.println("Waiting for time sync");
 
     // Configure NTP sync frequency for production
     setInterval(1800); // Sync every 30 minutes (production setting)
     setDebug(ERROR); // Only show errors, not all debug info
 
-    Log.println("Performing initial NTP sync...");
+    Log.println("NTP: initial time sync (server: " + String(currentNtpServer()) +
+                ", up to " + String(INITIAL_NTP_SYNC_TIMEOUT_S) + " s)...");
 
     // Bounded wait: the default waitForSync() (timeout 0) loops forever when
     // NTP never completes, which on a login-required network would hang the
@@ -429,6 +516,8 @@ void baseProjectSetup()
     // EEPROM cache slot 4 (slots 0-3 belong to the world-clock zones in
     // ClockLogic.cpp), so this zone survives timezone-server outages too. The
     // cache payload is uppercased, hence the case-insensitive name check.
+    Log.println("Loading home timezone " + projectConfig.timeZone + "...");
+    bootUiPoll();
     if (!(myTZ.setCache(4 * EEPROM_CACHE_LEN) &&
           myTZ.getOlson().equalsIgnoreCase(projectConfig.timeZone)))
     {

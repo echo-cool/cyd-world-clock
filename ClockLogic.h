@@ -9,6 +9,7 @@
 #include <ezTime.h>
 
 #include "logBuffer.h" // the Log tee used by CLOCK_DEBUG_PRINTLN and all logging
+#include "dateMath.h"  // daysFromCivil / civilFromDays (host-tested pure math)
 
 // Set to 1 to enable verbose per-frame draw/debug logging on the serial port.
 // Kept at 0 for normal use so the hot draw path isn't flooded with Serial output.
@@ -126,13 +127,7 @@ uint16_t getDayNightLabelColor(WorldClockZone &zone);
 // renderer and all the alternate clock faces.
 String formatHHMM(time_t local, bool &pm);
 
-// Days since 1970-01-01 for a civil date; ((result + 4) % 7) gives the day of
-// week with 0 = Sunday.
-long daysFromCivil(int y, int m, int d);
-
-// Inverse of daysFromCivil: civil date for a days-since-1970 count. Used to
-// walk forward over real calendar dates (weekends, market holidays).
-void civilFromDays(long days, int &y, int &m, int &d);
+// daysFromCivil / civilFromDays now live in dateMath.h (included above).
 
 // Touch read for all UI code: getTouch() mapped into screen pixels, mirrored
 // when the display is flipped 180 degrees (projectConfig.flipDisplay) so touch

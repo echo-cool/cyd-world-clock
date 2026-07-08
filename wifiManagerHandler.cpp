@@ -103,6 +103,8 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
   {
     // IF we forced config this time, lets stop the double reset so it doesn't get stuck in a loop
     drd->stop();
+    Log.println("Opening WiFi config portal: join AP \"esp32Project\" (pass 12345678), "
+                "reboot-and-retry after " + String(CONFIG_PORTAL_TIMEOUT_S) + " s unused");
     portalOk = wm.startConfigPortal("esp32Project", "12345678");
   }
   else
@@ -134,6 +136,9 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
       Log.println("Portal WiFi \"" + wm.getWiFiSSID() + "\" failed to join "
                   "(wifi status " + String(st) + ") - showing the failure page");
       bootReportWifiFailure(wm.getWiFiSSID(), st);
+      // The portal's conf-mode screen replaced the boot console; repaint it
+      // so the remaining boot steps show their progress again.
+      bootUiRefresh();
       return;
     }
 
@@ -142,9 +147,9 @@ void setupWiFiManager(bool forceConfig, ProjectConfig &config, ProjectDisplay *t
     // Stop the double-reset detector first: its RTC flag is still armed
     // (drd->loop() never ran during setup), so restarting without this
     // would read as a "double reset" and force the portal open again,
-    // looping forever instead of retrying the preconfigured WiFi.
+    // looping forever instead of retrying the known WiFi credentials.
     drd->stop();
-    // reset and try again (preconfigured credentials get retried first)
+    // reset and try again (the saved + preconfigured credentials get retried first)
     ESP.restart();
     delay(5000);
   }

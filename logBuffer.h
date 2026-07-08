@@ -34,4 +34,8 @@ String logTail(size_t maxBytes);
 // know when a repaint is worth it.
 uint32_t logVersion();
 
+// Total bytes ever written (monotonic). Unlike logVersion this also moves on
+// partial lines (progress dots), which the boot console needs to animate.
+uint32_t logBytesWritten();
+
 #endif // LOG_BUFFER_H

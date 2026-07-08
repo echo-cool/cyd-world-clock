@@ -85,6 +85,23 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs .
 3. Select board "ESP32 Dev Module" and set Tools → Partition Scheme →
    "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)", then build and upload
 
+## Testing
+
+Hardware-independent logic (boot WiFi-credential ordering, calendar math,
+clock formatting, hostname/MAC sanitising, trading-session timing) is factored
+into small Arduino-free modules and covered by host [Unity](https://github.com/ThrowTheSwitch/Unity)
+tests that run on your development machine — no ESP32 needed:
+
+```
+pio test -e native
+```
+
+On this project's Windows setup the `native` platform needs MinGW g++ on
+`PATH`; use the wrapper `./test/run_native_tests.ps1` (PowerShell), which adds
+it for the run. See [`test/README.md`](test/README.md) for the suite list and
+how to add a test. The `test_wifi_credentials` suite specifically pins down the
+"stuck at *System initializing…*" boot bug so it can't regress.
+
 ## CI builds and releases
 
 Every push and pull request is build-verified by GitHub Actions
@@ -158,20 +175,27 @@ live in NVS and survive.
 
 There are two ways to get the clock online:
 
-1. **Preconfigured credentials (optional):** Set `PRECONFIGURED_SSID` /
-   `PRECONFIGURED_PASSWORD` in your local `secrets.h`. On boot the device tries
-   these first (up to 10 attempts, 5 seconds each). Leave the placeholders
-   unchanged to skip this.
-2. **WiFiManager captive portal (fallback):** If the preconfigured connection
-   fails — or you double-press reset to force config mode — the device starts a
+1. **Known credentials:** On boot the device rotates through the WiFi
+   credentials it knows (up to 10 attempts, 5 seconds each): the network last
+   saved through the config portal first, then the optional
+   `PRECONFIGURED_SSID` / `PRECONFIGURED_PASSWORD` pair from your local
+   `secrets.h` (leave the placeholders unchanged to skip the latter).
+2. **WiFiManager captive portal (fallback):** If none of those connect — or
+   you double-press reset to force config mode — the device starts a
    captive portal. Connect to SSID `esp32Project` (password `12345678`) and use
    the portal to enter your WiFi, time zone, 24-hour clock and US date format
-   preferences. These are saved to flash for next boot.
+   preferences. These are saved to flash and become the first-tried network on
+   every later boot.
+
+The whole sequence plays out live on the boot screen: it mirrors the log as a
+console (which network is being tried, each attempt's count and failure
+reason, portal / NTP / timezone progress), so the boot never sits on a silent
+"System initializing..." message.
 
 If nobody uses the portal within 5 minutes, the device reboots and retries the
-whole sequence (preconfigured credentials first). So after a power cut where
-the router comes back later than the clock, the clock reconnects on its own —
-no button pressing needed.
+whole sequence (saved + preconfigured credentials first). So after a power cut
+where the router comes back later than the clock, the clock reconnects on its
+own — no button pressing needed.
 
 If you *do* enter credentials in the portal and the join fails, the clock no
 longer reboot-loops silently: it shows a **WiFi connect failed** page with the

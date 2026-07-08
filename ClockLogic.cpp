@@ -2,6 +2,8 @@
 
 #include "ClockLogic.h"
 
+#include <WiFi.h> // link status for the zone-setup boot log
+
 #include "clockFaces.h"
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // holidaysBegin, getHolidayName
@@ -15,6 +17,8 @@
 #include "wifiWatch.h"      // offline indicator on the home faces
 #include "netCheck.h"       // captivePortalActive - login-required indicator
 #include "wifiRelay.h"      // wifiRelayRequested - web-triggered login helper
+#include "timeFormat.h"     // puretime::formatHHMM - host-tested 12/24h formatting
+#include "marketSession.h"  // host-tested trading-session membership math
 
 // Off-screen buffer for one full clock quadrant (160x120x16bpp = 38KB). Each
 // quadrant is rendered here and pushed to the panel in a single blit, so the
@@ -138,19 +142,9 @@ QuadrantPos quadrants[4] = {
 
 String formatHHMM(time_t local, bool &pm)
 {
-    int hr = hour(local); // 24-hour value from ezTime
-    pm = (hr >= 12);
-    if (!SHOW_24HOUR)
-    {
-        hr = hr % 12;
-        if (hr == 0) hr = 12; // midnight / noon shown as 12, not 0
-    }
-    // Sized for out-of-range values too: ezTime's hour()/minute() return a
-    // uint8_t, and on a negative pre-sync time_t that can be a 3-digit
-    // wraparound (e.g. 249) - it must render as garbage, not smash the stack.
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%02d:%02d", hr, minute(local));
-    return String(buf);
+    // The 12/24-hour conversion is unit-tested in puretime::formatHHMM; here we
+    // just feed it ezTime's already-extracted hour/minute.
+    return String(puretime::formatHHMM(hour(local), minute(local), SHOW_24HOUR, pm).c_str());
 }
 
 // Sun elevation in degrees above the horizon at utc for a site, via NOAA's
@@ -263,31 +257,6 @@ static void drawDayNightIcon(TFT_eSPI &gfx, int cx, int cy, DayPhase phase)
 // Days since 1970-01-01 for a given civil date (Howard Hinnant's algorithm).
 // Used to compare calendar dates between timezones robustly across month/year
 // boundaries instead of comparing bare day-of-month numbers.
-long daysFromCivil(int y, int m, int d)
-{
-    y -= m <= 2;
-    long era = (y >= 0 ? y : y - 399) / 400;
-    unsigned yoe = (unsigned)(y - era * 400);
-    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + (long)doe - 719468;
-}
-
-// Inverse of daysFromCivil (also Howard Hinnant's algorithm).
-void civilFromDays(long days, int &y, int &m, int &d)
-{
-    days += 719468;
-    long era = (days >= 0 ? days : days - 146096) / 146097;
-    unsigned doe = (unsigned)(days - era * 146097);
-    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    long yr = (long)yoe + era * 400;
-    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    unsigned mp = (5 * doy + 2) / 153;
-    d = (int)(doy - (153 * mp + 2) / 5 + 1);
-    m = (int)(mp < 10 ? mp + 3 : mp - 9);
-    y = (int)(yr + (m <= 2));
-}
-
 // Show the countdown to the next open only when the open is less than a day
 // away. Longer waits used to render as "OPENS IN 2D 8H", which reads too much
 // like a time ("20 8H") at a glance - those now show a plain red "CLOSED".
@@ -437,25 +406,11 @@ String getMarketStatus(WorldClockZone &zone)
             }
         }
 
-        // Handle sessions that span midnight (like overnight trading)
-        bool isCurrentlyInSession = false;
-        if (sessionEnd < sessionStart) {
-            // Session spans midnight (e.g., 20:00 to 04:00)
-            isCurrentlyInSession = (currentTotalMinutes >= sessionStart || currentTotalMinutes < sessionEnd);
-        } else {
-            // Normal session within same day
-            isCurrentlyInSession = (currentTotalMinutes >= sessionStart && currentTotalMinutes < sessionEnd);
-        }
-
-        if (isCurrentlyInSession) {
+        // Membership + countdown math (incl. the midnight-spanning cases)
+        // lives in market::* so it is unit-tested on the host.
+        if (market::inSession(currentTotalMinutes, sessionStart, sessionEnd)) {
             // Currently in this session - check if closing soon
-            int minutesToClose;
-            if (sessionEnd < sessionStart && currentTotalMinutes >= sessionStart) {
-                // We're in the first part of a midnight-spanning session
-                minutesToClose = (24 * 60) - currentTotalMinutes + sessionEnd;
-            } else {
-                minutesToClose = sessionEnd - currentTotalMinutes;
-            }
+            int minutesToClose = market::minutesUntilClose(currentTotalMinutes, sessionStart, sessionEnd);
 
             if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
                 if (session.sessionName == "REGULAR") {
@@ -472,23 +427,12 @@ String getMarketStatus(WorldClockZone &zone)
             }
         }
 
-        // Check if next session is opening soon
-        int minutesToOpen;
-        if (sessionEnd < sessionStart) {
-            // Next session spans midnight
-            if (currentTotalMinutes < sessionStart) {
-                minutesToOpen = sessionStart - currentTotalMinutes;
-            } else {
-                minutesToOpen = (24 * 60) - currentTotalMinutes + sessionStart;
-            }
-        } else {
-            // Normal next session
-            if (currentTotalMinutes < sessionStart) {
-                minutesToOpen = sessionStart - currentTotalMinutes;
-            } else {
-                // Check next day's first session
-                continue;
-            }
+        // Check if next session is opening soon. A negative result means a
+        // normal same-day session whose open is already past - look to the
+        // next day (handled by later sessions / the closed-countdown below).
+        int minutesToOpen = market::minutesUntilOpen(currentTotalMinutes, sessionStart, sessionEnd);
+        if (minutesToOpen < 0) {
+            continue;
         }
 
         if (minutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
@@ -1197,17 +1141,6 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex)
     }
 }
 
-void showWiFiStatus(String message, uint16_t color = TFT_WHITE, int fontsize = 1)
-{
-    tft.fillScreen(clockBackgroundColor);
-    tft.setTextFont(1);
-    tft.setTextSize(fontsize);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(color, clockBackgroundColor);
-    tft.drawString(message, 160, 120);
-    delay(100); // Brief pause so the status message is legible
-}
-
 void showBrightnessBar(int brightness)
 {
     // Draw brightness bar in center of screen
@@ -1262,9 +1195,9 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // usDate == true  -> MM/DD/YY (US),  usDate == false -> DD/MM/YY (rest of world)
     NOT_US_DATE = !usDate;
     SetupCYD();
-
-    // Show WiFi connection status
-    showWiFiStatus("Connecting WiFi...", TFT_YELLOW);
+    // SetupCYD cleared the panel - put the boot console + Settings button
+    // back for the zone-setup steps below.
+    bootUiRefresh();
 
     // Off-screen quadrant buffer for flicker-free updates (see quadSprite)
     quadSpriteOk = (quadSprite.createSprite(quadrantWidth, quadrantHeight) != nullptr);
@@ -1287,11 +1220,10 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     pinMode(BACKLIGHT_PIN, OUTPUT);
     analogWrite(BACKLIGHT_PIN, backlightLevel);
 
-    // Show WiFi connected status
-    showWiFiStatus("WiFi Connected!", TFT_GREEN);
-
-    // Show timezone setup status
-    showWiFiStatus("Setting up zones...", TFT_CYAN);
+    Log.println(WiFi.status() == WL_CONNECTED
+                    ? "Setting up the 4 time zones..."
+                    : "Setting up the 4 time zones (no WiFi - cache / built-in rules)...");
+    bootUiPoll();
 
     // Apply the timezones saved in the project config to the four quadrants
     // (falls back to the compiled-in defaults if nothing was saved yet).
@@ -1311,8 +1243,8 @@ void rollingClockSetup(bool is24Hour, bool usDate)
         if (worldZones[i].tz.setCache(i * EEPROM_CACHE_LEN) &&
             worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
             tzSuccess = true;
-            showWiFiStatus(worldZones[i].name + " - cached", TFT_GREEN);
             Log.println("CACHED: " + worldZones[i].name + " - " + worldZones[i].timezone);
+            bootUiPoll();
         }
 
         int retryCount = 0;
@@ -1320,18 +1252,11 @@ void rollingClockSetup(bool is24Hour, bool usDate)
         // When the boot Settings button cut the boot short there is no
         // internet worth retrying against - skip straight to the POSIX
         // fallback below so the settings page appears without a long stall.
-        while (!tzSuccess && retryCount < maxRetries && !bootUiSettingsRequested()) {
-            // Show progress on screen
-            String statusMsg = "Setting up ";
-            statusMsg += worldZones[i].name;
-            statusMsg += " (" + String(retryCount + 1) + "/" + String(maxRetries) + ")";
-            showWiFiStatus(statusMsg, TFT_CYAN);
-
-            Log.print("Setting timezone ");
-            Log.print(worldZones[i].name);
-            Log.print(" (attempt ");
-            Log.print(retryCount + 1);
-            Log.println(")");
+        while (!tzSuccess && retryCount < maxRetries && !bootUiPoll()) {
+            Log.println("Fetching timezone " + worldZones[i].name + " - " +
+                        worldZones[i].timezone + " (attempt " +
+                        String(retryCount + 1) + "/" + String(maxRetries) + ")");
+            bootUiPoll(); // paint the line before the blocking fetch
 
             // setLocation() returning true means the server sent a valid
             // definition and the POSIX rules were applied (and written to this
@@ -1340,10 +1265,6 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             // (e.g. London in winter) legitimately match UTC.
             if (worldZones[i].tz.setLocation(worldZones[i].timezone)) {
                 tzSuccess = true;
-
-                // Show success on screen
-                String successMsg = worldZones[i].name + " - OK!";
-                showWiFiStatus(successMsg, TFT_GREEN);
 
                 time_t local = worldZones[i].tz.now();
                 Log.print("SUCCESS: ");
@@ -1356,13 +1277,14 @@ void rollingClockSetup(bool is24Hour, bool usDate)
                 if (minute(local) < 10) Log.print("0");
                 Log.println(minute(local));
             } else {
-                Log.println("FAILED: setLocation returned false");
+                Log.println("FAILED: timezone server gave no usable answer");
                 retryCount++;
                 if (retryCount < maxRetries) {
-                    // Show retry message on screen
-                    showWiFiStatus("Retrying...", TFT_YELLOW);
                     Log.println("Retrying in 2 seconds...");
-                    delay(1000); // Additional delay since showWiFiStatus has its own delay
+                    // Pump the console/Settings button through the pause
+                    for (int t = 0; t < 40 && !bootUiPoll(); t++) {
+                        delay(50);
+                    }
                 }
             }
         }
@@ -1379,16 +1301,14 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             const char *posix = getPosixFallback(worldZones[i].timezone);
             if (posix) {
                 worldZones[i].tz.setPosix(posix);
-                showWiFiStatus(worldZones[i].name + " - built-in rules", TFT_YELLOW);
                 Log.println("Using built-in POSIX rules: " + String(posix));
             } else if (!worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
                 // The cache slot held a *different* zone (changed while
                 // offline) - don't keep ticking with the wrong rules.
                 worldZones[i].tz.setPosix("UTC");
-                showWiFiStatus(worldZones[i].name + " - FAILED!", TFT_RED);
-            } else {
-                showWiFiStatus(worldZones[i].name + " - FAILED!", TFT_RED);
+                Log.println(worldZones[i].name + ": no rules available - falling back to UTC");
             }
+            bootUiPoll();
         }
 
         // Seed the market-status cache so the first frame shows it immediately
@@ -1408,8 +1328,8 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // the first NTP sync anchors their timestamps.
     logShipperBegin();
 
-    // Show ready status
-    showWiFiStatus("World Clock Ready!", TFT_GREEN);
+    Log.println("World clock ready - starting the display");
+    bootUiPoll();
 
     // Show available serial commands
     showStartupCommands();
