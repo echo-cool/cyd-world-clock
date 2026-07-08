@@ -146,4 +146,9 @@ bool getLdrState(bool &trusted, bool &dark, int &smoothed);
 void rollingClockSetup(bool is24Hour, bool usDate);
 void drawRollingClock();
 
+// The quadrant sprite is a 38KB heap cache. HTTPS fetchers temporarily release
+// it so mbedTLS has enough contiguous memory for certificate parsing.
+bool clockReleaseRenderBufferForNetwork();
+void clockRestoreRenderBufferForNetwork(bool released);
+
 #endif // CLOCK_LOGIC_H

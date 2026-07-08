@@ -24,6 +24,13 @@ static unsigned long weatherRefreshMs()
     return (unsigned long)constrain(projectConfig.weatherRefreshMin, 5, 120) * 60000UL;
 }
 
+struct RenderBufferReleaseGuard
+{
+    bool released;
+    RenderBufferReleaseGuard() : released(clockReleaseRenderBufferForNetwork()) {}
+    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
+};
+
 // City coordinates the fetch task works from. Snapshotted from worldZones on
 // the MAIN core (weatherBegin / weatherInvalidate), so the task never reads
 // the zones' Strings while the touch UI might be reassigning them.
@@ -170,6 +177,8 @@ static int severityRank(const char *sev)
 // large) response parses in a few KB.
 static String fetchUsAlert(float lat, float lon)
 {
+    RenderBufferReleaseGuard renderMemory;
+
     String url = "https://api.weather.gov/alerts/active?point=" +
                  String(lat, 4) + "," + String(lon, 4);
 
@@ -220,7 +229,8 @@ static String fetchUsAlert(float lat, float lon)
         http.end();
         return "";
     }
-
+    Log.println("NWS alerts fetch OK, HTTP " + String(code) + " | heap free=" +
+                String(ESP.getFreeHeap()) + " maxAlloc=" + String(ESP.getMaxAllocHeap()));
     StaticJsonDocument<128> filter;
     filter["features"][0]["properties"]["event"] = true;
     filter["features"][0]["properties"]["severity"] = true;
@@ -234,9 +244,14 @@ static String fetchUsAlert(float lat, float lon)
         Log.println(String("NWS alerts parse failed: ") + err.c_str());
         return "";
     }
+    else{
+        Log.println("NWS alerts parse OK | heap free=" + String(ESP.getFreeHeap()) +
+                    " maxAlloc=" + String(ESP.getMaxAllocHeap()));
+    }
 
     const char *best = nullptr;
     int bestRank = -1;
+    Log.println("NWS alerts: " + String(doc["features"].size()) + " active");
     for (JsonObject f : doc["features"].as<JsonArray>())
     {
         const char *ev = f["properties"]["event"];
@@ -288,83 +303,79 @@ static bool performFetch()
     // Memory allocation failed"). open-meteo serves this endpoint over http://
     // directly (no redirect to https), and it's public read-only data, so we
     // drop TLS entirely rather than fight the memory.
-    String url = "http://api.open-meteo.com/v1/forecast?latitude=" + lats +
-                 "&longitude=" + lons + "&current=temperature_2m,weather_code";
-    Log.println("Fetching weather: " + url);
-
-    WiFiClient client;
-    HTTPClient http;
-    http.setConnectTimeout(4000);
-    http.setTimeout(6000);
-    http.setReuse(false);
-    if (!http.begin(client, url)) return false;
-    // Force HTTP/1.0 so open-meteo returns a plain Connection: close body
-    // rather than a chunked one (the chunked reader can hand back an empty body
-    // that ArduinoJson rejects as EmptyInput).
-    http.useHTTP10(true);
-    int code = http.GET();
-    if (code != HTTP_CODE_OK)
-    {
-        Log.println("Weather fetch failed, HTTP " + String(code));
-        http.end();
-        return false;
-    }
-
-    // A JSON filter keeps only each location's current temperature + weather
-    // code, so the document stays ~1KB no matter how much boilerplate (units,
-    // timezone metadata, generation time) open-meteo wraps around it. This is
-    // what actually fixes the "NoMemory": we parse straight from the stream, so
-    // the document is allocated while the ~40KB WiFiClientSecure TLS context is
-    // still live - and a big contiguous pool (the old 16KB) can't be carved out
-    // mid-fetch even with ~80KB of total free heap, because that free space is
-    // fragmented. ArduinoJson reports the failed allocation as NoMemory. A
-    // multi-location reply is a JSON array, a single location a bare object -
-    // the filter has to match whichever shape we asked for.
-    StaticJsonDocument<256> filter;
-    if (n == 1)
-    {
-        filter["current"]["temperature_2m"] = true;
-        filter["current"]["weather_code"] = true;
-    }
-    else
-    {
-        filter[0]["current"]["temperature_2m"] = true;
-        filter[0]["current"]["weather_code"] = true;
-    }
-
-    DynamicJsonDocument doc(2048);
-    DeserializationError err =
-        deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-    http.end();
-    if (err)
-    {
-        Log.println(String("Weather JSON parse failed: ") + err.c_str());
-        return false;
-    }
-
     ZoneWeather fresh[4] = {};
-
-    // Multi-location responses are a JSON array; a single location comes back
-    // as a plain object.
-    if (doc.is<JsonArray>())
     {
-        JsonArray arr = doc.as<JsonArray>();
-        for (int k = 0; k < n && k < (int)arr.size(); k++)
+        String url = "http://api.open-meteo.com/v1/forecast?latitude=" + lats +
+                     "&longitude=" + lons + "&current=temperature_2m,weather_code";
+        Log.println("Fetching weather: " + url);
+
+        WiFiClient client;
+        HTTPClient http;
+        http.setConnectTimeout(4000);
+        http.setTimeout(6000);
+        http.setReuse(false);
+        if (!http.begin(client, url)) return false;
+        // Force HTTP/1.0 so open-meteo returns a plain Connection: close body
+        // rather than a chunked one (the chunked reader can hand back an empty body
+        // that ArduinoJson rejects as EmptyInput).
+        http.useHTTP10(true);
+        int code = http.GET();
+        if (code != HTTP_CODE_OK)
         {
-            JsonObject cur = arr[k]["current"];
-            int zi = zoneForSlot[k];
+            Log.println("Weather fetch failed, HTTP " + String(code));
+            http.end();
+            return false;
+        }
+
+        // A JSON filter keeps only each location's current temperature + weather
+        // code, so the document stays ~1KB no matter how much boilerplate (units,
+        // timezone metadata, generation time) open-meteo wraps around it. Keep the
+        // document scoped to this block so its heap is released before the later
+        // NWS HTTPS handshakes.
+        StaticJsonDocument<256> filter;
+        if (n == 1)
+        {
+            filter["current"]["temperature_2m"] = true;
+            filter["current"]["weather_code"] = true;
+        }
+        else
+        {
+            filter[0]["current"]["temperature_2m"] = true;
+            filter[0]["current"]["weather_code"] = true;
+        }
+
+        DynamicJsonDocument doc(2048);
+        DeserializationError err =
+            deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+        http.end();
+        if (err)
+        {
+            Log.println(String("Weather JSON parse failed: ") + err.c_str());
+            return false;
+        }
+
+        // Multi-location responses are a JSON array; a single location comes back
+        // as a plain object.
+        if (doc.is<JsonArray>())
+        {
+            JsonArray arr = doc.as<JsonArray>();
+            for (int k = 0; k < n && k < (int)arr.size(); k++)
+            {
+                JsonObject cur = arr[k]["current"];
+                int zi = zoneForSlot[k];
+                fresh[zi].tempC = cur["temperature_2m"].as<float>();
+                fresh[zi].weatherCode = cur["weather_code"].as<int>();
+                fresh[zi].valid = !cur.isNull();
+            }
+        }
+        else
+        {
+            JsonObject cur = doc["current"];
+            int zi = zoneForSlot[0];
             fresh[zi].tempC = cur["temperature_2m"].as<float>();
             fresh[zi].weatherCode = cur["weather_code"].as<int>();
             fresh[zi].valid = !cur.isNull();
         }
-    }
-    else
-    {
-        JsonObject cur = doc["current"];
-        int zi = zoneForSlot[0];
-        fresh[zi].tempC = cur["temperature_2m"].as<float>();
-        fresh[zi].weatherCode = cur["weather_code"].as<int>();
-        fresh[zi].valid = !cur.isNull();
     }
 
     // Weather alerts (when enabled): US cities pull the NWS active-alerts feed;

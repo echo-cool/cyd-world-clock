@@ -29,6 +29,7 @@ void logShipperPrintStatus(Print &out)
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
 
+#include "ClockLogic.h" // release 38KB quadrant sprite for optional HTTPS sink
 #include "genericBaseProject.h" // ntpSyncStatus
 #include "logBuffer.h"
 #include "otaUpdate.h"    // otaInProgress
@@ -85,6 +86,13 @@ static volatile bool taskStarted = false;
 
 static String deviceLabel; // hostname snapshot (label changes need a reboot anyway)
 static char bootId[9];
+
+struct RenderBufferReleaseGuard
+{
+    bool released;
+    RenderBufferReleaseGuard(bool active) : released(active ? clockReleaseRenderBufferForNetwork() : false) {}
+    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
+};
 
 // millis() wraps at ~49.7 days; extend to 64 bits. Call under shipMux only
 // (the wrap detection needs serialized callers).
@@ -238,6 +246,9 @@ static bool shipBatch()
     portEXIT_CRITICAL(&shipMux);
     if (lines == 0) return true;
 
+    bool https = strncmp(LOG_PUSH_URL, "https", 5) == 0;
+    RenderBufferReleaseGuard renderMemory(https);
+
     String json;
     json.reserve(copied + copied / 3 + 256);
     json += "{\"streams\":[{\"stream\":{\"job\":\"cyd-world-clock\",\"device\":\"";
@@ -263,7 +274,6 @@ static bool shipBatch()
     }
     json += "]}]}";
 
-    bool https = strncmp(LOG_PUSH_URL, "https", 5) == 0;
     WiFiClientSecure secureClient;
     WiFiClient plainClient;
     if (https) secureClient.setInsecure(); // self-hosted log sink - pinning not worth the upkeep

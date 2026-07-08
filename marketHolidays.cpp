@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 #include <ezTime.h>
 
+#include "ClockLogic.h" // release 38KB quadrant sprite around HTTPS handshakes
 #include "logBuffer.h" // Log
 #include "otaUpdate.h" // otaInProgress - don't fetch mid-update
 
@@ -222,6 +223,13 @@ static const unsigned long HOLIDAY_RETRY_MS = 6UL * 3600UL * 1000UL; // after a 
 static const int MAX_DYN_EXCHANGES = 8;
 static const int MAX_DYN_DATES = 88;
 static const int MAX_DYN_EARLY = 12;
+
+struct RenderBufferReleaseGuard
+{
+    bool released;
+    RenderBufferReleaseGuard() : released(clockReleaseRenderBufferForNetwork()) {}
+    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
+};
 
 struct DynHolidayTable
 {
@@ -508,6 +516,8 @@ void marketHolidaysService()
 // One HTTPS fetch attempt. Runs on the core-0 task.
 static bool fetchHolidayCalendars(time_t nowUtc)
 {
+    RenderBufferReleaseGuard renderMemory;
+
     WiFiClientSecure client;
     client.setInsecure(); // public holiday data - certificate pinning not worth the upkeep
     HTTPClient http;

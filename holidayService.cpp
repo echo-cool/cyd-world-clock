@@ -15,6 +15,13 @@ static const int MAX_PUBLIC_HOLIDAYS = 32;
 static const unsigned long HOLIDAYS_REFRESH_MS = 7UL * 24UL * 3600UL * 1000UL; // weekly
 static const unsigned long HOLIDAYS_FAIL_BACKOFF_MS = 10UL * 60UL * 1000UL;    // after a failure
 
+struct RenderBufferReleaseGuard
+{
+    bool released;
+    RenderBufferReleaseGuard() : released(clockReleaseRenderBufferForNetwork()) {}
+    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
+};
+
 // Per-zone state. "want" is what the zone currently needs (country from the
 // preset, year from the zone's local clock); "have" is what the last good
 // fetch stored. The core-0 tick works to make have match want. All access
@@ -171,6 +178,8 @@ int holidayZonesLoaded(int &eligible)
 // regional observances don't clutter the display.
 static int fetchCountryYear(const char *country, int year, PublicHoliday *out, int maxOut)
 {
+    RenderBufferReleaseGuard renderMemory;
+
     String url = "https://date.nager.at/api/v3/PublicHolidays/" +
                  String(year) + "/" + country;
     Log.println("Fetching public holidays: " + url);

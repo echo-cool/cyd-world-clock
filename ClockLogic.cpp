@@ -26,6 +26,13 @@
 // allocation ever fails the code falls back to drawing directly on the panel.
 static TFT_eSprite quadSprite = TFT_eSprite(&tft);
 static bool quadSpriteOk = false;
+static bool quadSpriteWanted = false;
+static SemaphoreHandle_t quadSpriteMutex = nullptr;
+
+static void ensureQuadSpriteMutex()
+{
+    if (!quadSpriteMutex) quadSpriteMutex = xSemaphoreCreateMutex();
+}
 
 // Touch screen pins (bit-banged SPI)
 #define MOSI_PIN 32
@@ -127,6 +134,13 @@ int screenWidth = 320;
 int screenHeight = 240;
 int quadrantWidth = 160;  // 320/2
 int quadrantHeight = 120; // 240/2
+
+static bool createQuadSpriteLocked()
+{
+    if (quadSpriteOk) return true;
+    quadSpriteOk = (quadSprite.createSprite(quadrantWidth, quadrantHeight) != nullptr);
+    return quadSpriteOk;
+}
 
 // Quadrant positions for 4 timezones
 struct QuadrantPos {
@@ -841,6 +855,8 @@ void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
 
+    bool usedSprite = false;
+    if (quadSpriteMutex) xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
     if (quadSpriteOk) {
         // Re-render the quadrant off-screen and push only the bottom band
         // holding the status line and the progress bar. Pixel-identical to a
@@ -850,8 +866,10 @@ void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex)
         renderQuadrantContent(quadSprite, 0, 0, zone, quadrantIndex);
         int bandY = quadrantHeight - 12;
         quadSprite.pushSprite(quad.x, quad.y + bandY, 0, bandY, quadrantWidth, 12);
-        return;
+        usedSprite = true;
     }
+    if (quadSpriteMutex) xSemaphoreGive(quadSpriteMutex);
+    if (usedSprite) return;
 
     // Degraded direct-to-panel path (sprite allocation failed). Clip to the
     // quadrant so a wide alert cannot spill over the neighbouring quadrant
@@ -1131,13 +1149,45 @@ void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex)
     CLOCK_DEBUG_PRINTLN("Drawing " + zone.name + " (quadrant " + String(quadrantIndex) + ")");
 
     QuadrantPos quad = quadrants[quadrantIndex];
+    bool usedSprite = false;
+    if (quadSpriteMutex) xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
     if (quadSpriteOk) {
         // Compose off-screen, then update the panel in a single blit - the
         // quadrant never shows an intermediate (cleared / half-drawn) state.
         renderQuadrantContent(quadSprite, 0, 0, zone, quadrantIndex);
         quadSprite.pushSprite(quad.x, quad.y);
-    } else {
-        renderQuadrantContent(tft, quad.x, quad.y, zone, quadrantIndex);
+        usedSprite = true;
+    }
+    if (quadSpriteMutex) xSemaphoreGive(quadSpriteMutex);
+    if (!usedSprite) renderQuadrantContent(tft, quad.x, quad.y, zone, quadrantIndex);
+}
+
+bool clockReleaseRenderBufferForNetwork()
+{
+    ensureQuadSpriteMutex();
+    if (!quadSpriteMutex) return false;
+
+    xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
+    bool released = quadSpriteOk;
+    if (released) {
+        quadSprite.deleteSprite();
+        quadSpriteOk = false;
+    }
+    xSemaphoreGive(quadSpriteMutex);
+    return released;
+}
+
+void clockRestoreRenderBufferForNetwork(bool released)
+{
+    if (!released || !quadSpriteWanted) return;
+    ensureQuadSpriteMutex();
+    if (!quadSpriteMutex) return;
+
+    xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
+    bool ok = createQuadSpriteLocked();
+    xSemaphoreGive(quadSpriteMutex);
+    if (!ok) {
+        Log.println("WARNING: quadrant sprite restore failed after network fetch");
     }
 }
 
@@ -1200,8 +1250,12 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     bootUiRefresh();
 
     // Off-screen quadrant buffer for flicker-free updates (see quadSprite)
-    quadSpriteOk = (quadSprite.createSprite(quadrantWidth, quadrantHeight) != nullptr);
-    if (!quadSpriteOk) {
+    ensureQuadSpriteMutex();
+    if (quadSpriteMutex) xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
+    quadSpriteWanted = true;
+    bool spriteReady = createQuadSpriteLocked();
+    if (quadSpriteMutex) xSemaphoreGive(quadSpriteMutex);
+    if (!spriteReady) {
         Log.println("WARNING: quadrant sprite allocation failed - drawing direct to panel");
     }
 
