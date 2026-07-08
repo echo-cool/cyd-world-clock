@@ -13,11 +13,6 @@ public:
   {
     Log.println("Serial Display Setup");
   }
-
-  void drawWifiManagerMessage(WiFiManager *myWiFiManager)
-  {
-    Log.println("Entered Conf Mode");
-  }
 };
 
 #endif // SERIAL_DISPLAY_H

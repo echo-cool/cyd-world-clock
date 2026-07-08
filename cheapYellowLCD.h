@@ -16,8 +16,6 @@ class CheapYellowDisplay : public ProjectDisplay
 {
 public:
   void displaySetup();
-
-  void drawWifiManagerMessage(WiFiManager *myWiFiManager);
 };
 
 #endif // CHEAP_YELLOW_LCD_H

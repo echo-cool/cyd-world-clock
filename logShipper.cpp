@@ -268,9 +268,13 @@ static bool shipBatch()
     WiFiClient plainClient;
     if (https) secureClient.setInsecure(); // self-hosted log sink - pinning not worth the upkeep
     HTTPClient http;
-    http.setConnectTimeout(4000);
-    http.setTimeout(8000);
-    http.setReuse(false); // don't park a TLS context between 30s-apart pushes
+    // Fail fast: a down or unreachable collector must never tie this ship task
+    // up. Short timeouts cap a dead-server attempt at ~2-3s (the exponential
+    // backoff above then spaces retries out), instead of parking the task for
+    // 12s on every push while the server is down.
+    http.setConnectTimeout(2000);
+    http.setTimeout(3000);
+    http.setReuse(false); // don't park a connection between 30s-apart pushes
     if (!http.begin(https ? secureClient : plainClient, LOG_PUSH_URL))
     {
         lastPushCode = -1;

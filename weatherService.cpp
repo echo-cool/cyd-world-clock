@@ -286,6 +286,13 @@ static bool performFetch()
     // TLS handshake then starves of heap and fails (-1) every single time.
     http.setReuse(false);
     if (!http.begin(client, url)) return false;
+    // open-meteo answers HTTP/1.1 with Transfer-Encoding: chunked and no
+    // Content-Length. The ESP32 HTTPClient's chunked reader intermittently
+    // hands back an empty body over the HTTPS stream (getString() -> "", which
+    // ArduinoJson reports as "EmptyInput"). Forcing HTTP/1.0 makes the server
+    // send a plain, Connection: close body that parses reliably straight from
+    // the stream.
+    http.useHTTP10(true);
     int code = http.GET();
     if (code != HTTP_CODE_OK)
     {
@@ -293,11 +300,33 @@ static bool performFetch()
         http.end();
         return false;
     }
-    String payload = http.getString();
-    http.end();
 
-    DynamicJsonDocument doc(8192);
-    DeserializationError err = deserializeJson(doc, payload);
+    // A JSON filter keeps only each location's current temperature + weather
+    // code, so the document stays ~1KB no matter how much boilerplate (units,
+    // timezone metadata, generation time) open-meteo wraps around it. This is
+    // what actually fixes the "NoMemory": we parse straight from the stream, so
+    // the document is allocated while the ~40KB WiFiClientSecure TLS context is
+    // still live - and a big contiguous pool (the old 16KB) can't be carved out
+    // mid-fetch even with ~80KB of total free heap, because that free space is
+    // fragmented. ArduinoJson reports the failed allocation as NoMemory. A
+    // multi-location reply is a JSON array, a single location a bare object -
+    // the filter has to match whichever shape we asked for.
+    StaticJsonDocument<256> filter;
+    if (n == 1)
+    {
+        filter["current"]["temperature_2m"] = true;
+        filter["current"]["weather_code"] = true;
+    }
+    else
+    {
+        filter[0]["current"]["temperature_2m"] = true;
+        filter[0]["current"]["weather_code"] = true;
+    }
+
+    DynamicJsonDocument doc(2048);
+    DeserializationError err =
+        deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+    http.end();
     if (err)
     {
         Log.println(String("Weather JSON parse failed: ") + err.c_str());

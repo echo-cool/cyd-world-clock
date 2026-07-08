@@ -178,11 +178,23 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     WiFiClientSecure client;
     client.setInsecure(); // public calendar data - certificate pinning not worth the upkeep
     HTTPClient http;
-    http.setConnectTimeout(4000);
+    // date.nager.at is Azure-hosted and presents a long RSA certificate chain -
+    // the same slow-handshake profile that makes api.weather.gov abort inside a
+    // 4s connect window (-1) whenever the CPU is busy (see fetchUsAlert). Give
+    // the handshake room, and retry once on a connection-layer failure.
+    http.setConnectTimeout(12000);
     http.setTimeout(8000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     if (!http.begin(client, url)) return -1;
     int code = http.GET();
+    if (code < 0)
+    {
+        Log.println("Holiday fetch failed (" + String(code) + ") - retrying once");
+        http.end();
+        delay(1500);
+        if (!http.begin(client, url)) return -1;
+        code = http.GET();
+    }
     if (code != HTTP_CODE_OK)
     {
         Log.println("Holiday fetch failed, HTTP " + String(code));

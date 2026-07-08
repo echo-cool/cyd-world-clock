@@ -106,8 +106,8 @@ void bootUiEnd();
 bool bootUiPoll();
 bool bootUiSettingsRequested();
 
-// Called from setupWiFiManager when WiFi credentials the user just entered in
-// the config portal fail to join: records the network name and wl_status so
+// Renders the WiFi-join-failure page (SCREEN_WIFI_FAIL), also reachable via
+// /api/screen "wififail": records the network name and wl_status so
 // the rest of boot skips its network waits (like a boot Settings tap) and the
 // main loop opens SCREEN_WIFI_FAIL - a page explaining why the join failed,
 // with a Reboot button and a Settings button (status / logs). The page

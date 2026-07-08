@@ -24,6 +24,13 @@ extern ProjectDisplay *projectDisplay;
 
 extern Timezone myTZ;
 
+// Double-reset detector: created in baseProjectSetup(), polled by
+// baseProjectLoop(), and stopped before any reboot so the restart isn't read as
+// a double reset. Two resets within DRD_TIMEOUT force the setup portal open.
+// (Defined in genericBaseProject.cpp; used by setupPortal.cpp too.)
+class DoubleResetDetector;
+extern DoubleResetDetector *drd;
+
 void baseProjectSetup();
 void baseProjectLoop();
 

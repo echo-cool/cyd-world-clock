@@ -1,8 +1,7 @@
-// WiFiManager (via WebServer.h) needs the global FS/File aliases from FS.h,
-// but TFT_eSPI includes FS.h with FS_NO_GLOBALS when SMOOTH_FONT is enabled.
-// WiFiManager must therefore be included before cheapYellowLCD.h (TFT_eSPI).
-#include <WiFi.h>
-#include <WiFiManager.h>
+// TFT_eSPI includes FS.h with FS_NO_GLOBALS when SMOOTH_FONT is enabled, which
+// hides the global FS/File aliases some code expects. Include FS.h first (before
+// cheapYellowLCD.h pulls in TFT_eSPI) so those globals stay available.
+#include <FS.h>
 
 #include "cheapYellowLCD.h"
 #include "logBuffer.h"
@@ -31,28 +30,4 @@ void CheapYellowDisplay::displaySetup()
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawString("System initializing...", 160, 2);
   tft.drawFastHLine(0, 20, 320, TFT_DARKGREY);
-}
-
-void CheapYellowDisplay::drawWifiManagerMessage(WiFiManager *myWiFiManager)
-{
-  tft.setTextFont(1);
-  tft.setTextSize(1);
-  tft.setTextDatum(TL_DATUM);
-  Log.println("Entered Conf Mode");
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawCentreString("Entered Conf Mode:", screenCenterX, 5, 2);
-  tft.drawString("Connect to the following WIFI AP:", 5, 28, 2);
-  tft.setTextColor(TFT_BLUE, TFT_BLACK);
-  tft.drawString(myWiFiManager->getConfigPortalSSID(), 20, 48, 2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Password:", 5, 64, 2);
-  tft.setTextColor(TFT_BLUE, TFT_BLACK);
-  tft.drawString("12345678", 20, 82, 2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
-  tft.drawString("If it doesn't AutoConnect, use this IP:", 5, 110, 2);
-  tft.setTextColor(TFT_BLUE, TFT_BLACK);
-  tft.drawString(WiFi.softAPIP().toString(), 20, 128, 2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
 }

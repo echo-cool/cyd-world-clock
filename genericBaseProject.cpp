@@ -11,8 +11,8 @@
 // Preconfigured WiFi credentials live in an untracked "secrets.h" so they are
 // never committed to the repository. Copy secrets.h.example to secrets.h and
 // fill in your own values. On boot they are tried alongside the credentials
-// saved through the config portal (portal-saved first), with a fallback to
-// the WiFiManager captive portal if nothing connects.
+// saved through the setup portal (portal-saved first), with a fallback to the
+// unified AP+STA setup portal (setupPortal.cpp) if nothing connects.
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -20,7 +20,7 @@
 #endif
 
 #define WIFI_CONNECT_TIMEOUT 5000  // per-attempt timeout for the preconfigured WiFi connection
-#define WIFI_CONNECT_ATTEMPTS 10   // attempts before falling back to the WiFiManager portal
+#define WIFI_CONNECT_ATTEMPTS 10   // attempts before falling back to the setup portal
 
 // Cap on the initial blocking NTP sync at boot. Without a cap the device hangs
 // forever here on a network with no usable internet (e.g. an un-logged-in
@@ -61,7 +61,7 @@
 
 #include "otaUpdate.h"
 
-#include "wifiManagerHandler.h"
+#include "setupPortal.h" // unified AP+STA captive-login setup portal (replaces the WiFiManager portal)
 
 #include "cheapYellowLCD.h"
 
@@ -85,6 +85,10 @@
 
 // RTC Memory Address for the DoubleResetDetector to use
 #define DRD_ADDRESS 0
+
+// The double-reset detector instance (declared extern in genericBaseProject.h).
+// Created in baseProjectSetup(); the setup portal stops it before rebooting.
+DoubleResetDetector *drd = nullptr;
 
 // NTP sync monitoring variables
 unsigned long lastSyncTime = 0;
@@ -213,7 +217,7 @@ void baseProjectSetup()
     // Try to load existing config first
     if (!projectConfig.fetchConfigFile())
     {
-        Log.println("No saved config found, will use defaults or WiFiManager");
+        Log.println("No saved config found, will use defaults or the setup portal");
     }
 
     // Load the cached market holiday calendars (SPIFFS is up); the weekly
@@ -371,12 +375,14 @@ void baseProjectSetup()
         }
     }
 
-    // Step 2: If preconfigured WiFi failed or forced config, use WiFiManager
-    // (skipped when the user asked for the settings page - the config portal
-    // blocks for minutes and has its own reboot-to-retry recovery).
+    // Step 2: preconfigured WiFi failed (or a double-reset forced setup) - open
+    // the unified AP+STA setup portal. It keeps one hotspot up through the whole
+    // flow (pick network -> connect -> relay any captive login on the same
+    // hotspot -> online) and reboots when done. Skipped when the user asked for
+    // the settings page.
     if (!wifiConnected && !bootUiSettingsRequested())
     {
-        setupWiFiManager(forceConfig, projectConfig, projectDisplay);
+        runSetupPortal(forceConfig, projectConfig);
     }
 
     // Final check to ensure WiFi is connected. Bounded: both paths above are

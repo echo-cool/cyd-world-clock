@@ -180,12 +180,16 @@ There are two ways to get the clock online:
    saved through the config portal first, then the optional
    `PRECONFIGURED_SSID` / `PRECONFIGURED_PASSWORD` pair from your local
    `secrets.h` (leave the placeholders unchanged to skip the latter).
-2. **WiFiManager captive portal (fallback):** If none of those connect — or
-   you double-press reset to force config mode — the device starts a
-   captive portal. Connect to SSID `esp32Project` (password `12345678`) and use
-   the portal to enter your WiFi, time zone, 24-hour clock and US date format
-   preferences. These are saved to flash and become the first-tried network on
-   every later boot.
+2. **Setup portal (fallback):** If none of those connect — or you double-press
+   reset to force setup mode — the device starts a captive setup portal.
+   Connect to SSID `esp32Project` (password `12345678`) on a phone and a setup
+   page opens automatically; pick your network and enter its password. The clock
+   connects while keeping the hotspot up, so if the network needs a captive-portal
+   login you complete it on your phone through that same hotspot (see
+   [Login-required networks](#login-required-networks-captive-portals) below).
+   The credentials are saved to flash and become the first-tried network on every
+   later boot. (Time zone and display options are set afterwards on the web
+   settings page.)
 
 The whole sequence plays out live on the boot screen: it mirrors the log as a
 console (which network is being tried, each attempt's count and failure
@@ -229,8 +233,8 @@ of the home screen (the System status page and `/api/status` also report
   add the clock's MAC (shown on `/wifi-login`, the Network status page, and
   `/api/status`).
 - **Clone an authorized device's MAC.** Enter a MAC the network has already
-  authorized (e.g. your phone's) in **Custom MAC** on the web settings page or
-  the WiFiManager portal; the clock then presents that address. Disable your
+  authorized (e.g. your phone's) in **Custom MAC** on the web settings page;
+  the clock then presents that address. Disable your
   phone's "private/random MAC" for the network first, and don't keep both on the
   network at once with the same MAC. A cloned MAC is marked with `*` on the
   Network status page and applies after a reboot.
