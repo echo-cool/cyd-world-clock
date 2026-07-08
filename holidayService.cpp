@@ -189,7 +189,11 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     int code = http.GET();
     if (code < 0)
     {
-        Log.println("Holiday fetch failed (" + String(code) + ") - retrying once");
+        char sslbuf[96] = {0};
+        int sslErr = client.lastError(sslbuf, sizeof(sslbuf));
+        Log.println("Holiday fetch failed (" + String(code) + ") sslErr=" + String(sslErr) +
+                    " " + sslbuf + " | heap free=" + String(ESP.getFreeHeap()) +
+                    " maxAlloc=" + String(ESP.getMaxAllocHeap()) + " - retrying once");
         http.end();
         delay(1500);
         if (!http.begin(client, url)) return -1;
@@ -197,7 +201,11 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     }
     if (code != HTTP_CODE_OK)
     {
-        Log.println("Holiday fetch failed, HTTP " + String(code));
+        char sslbuf[96] = {0};
+        int sslErr = client.lastError(sslbuf, sizeof(sslbuf));
+        Log.println("Holiday fetch failed, HTTP " + String(code) + " sslErr=" + String(sslErr) +
+                    " " + sslbuf + " | heap free=" + String(ESP.getFreeHeap()) +
+                    " maxAlloc=" + String(ESP.getMaxAllocHeap()));
         http.end();
         return -1;
     }

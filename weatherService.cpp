@@ -194,7 +194,11 @@ static String fetchUsAlert(float lat, float lon)
         // boot is the usual culprit). One short-delay retry usually succeeds,
         // and beats sitting on a stale/absent storm alert until the next
         // weather cycle comes around.
-        Log.println("NWS alerts fetch failed (" + String(code) + ") - retrying once");
+        char sslbuf[96] = {0};
+        int sslErr = client.lastError(sslbuf, sizeof(sslbuf));
+        Log.println("NWS alerts fetch failed (" + String(code) + ") sslErr=" + String(sslErr) +
+                    " " + sslbuf + " | heap free=" + String(ESP.getFreeHeap()) +
+                    " maxAlloc=" + String(ESP.getMaxAllocHeap()) + " - retrying once");
         http.end();
         delay(1500);
         if (!http.begin(client, url)) return "";
@@ -206,7 +210,13 @@ static String fetchUsAlert(float lat, float lon)
     if (code != HTTP_CODE_OK)
     {
         if (code != HTTP_CODE_NOT_FOUND) // 404 = point outside NWS coverage; quiet
-            Log.println("NWS alerts fetch failed, HTTP " + String(code));
+        {
+            char sslbuf[96] = {0};
+            int sslErr = client.lastError(sslbuf, sizeof(sslbuf));
+            Log.println("NWS alerts fetch failed, HTTP " + String(code) + " sslErr=" +
+                        String(sslErr) + " " + sslbuf + " | heap free=" +
+                        String(ESP.getFreeHeap()) + " maxAlloc=" + String(ESP.getMaxAllocHeap()));
+        }
         http.end();
         return "";
     }
@@ -271,27 +281,26 @@ static bool performFetch()
     }
     if (n == 0) return false;
 
-    String url = "https://api.open-meteo.com/v1/forecast?latitude=" + lats +
+    // Plain HTTP, not HTTPS. This device can't reliably complete a TLS
+    // handshake mid-run: mbedTLS's ~45KB context (two 16KB record buffers plus
+    // the RSA/BIGNUM temporaries) can't be carved from the fragmented heap, so
+    // the handshake dies with -1 ("RSA - public key operation failed : BIGNUM -
+    // Memory allocation failed"). open-meteo serves this endpoint over http://
+    // directly (no redirect to https), and it's public read-only data, so we
+    // drop TLS entirely rather than fight the memory.
+    String url = "http://api.open-meteo.com/v1/forecast?latitude=" + lats +
                  "&longitude=" + lons + "&current=temperature_2m,weather_code";
     Log.println("Fetching weather: " + url);
 
-    WiFiClientSecure client;
-    client.setInsecure(); // public weather data - certificate pinning not worth the upkeep
+    WiFiClient client;
     HTTPClient http;
     http.setConnectTimeout(4000);
     http.setTimeout(6000);
-    // No keep-alive: with the default reuse, end() below parks the connection
-    // instead of closing it, so this client's ~45KB TLS context stays
-    // allocated for the rest of performFetch - and fetchUsAlert()'s second
-    // TLS handshake then starves of heap and fails (-1) every single time.
     http.setReuse(false);
     if (!http.begin(client, url)) return false;
-    // open-meteo answers HTTP/1.1 with Transfer-Encoding: chunked and no
-    // Content-Length. The ESP32 HTTPClient's chunked reader intermittently
-    // hands back an empty body over the HTTPS stream (getString() -> "", which
-    // ArduinoJson reports as "EmptyInput"). Forcing HTTP/1.0 makes the server
-    // send a plain, Connection: close body that parses reliably straight from
-    // the stream.
+    // Force HTTP/1.0 so open-meteo returns a plain Connection: close body
+    // rather than a chunked one (the chunked reader can hand back an empty body
+    // that ArduinoJson rejects as EmptyInput).
     http.useHTTP10(true);
     int code = http.GET();
     if (code != HTTP_CODE_OK)
