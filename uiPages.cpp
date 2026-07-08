@@ -298,11 +298,12 @@ const UIButton BTN_BOOT_SETTINGS = {90, 192, 140, 32};
 static bool bootUiActive = false;       // button drawn, polling enabled
 static bool bootSettingsWanted = false; // sticky once the button is tapped
 
-// Console geometry: font 1 (6x8 px) rows between the title rule (y=20, drawn
-// in displaySetup) and the Settings button (y=192).
-static const int BOOT_CON_TOP = 24;
+// Console geometry: font 1 (6x8 px) rows between the title rule (y=32, drawn
+// in displaySetup below the title + version line) and the Settings button
+// (y=192).
+static const int BOOT_CON_TOP = 34;
 static const int BOOT_CON_LINE_H = 8;
-static const int BOOT_CON_ROWS = 20;
+static const int BOOT_CON_ROWS = 19;
 static const int BOOT_CON_COLS = 52; // 6 px glyphs, 2 px left margin
 
 static String bootConShown[BOOT_CON_ROWS]; // what each row currently displays
@@ -410,7 +411,11 @@ void bootUiRefresh()
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
     tft.drawString("System initializing...", 160, 2);
-    tft.drawFastHLine(0, 20, 320, TFT_DARKGREY);
+    // Firmware version (compile timestamp) under the title - see displaySetup.
+    tft.setTextFont(1);
+    tft.setTextColor(TFT_CYAN, clockBackgroundColor);
+    tft.drawString(String(__DATE__) + " " + __TIME__, 160, 22);
+    tft.drawFastHLine(0, 32, 320, TFT_DARKGREY);
     bootUiDrawChrome();
     bootConsoleRender(true);
 }
@@ -648,9 +653,18 @@ void renderSettingsPage()
 
     tft.setTextFont(4);
     tft.setTextSize(1);
-    tft.setTextDatum(TC_DATUM);
+    tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SETTINGS", 160, 2);
+    tft.drawString("SETTINGS", 8, 2);
+
+    // Firmware identity in the header's right gutter: the compile timestamp
+    // (the "version") over the short git hash, both small so they stay clear
+    // of the title and buttons.
+    tft.setTextFont(1);
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString(String(__DATE__) + " " + __TIME__, 316, 4);
+    tft.drawString("git " + String(firmwareGitHash()), 316, 15);
 
     drawButton(BTN_SET_TZ, "Change timezones  >", TFT_CYAN, TFT_WHITE);
     drawButton(BTN_SET_FACE,
@@ -842,14 +856,14 @@ static const char *STATUS_LABELS_SYSTEM[] = {
     "Build", "Heap", "Uptime", "NTP sync", "UTC time"};
 static const char *STATUS_LABELS_NETWORK[] = {
     "Hostname", "MAC", "Gateway", "DNS", "Channel", "Drops",
-    "Reset", "SPIFFS", "Max alloc", "SDK", "Git"};
+    "Reset", "SPIFFS", "Max alloc", "SDK"};
 static const char *STATUS_LABELS_DATA[] = {
     "Home zone", "Face", "Format", "Weather", "Mkt hols", "Pub hols",
     "Backlight", "Auto-dim", "Hold", "Night"};
 
 static int statusRowCount(int page)
 {
-    return page == 2 ? 10 : 11;
+    return page == 0 ? 11 : 10;
 }
 
 static const char *const *statusLabels(int page)
@@ -987,7 +1001,6 @@ static void fillNetworkValues(String *values, uint16_t *colors)
                 String(SPIFFS.totalBytes() / 1024) + " KB";
     values[8] = String(ESP.getMaxAllocHeap() / 1024) + " KB block";
     values[9] = ESP.getSdkVersion();
-    values[10] = firmwareGitHash();
 }
 
 // Page 3: what the clock is showing and how fresh its background data is.

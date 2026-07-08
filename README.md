@@ -195,7 +195,8 @@ There are two ways to get the clock online:
 The whole sequence plays out live on the boot screen: it mirrors the log as a
 console (which network is being tried, each attempt's count and failure
 reason, portal / NTP / timezone progress), so the boot never sits on a silent
-"System initializing..." message.
+"System initializing..." message. The firmware version (compile timestamp) is
+printed just under that title so you can see which build is starting up.
 
 If nobody uses the portal within 5 minutes, the device reboots and retries the
 whole sequence (saved + preconfigured credentials first). So after a power cut
@@ -366,6 +367,10 @@ settings page (the choice is saved to flash):
   <img src="img/timezone2.jpg" alt="Timezone city list" width="32%"/>
 </p>
 
+The header shows the running firmware's compile timestamp (its "version") over
+the short git hash in the top-right corner, so you can confirm which build is
+installed without opening the status pages.
+
 - **Change timezones** — tap any of the four clock slots, then pick a city from
   the paged timezone list. Cities with a stock exchange (New York, London,
   Beijing, Tokyo, Hong Kong) automatically show that market's trading status,
@@ -509,8 +514,7 @@ to the next page, and the last tap returns to settings:
   WiFi channel; WiFi dropouts since boot (with the last outage's length and
   how long ago it ended); the reason for the last reset (power-on, software
   reset, crash, brownout... — shown in red after an abnormal one); SPIFFS
-  usage, largest allocatable heap block (fragmentation), SDK version and
-  the short git hash of the installed firmware.
+  usage, largest allocatable heap block (fragmentation) and SDK version.
 - **Clock data (3/3)** — home timezone, active face and formats; weather
   data age; market-holiday calendar source (weekly-fetched vs. compiled-in)
   and age; public-holiday tables loaded per eligible zone; current backlight

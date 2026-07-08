@@ -29,5 +29,13 @@ void CheapYellowDisplay::displaySetup()
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawString("System initializing...", 160, 2);
-  tft.drawFastHLine(0, 20, 320, TFT_DARKGREY);
+
+  // Firmware version (compile timestamp) right under the title, so the running
+  // build is clearly readable the moment the screen comes up. Kept in sync with
+  // bootUiRefresh in uiPages.cpp, which repaints this same header.
+  tft.setTextFont(1);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.drawString(String(__DATE__) + " " + __TIME__, 160, 22);
+
+  tft.drawFastHLine(0, 32, 320, TFT_DARKGREY);
 }
