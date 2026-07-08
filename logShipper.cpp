@@ -33,7 +33,7 @@ void logShipperPrintStatus(Print &out)
 #include "genericBaseProject.h" // ntpSyncStatus
 #include "logBuffer.h"
 #include "otaUpdate.h"    // otaInProgress
-#include "projectConfig.h" // hostname -> the "device" label
+#include "projectConfig.h" // hostname -> prefix for the "device" label
 
 // Default push token for the fleet server (its AUTH_TOKEN). It authorizes
 // pushing only - reading logs requires the server's separate WEB_PASSWORD -
@@ -84,7 +84,7 @@ static volatile int lastPushCode = 0;      // last HTTP result (0 = none yet)
 static volatile uint32_t consecutiveFailures = 0;
 static volatile bool taskStarted = false;
 
-static String deviceLabel; // hostname snapshot (label changes need a reboot anyway)
+static String deviceLabel; // hostname + MAC suffix snapshot (changes need a reboot)
 static char bootId[9];
 
 struct RenderBufferReleaseGuard
@@ -93,6 +93,28 @@ struct RenderBufferReleaseGuard
     RenderBufferReleaseGuard(bool active) : released(active ? clockReleaseRenderBufferForNetwork() : false) {}
     ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
 };
+
+static String compactStaMacSuffix()
+{
+    String mac = WiFi.macAddress();
+    mac.replace(":", "");
+    mac.toLowerCase();
+    if (mac.length() >= 6)
+    {
+        return mac.substring(mac.length() - 6);
+    }
+    return "nomac";
+}
+
+static String makeDeviceLabel()
+{
+    String label = projectConfig.hostname;
+    if (label.length() == 0)
+    {
+        label = "esp32worldclock";
+    }
+    return label + "-" + compactStaMacSuffix();
+}
 
 // millis() wraps at ~49.7 days; extend to 64 bits. Call under shipMux only
 // (the wrap detection needs serialized callers).
@@ -366,7 +388,7 @@ void logShipperBegin()
 {
     if (taskStarted) return;
     taskStarted = true;
-    deviceLabel = projectConfig.hostname; // already sanitized to [a-z0-9-]
+    deviceLabel = makeDeviceLabel();
     snprintf(bootId, sizeof(bootId), "%08x", (unsigned)esp_random());
     Log.println("Log shipper: enabled, device \"" + deviceLabel + "\" boot " +
                 bootId + " -> " LOG_PUSH_URL);

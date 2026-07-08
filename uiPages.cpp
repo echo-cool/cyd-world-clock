@@ -5,7 +5,9 @@
 #include <esp_system.h>   // esp_reset_reason - reset reason row
 #include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED - CPU temp row
 
+#include "brightness.h"
 #include "clockFaces.h"         // ClockFace enum, clockFaceName
+#include "firmwareInfo.h"       // firmwareGitHash
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
 #include "holidayService.h"     // holidaysInvalidate, holidayZonesLoaded
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - status page
@@ -574,15 +576,13 @@ void drawSettingsBrightnessLabel()
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    int pct = map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100);
+    int pct = brightnessPercent(backlightLevel);
     tft.drawString("Brightness " + String(pct) + "%", 160, 191);
 }
 
 void adjustBacklightFromUi(int delta)
 {
-    backlightLevel += delta;
-    if (backlightLevel < 1) backlightLevel = 1;
-    if (backlightLevel > 255) backlightLevel = 255;
+    backlightLevel = clampBrightness(backlightLevel + delta);
     analogWrite(BACKLIGHT_PIN, backlightLevel);
     // Hold this manual setting before auto-brightness resumes
     manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
@@ -842,14 +842,14 @@ static const char *STATUS_LABELS_SYSTEM[] = {
     "Build", "Heap", "Uptime", "NTP sync", "UTC time"};
 static const char *STATUS_LABELS_NETWORK[] = {
     "Hostname", "MAC", "Gateway", "DNS", "Channel", "Drops",
-    "Reset", "SPIFFS", "Max alloc", "SDK"};
+    "Reset", "SPIFFS", "Max alloc", "SDK", "Git"};
 static const char *STATUS_LABELS_DATA[] = {
     "Home zone", "Face", "Format", "Weather", "Mkt hols", "Pub hols",
     "Backlight", "Auto-dim", "Hold", "Night"};
 
 static int statusRowCount(int page)
 {
-    return page == 0 ? 11 : 10;
+    return page == 2 ? 10 : 11;
 }
 
 static const char *const *statusLabels(int page)
@@ -987,6 +987,7 @@ static void fillNetworkValues(String *values, uint16_t *colors)
                 String(SPIFFS.totalBytes() / 1024) + " KB";
     values[8] = String(ESP.getMaxAllocHeap() / 1024) + " KB block";
     values[9] = ESP.getSdkVersion();
+    values[10] = firmwareGitHash();
 }
 
 // Page 3: what the clock is showing and how fresh its background data is.
@@ -1036,8 +1037,7 @@ static void fillDataValues(String *values, uint16_t *colors)
         colors[5] = (loaded == eligible) ? TFT_GREEN : TFT_YELLOW;
     }
 
-    values[6] = String(backlightLevel) + " (" +
-                String(map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100)) + "%)";
+    values[6] = String(backlightLevel) + " (" + String(brightnessPercent(backlightLevel)) + "%)";
 
     bool ldrTrusted, ldrDark;
     int ldrSmoothed;
@@ -1068,7 +1068,7 @@ static void fillDataValues(String *values, uint16_t *colors)
 
     int ns = projectConfig.nightStartHour;
     int ne = projectConfig.nightEndHour;
-    int npct = map(constrain(projectConfig.nightBrightness, 1, 255), 1, 255, 0, 100);
+    int npct = brightnessPercent(projectConfig.nightBrightness);
     values[9] = (ns == ne)
                     ? "window off (" + String(npct) + "% dark)"
                     : String(ns) + ":00-" + String(ne) + ":00 -> " + String(npct) + "%";

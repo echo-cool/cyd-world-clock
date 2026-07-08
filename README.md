@@ -139,7 +139,8 @@ new firmware. There are two ways in:
   `.pio/build/cyd/firmware.bin` for PlatformIO, the exported binary from
   Arduino IDE → Sketch → Export Compiled Binary, or add
   `--output-dir build` to the `arduino-cli compile` command. The page shows
-  upload progress and the running build's compile timestamp.
+  upload progress, the running build's compile timestamp and a short git hash
+  (`-dirty` when built from uncommitted changes).
 - **PlatformIO / espota**: uncomment the `espota` lines in `platformio.ini`
   and `pio run -t upload` as usual. In the Arduino IDE, pick the network
   port named `esp32worldclock` under Tools → Port.
@@ -508,7 +509,8 @@ to the next page, and the last tap returns to settings:
   WiFi channel; WiFi dropouts since boot (with the last outage's length and
   how long ago it ended); the reason for the last reset (power-on, software
   reset, crash, brownout... — shown in red after an abnormal one); SPIFFS
-  usage, largest allocatable heap block (fragmentation), SDK version.
+  usage, largest allocatable heap block (fragmentation), SDK version and
+  the short git hash of the installed firmware.
 - **Clock data (3/3)** — home timezone, active face and formats; weather
   data age; market-holiday calendar source (weekly-fetched vs. compiled-in)
   and age; public-holiday tables loaded per eligible zone; current backlight
@@ -551,8 +553,11 @@ in `secrets.h`:
 
 The device batches log lines every ~30 seconds and POSTs them in the
 **Grafana Loki JSON push format**, labeled
-`{job="cyd-world-clock", device="<hostname>", boot_id="<random per boot>"}` —
-so the target can be the companion
+`{job="cyd-world-clock", device="<hostname>-<macSuffix>", boot_id="<random per boot>"}` —
+for example `esp32worldclock-a1b2c3`, so default-named devices are still
+distinguishable in the log viewer. The MAC suffix comes from the STA MAC the
+device is using on Wi-Fi, including any configured custom/cloned MAC.
+The target can be the companion
 [cyd-world-clock-logs](https://github.com/echo-cool/cyd-world-clock-logs)
 server (a one-container FastAPI + SQLite sink with a web viewer, sized for a
 tiny VM) or any real Loki instance, interchangeably. Shipping starts after

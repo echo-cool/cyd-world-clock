@@ -4,6 +4,7 @@
 
 #include <WiFi.h> // link status for the zone-setup boot log
 
+#include "brightness.h"
 #include "clockFaces.h"
 #include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // holidaysBegin, getHolidayName
@@ -1092,8 +1093,8 @@ void adjustBrightnessAuto()
     lastUpdate = currentTime;
 
     int target = -1;
-    int nightTarget = constrain(projectConfig.nightBrightness, 1, 255);
-    int dayTarget = constrain(projectConfig.brightness, 1, 255);
+    int nightTarget = clampBrightness(projectConfig.nightBrightness);
+    int dayTarget = clampBrightness(projectConfig.brightness);
 
 #if USE_LDR_AUTOBRIGHTNESS
     // Sample even while auto-brightness is switched off so the sensor stays
@@ -1212,7 +1213,7 @@ void showBrightnessBar(int brightness)
     tft.fillRect(barX, barY, barWidth, barHeight, TFT_BLACK);
 
     // Calculate fill width based on the supported brightness range.
-    int fillWidth = map(constrain(brightness, 1, 255), 1, 255, 0, barWidth);
+    int fillWidth = map(clampBrightness(brightness), BRIGHTNESS_MIN, BRIGHTNESS_MAX, 0, barWidth);
 
     // Draw filled portion with gradient-like effect
     uint16_t fillColor;
@@ -1229,7 +1230,7 @@ void showBrightnessBar(int brightness)
     }
 
     // Draw percentage text
-    int percentage = map(constrain(brightness, 1, 255), 1, 255, 0, 100);
+    int percentage = brightnessPercent(brightness);
     tft.setTextDatum(TC_DATUM);
     tft.drawString(String(percentage) + "%", 160, barY + barHeight + 10);
 }
@@ -1266,7 +1267,7 @@ void rollingClockSetup(bool is24Hour, bool usDate)
 #endif
 
     // Initialize backlight pin with PWM, restoring the saved brightness
-    backlightLevel = constrain(projectConfig.brightness, 1, 255);
+    backlightLevel = clampBrightness(projectConfig.brightness);
     pinMode(BACKLIGHT_PIN, OUTPUT);
     analogWrite(BACKLIGHT_PIN, backlightLevel);
 
@@ -1430,16 +1431,14 @@ void handleTouch()
         {
             if (touch.x < 107) // Left third - make dimmer
             {
-                backlightLevel -= 1; // Decrease brightness
-                if (backlightLevel <= 1) backlightLevel = 1; // Minimum brightness
+                backlightLevel = clampBrightness(backlightLevel - 1);
 
                 Log.print("LEFT touch - Dimmer: ");
                 Log.println(backlightLevel);
             }
             else // Right third - make brighter
             {
-                backlightLevel += 1; // Increase brightness
-                if (backlightLevel > 255) backlightLevel = 255; // Maximum brightness
+                backlightLevel = clampBrightness(backlightLevel + 1);
 
                 Log.print("RIGHT touch - Brighter: ");
                 Log.println(backlightLevel);

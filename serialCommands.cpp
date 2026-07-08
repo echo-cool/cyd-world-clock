@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ezTime.h>
 
+#include "brightness.h"
 #include "ClockLogic.h"         // backlightLevel, worldZones, manualBrightnessUntil
 #include "factoryReset.h"       // factoryReset - FACTORYRESET command
 #include "genericBaseProject.h" // BACKLIGHT_PIN
@@ -25,7 +26,7 @@ void handleSerialCommands()
                 String valueStr = command.substring(spaceIndex + 1);
                 int newBrightness = valueStr.toInt();
 
-                if (newBrightness >= 1 && newBrightness <= 255) {
+                if (newBrightness >= BRIGHTNESS_MIN && newBrightness <= BRIGHTNESS_MAX) {
                     backlightLevel = newBrightness;
                     analogWrite(BACKLIGHT_PIN, backlightLevel);
                     // Respect this manual setting before auto-brightness resumes
@@ -36,7 +37,7 @@ void handleSerialCommands()
                     Log.print("Brightness set to: ");
                     Log.println(backlightLevel);
                 } else {
-                    Log.println("Error: Brightness must be between 1 and 255");
+                    Log.println("Error: Brightness must be between " + String(BRIGHTNESS_RANGE_TEXT));
                 }
             } else {
                 Log.println("Error: Usage: BRIGHTNESS <value>");
@@ -108,7 +109,7 @@ void handleSerialCommands()
         }
         else if (command == "HELP" || command == "?") {
             Log.println("=== Available Commands ===");
-            Log.println("BRIGHTNESS <1-255>  - Set display brightness");
+            Log.println("BRIGHTNESS <" + String(BRIGHTNESS_RANGE_TEXT) + ">  - Set display brightness");
             Log.println("SYNC                - Force NTP time synchronization");
             Log.println("WIFI or IP          - Show WiFi connection info");
             Log.println("LDR                 - Show ambient light sensor state");
@@ -129,7 +130,7 @@ void showStartupCommands()
     Log.println();
     Log.println("=== World Clock Ready ===");
     Log.println("Serial commands available:");
-    Log.println("- BRIGHTNESS <1-255> : Set display brightness");
+    Log.println("- BRIGHTNESS <" + String(BRIGHTNESS_RANGE_TEXT) + "> : Set display brightness");
     Log.println("- SYNC               : Force time synchronization");
     Log.println("- WIFI or IP         : Show network information");
     Log.println("- LDR                : Show ambient light sensor state");

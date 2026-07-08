@@ -4,6 +4,7 @@
 #include "SPIFFS.h"
 #include <ArduinoJson.h>
 
+#include "brightness.h"
 #include "clockFaces.h"    // FACE_COUNT - clamp the saved face index
 #include "logBuffer.h"     // Log
 #include "textSanitize.h"  // puretext::sanitizeHostname - host-tested core
@@ -98,7 +99,7 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
 
   if (json.containsKey(PROJECT_BRIGHTNESS))
   {
-    c.brightness = constrain(json[PROJECT_BRIGHTNESS].as<int>(), 1, 255);
+    c.brightness = clampBrightness(json[PROJECT_BRIGHTNESS].as<int>());
     any = true;
   }
 
@@ -146,7 +147,7 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
 
   if (json.containsKey(PROJECT_NIGHT_BRIGHTNESS))
   {
-    c.nightBrightness = constrain(json[PROJECT_NIGHT_BRIGHTNESS].as<int>(), 1, 255);
+    c.nightBrightness = clampBrightness(json[PROJECT_NIGHT_BRIGHTNESS].as<int>());
     any = true;
   }
 

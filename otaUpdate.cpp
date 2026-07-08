@@ -9,9 +9,11 @@
 #include <WiFi.h>
 #include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED
 
+#include "brightness.h"
 #include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
 #include "clockFaces.h"         // FACE_COUNT, clockFaceName
 #include "factoryReset.h"       // factoryReset - /api/factory-reset
+#include "firmwareInfo.h"       // firmwareGitHash
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
 #include "holidayService.h"     // holidayZonesLoaded - /api/status
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - /api/status
@@ -127,7 +129,7 @@ static void setupArduinoOTA()
 /*-------- Web updater (browser firmware upload) ----------*/
 
 // Self-contained page: file picker, browser-side progress bar, result text.
-// %BUILD% is replaced with the compile timestamp when served.
+// %BUILD% / %GIT% are replaced with firmware metadata when served.
 static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -147,7 +149,7 @@ button:disabled{background:#444;cursor:default}
 .err{color:#ff6961}.ok{color:#30d158}
 </style></head><body><div class="card">
 <h1>ESP32 World Clock</h1>
-<p>Running build: %BUILD% &middot; <a href="/" style="color:#0a84ff">Settings</a></p>
+<p>Running build: %BUILD% &middot; git %GIT% &middot; <a href="/" style="color:#0a84ff">Settings</a></p>
 <p>Select a firmware image (<code>firmware.bin</code> from PlatformIO's
 <code>.pio/build/cyd/</code>, or Arduino IDE &gt; Sketch &gt; Export Compiled
 Binary) and press Update. Keep the device powered until it reboots.</p>
@@ -198,6 +200,7 @@ static void handleUpdatePage()
     if (!webAuthenticate()) return;
     String page = FPSTR(UPDATE_PAGE);
     page.replace("%BUILD%", String(__DATE__) + " " + __TIME__);
+    page.replace("%GIT%", firmwareGitHash());
     webServer.send(200, "text/html", page);
 }
 
@@ -367,6 +370,7 @@ static void handleSettingsPage()
     page.reserve(14336);
     page += FPSTR(SETTINGS_PAGE_HEAD);
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
+            " &middot; git " + String(firmwareGitHash()) +
             " &middot; <a href=\"/update\">Firmware update</a>"
             " &middot; <a href=\"/logs\">Logs</a>"
             " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
@@ -415,11 +419,13 @@ static void handleSettingsPage()
 
     // --- Brightness ---
     page += "<fieldset><legend>Brightness</legend>";
-    int pct = map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100);
+    int pct = brightnessPercent(backlightLevel);
     page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
-            "<input type=\"range\" name=\"bri\" min=\"1\" max=\"255\" value=\"" +
+            "<input type=\"range\" name=\"bri\" min=\"" + String(BRIGHTNESS_MIN) +
+            "\" max=\"" + String(BRIGHTNESS_MAX) + "\" value=\"" +
             String(backlightLevel) + "\" oninput=\"document.getElementById('bv')"
-            ".textContent=Math.round((this.value-1)*100/254)\"></label>";
+            ".textContent=Math.round((this.value-" + String(BRIGHTNESS_MIN) +
+            ")*100/" + String(BRIGHTNESS_MAX - BRIGHTNESS_MIN) + ")\"></label>";
 
     // Auto-dim master switch + night dimming: window (home-zone hours) and
     // the dimmed level (all ignored while the switch is off).
@@ -430,12 +436,14 @@ static void handleSettingsPage()
     page += "</select></label><label>until<select name=\"nend\">";
     appendHourOptions(page, projectConfig.nightEndHour);
     page += "</select></label></div>";
-    int npct = map(constrain(projectConfig.nightBrightness, 1, 255), 1, 255, 0, 100);
+    int npct = brightnessPercent(projectConfig.nightBrightness);
     page += "<label>Night brightness (<span id=\"nv\">" + String(npct) + "</span>%)"
-            "<input type=\"range\" name=\"nbri\" min=\"1\" max=\"255\" value=\"" +
-            String(constrain(projectConfig.nightBrightness, 1, 255)) +
+            "<input type=\"range\" name=\"nbri\" min=\"" + String(BRIGHTNESS_MIN) +
+            "\" max=\"" + String(BRIGHTNESS_MAX) + "\" value=\"" +
+            String(clampBrightness(projectConfig.nightBrightness)) +
             "\" oninput=\"document.getElementById('nv')"
-            ".textContent=Math.round((this.value-1)*100/254)\"></label>";
+            ".textContent=Math.round((this.value-" + String(BRIGHTNESS_MIN) +
+            ")*100/" + String(BRIGHTNESS_MAX - BRIGHTNESS_MIN) + ")\"></label>";
     page += "<p>Night brightness is used when the room is dark (light sensor), "
             "or inside the window above (home-zone time) when the sensor is "
             "unavailable. Equal hours disable the schedule. Auto-dim Off keeps "
@@ -572,7 +580,7 @@ static void handleSettingsPost()
     }
 
     int bri = webServer.arg("bri").toInt();
-    if (bri >= 1 && bri <= 255 && bri != backlightLevel)
+    if (bri >= BRIGHTNESS_MIN && bri <= BRIGHTNESS_MAX && bri != backlightLevel)
     {
         backlightLevel = bri;
         analogWrite(BACKLIGHT_PIN, backlightLevel);
@@ -832,6 +840,7 @@ static void handleApiStatus()
     doc["ntpServer"] = currentNtpServer();
     doc["utc"] = UTC.dateTime("Y-m-d H:i:s");
     doc["build"] = String(__DATE__) + " " + __TIME__;
+    doc["git"] = firmwareGitHash();
     doc["clockFace"] = clockFaceName(projectConfig.clockFace);
     doc["brightness"] = backlightLevel;
     doc["weatherAgeMin"] = weatherAgeMinutes();

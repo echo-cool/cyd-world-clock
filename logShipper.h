@@ -16,7 +16,7 @@
 // How it works: LogBuffer::write tees complete lines into a drop-oldest
 // queue (logShipperFeed). A core-0 task batches queued lines every ~30s
 // (sooner when the queue fills) and POSTs them with labels
-// {job, device=<hostname>, boot_id=<random per boot>}. Timestamps come from
+// {job, device=<hostname-macSuffix>, boot_id=<random per boot>}. Timestamps come from
 // an epoch anchor captured on the first real NTP sync, so boot lines queued
 // before the sync still get correct absolute times retroactively - nothing
 // ships until that first sync (no internet means nothing could ship anyway).
