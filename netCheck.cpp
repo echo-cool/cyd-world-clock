@@ -59,6 +59,8 @@ static CanaryResult probeCanary(const Canary &c)
         return CANARY_UNREACHABLE;
 
     int code = http.GET();
+    Log.println("Canary " + String(c.url) + " returned HTTP " + String(code) +
+                (code <= 0 ? " (unreachable)" : ""));
     if (code <= 0)
     {
         http.end();
@@ -72,6 +74,8 @@ static CanaryResult probeCanary(const Canary &c)
         ok = (http.getString().indexOf(c.mustContain) >= 0);
     }
     http.end();
+    Log.println("Canary " + String(c.url) + " returned HTTP " + String(code) +
+                (ok ? " (OK)" : " (intercepted)"));
     return ok ? CANARY_OK : CANARY_INTERCEPTED;
 }
 

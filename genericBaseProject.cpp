@@ -416,6 +416,7 @@ void baseProjectSetup()
     {
         Log.println("");
         Log.println("WiFi connected");
+        Log.println("SSID: " + WiFi.SSID() + ", RSSI " + String(WiFi.RSSI()) + " dBm" + ", MAC " + WiFi.macAddress());
         Log.print("IP address: ");
         Log.println(WiFi.localIP());
 

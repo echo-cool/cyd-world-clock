@@ -251,7 +251,7 @@ static String fetchUsAlert(float lat, float lon)
 
     const char *best = nullptr;
     int bestRank = -1;
-    Log.println("NWS alerts: " + String(doc["features"].size()) + " active");
+    Log.println("NWS alerts: " + String(doc["features"].size()) + " active" + " At " + String(lat, 4) + "," + String(lon, 4));
     for (JsonObject f : doc["features"].as<JsonArray>())
     {
         const char *ev = f["properties"]["event"];
