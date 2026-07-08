@@ -88,7 +88,7 @@ public:
   int nightBrightness = 1;
 
   // Home-screen extras, each individually revertible from the web settings
-  // page (all default on; turning one off restores the previous look):
+  // page:
   //  - dayNightIcons: sun/moon glyph per quadrant, and readable ice-blue
   //    evening/night text colors on every face (off = the legacy greys,
   //    no icons)
@@ -97,19 +97,19 @@ public:
   //    lines (uses the weather data the background task already fetches)
   //  - daylightBar: per-quadrant day gradient bar (sunrise/sunset from the
   //    city's real solar position) with a tick at the current time
-  //  - marketProgressBar: trading-day progress bar along a quadrant's
+  //  - marketProgressBar: optional trading-day progress bar along a quadrant's
   //    bottom edge while its exchange is inside regular hours
   //  - smoothTimeFont: anti-aliased digits (fontTimeDigits.h) for the quad
   //    face's times instead of the pixel-doubled Font 4
-  //  - weatherAlerts: show a weather alert on a quadrant's market status line
+  //  - weatherAlerts: show a weather alert on a quadrant's weekday line
   //    (US cities: official NWS warnings; others: severe conditions from the
-  //    weather code). Alternates with the market status when both are present.
+  //    weather code). Alternates with the normal weekday/holiday text.
   bool smoothTimeFont = false;
   bool dayNightIcons = false;
   bool homeMarker = false;
   bool quadWeather = true;
   bool daylightBar = false;
-  bool marketProgressBar = true;
+  bool marketProgressBar = false;
   bool weatherAlerts = true;
 
   // Temperatures in Fahrenheit instead of Celsius (weather face, quadrant

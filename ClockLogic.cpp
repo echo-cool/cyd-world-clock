@@ -94,14 +94,14 @@ bool flashState = true;
 const unsigned long flashInterval = 1000; // 1 second
 bool flashJustChanged = false;
 
-// Weather-alert alternation on the quadrant status line: when a zone has both a
-// market status AND a weather alert, the line swaps slowly between them. The
-// market slot is longer so the market status stays the primary read; the swap
+// Weather-alert alternation on the quadrant day line: a zone with an alert
+// slowly swaps the weekday/holiday line with the alert text. The normal day
+// slot is longer so the clock's date context stays the primary read; the swap
 // is slow (seconds) rather than a blink, to avoid distraction.
-const unsigned long WX_ALERT_MARKET_MS = 6000; // market status shown per cycle
+const unsigned long WX_ALERT_DAY_MS = 6000;    // weekday/holiday shown per cycle
 const unsigned long WX_ALERT_ALERT_MS = 4000;  // weather alert shown per cycle
 const uint16_t WX_ALERT_COLOR = TFT_ORANGE;    // distinct from any market color
-static bool wxAlertShowingAlert = false;       // false = market slot, true = alert
+static bool wxAlertShowingAlert = false;       // false = day slot, true = alert
 static bool wxAlertPhaseJustChanged = false;
 static unsigned long wxAlertPhaseSince = 0;
 
@@ -110,8 +110,8 @@ bool shouldMessageFlash(String message);
 void updateFlashState();
 void updateWeatherAlertPhase();
 void resetFlashChangeFlag();
-void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex);
-bool needsStatusBandUpdate(WorldClockZone &zone);
+void updateDynamicQuadrantArea(WorldClockZone &zone, int quadrantIndex);
+bool needsDynamicQuadrantAreaUpdate(WorldClockZone &zone);
 void adjustBrightnessAuto();
 
 void SetupCYD()
@@ -577,11 +577,8 @@ static bool marketDayProgress(WorldClockZone &zone, float &frac)
 }
 
 // What the quadrant's bottom status line should show right now: the market
-// status, a weather alert, or - when a zone has both - whichever the slow
-// alternation is currently on. Uses the cached zone.lastMarketStatus and
-// zone.weatherAlert; call refreshZoneWeatherAlert() first so the latter is
-// current. `flashes` is true only for the time-sensitive market alerts that
-// blink (weather alerts are always steady).
+// status only. Weather alerts use the larger weekday line above the date.
+// `flashes` is true only for the time-sensitive market alerts that blink.
 struct StatusLine
 {
     String text;
@@ -589,27 +586,34 @@ struct StatusLine
     bool flashes;
 };
 
-static StatusLine computeStatusLine(WorldClockZone &zone)
+static StatusLine computeMarketStatusLine(WorldClockZone &zone)
 {
     String mkt = zone.lastMarketStatus;
-    String wx = projectConfig.weatherAlerts ? zone.weatherAlert : String("");
-
-    if (wx.length() == 0)
-        return {mkt, getMarketStatusColor(mkt), shouldMessageFlash(mkt)};
-    if (mkt.length() == 0)
-        return {wx, WX_ALERT_COLOR, false}; // blank market line: show alert directly
-    // Both present: alternate, market status getting the longer slot.
-    if (wxAlertShowingAlert)
-        return {wx, WX_ALERT_COLOR, false};
     return {mkt, getMarketStatusColor(mkt), shouldMessageFlash(mkt)};
 }
 
 // Refresh the zone's cached weather-alert text from the background task. Cheap
 // enough for the paint paths (per minute / on data changes), and keeps the
-// per-loop needsStatusBandUpdate() check lock-free.
+// per-loop needsDynamicQuadrantAreaUpdate() check lock-free.
 static void refreshZoneWeatherAlert(WorldClockZone &zone, int zoneIdx)
 {
     zone.weatherAlert = projectConfig.weatherAlerts ? getZoneAlert(zoneIdx) : String("");
+}
+
+static bool showAlertOnDayLine(WorldClockZone &zone)
+{
+    return projectConfig.weatherAlerts && wxAlertShowingAlert && zone.weatherAlert.length() > 0;
+}
+
+static String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth)
+{
+    if (gfx.textWidth(text) <= maxWidth) return text;
+
+    String out = text;
+    while (out.length() > 0 && gfx.textWidth(out + "...") > maxWidth) {
+        out.remove(out.length() - 1);
+    }
+    return out.length() > 0 ? out + "..." : String("");
 }
 
 // Render one quadrant's full content (label, time, AM/PM, day/date, market
@@ -703,6 +707,11 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         dateY = oy + 92;
     }
 
+    // Weather alerts share the weekday/holiday line, so refresh the cached
+    // alert before composing that row. The bottom market line uses only market
+    // status now.
+    refreshZoneWeatherAlert(zone, zoneIdx);
+
     // Day name with the day-offset vs home (top-left quadrant). Compare actual
     // calendar dates (not bare day-of-month) so it stays correct across month
     // and year boundaries.
@@ -734,8 +743,16 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
 
     gfx.setTextFont(1);
     gfx.setTextDatum(TC_DATUM);
-    gfx.setTextColor(isHoliday ? TFT_GOLD : labelColor, clockBackgroundColor);
-    if (isHoliday) {
+    if (showAlertOnDayLine(zone)) {
+        // Larger than the old bottom status line. Font 2 keeps common alerts
+        // readable in the 160px quadrant; extra-long NWS event names are
+        // trimmed by measured pixel width, not by character count.
+        gfx.setTextFont(2);
+        gfx.setTextSize(1);
+        gfx.setTextColor(WX_ALERT_COLOR, clockBackgroundColor);
+        gfx.drawString(fitTextToWidth(gfx, zone.weatherAlert, quadrantWidth - 8), centerX, dayY);
+    } else if (isHoliday) {
+        gfx.setTextColor(TFT_GOLD, clockBackgroundColor);
         String dayLine = dayText + " - " + holidayName;
         if (dayLine.length() > 26) {
             dayLine = dayLine.substring(0, 26); // keep it inside the quadrant
@@ -744,9 +761,11 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         // Vertically centered in the slot the size-2 day name normally fills
         gfx.drawString(dayLine, centerX, holidayY);
     } else {
+        gfx.setTextColor(labelColor, clockBackgroundColor);
         gfx.setTextSize(2);
         gfx.drawString(dayText, centerX, dayY);
     }
+    gfx.setTextFont(1);
     gfx.setTextSize(2);
     // With the quadrant temperature enabled the date shifts left a little:
     // dead-centered, its last digit touches the condition dot of a two-digit
@@ -781,13 +800,10 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         }
     }
 
-    // Bottom status line: the market status and/or a weather alert. Both use
-    // cached values (market refreshed per minute in hasTimeChanged; alert
-    // refreshed here from the background task). When a zone has both, they
-    // alternate (computeStatusLine); the <=10-minute open/close market alerts
-    // still flash - in the flash-off phase that line is simply not drawn.
-    refreshZoneWeatherAlert(zone, zoneIdx);
-    StatusLine line = computeStatusLine(zone);
+    // Bottom status line: market status only. The <=10-minute open/close
+    // market alerts still flash - in the flash-off phase that line is simply
+    // not drawn.
+    StatusLine line = computeMarketStatusLine(zone);
     if (line.text.length() > 0 && (!line.flashes || flashState)) {
         gfx.setTextFont(1);
         gfx.setTextSize(1);
@@ -826,13 +842,14 @@ void updateFlashState()
     }
 }
 
-// Advance the slow market/weather-alert alternation. Asymmetric dwell (market
-// slot longer) keeps the market status the primary read while still surfacing
-// the alert. Sets wxAlertPhaseJustChanged so the affected quadrants repaint.
+// Advance the slow weekday/weather-alert alternation. Asymmetric dwell (day
+// slot longer) keeps the clock's normal date context primary while still
+// surfacing the alert. Sets wxAlertPhaseJustChanged so affected quadrants
+// repaint.
 void updateWeatherAlertPhase()
 {
     unsigned long now = millis();
-    unsigned long dwell = wxAlertShowingAlert ? WX_ALERT_ALERT_MS : WX_ALERT_MARKET_MS;
+    unsigned long dwell = wxAlertShowingAlert ? WX_ALERT_ALERT_MS : WX_ALERT_DAY_MS;
     if (now - wxAlertPhaseSince >= dwell) {
         wxAlertShowingAlert = !wxAlertShowingAlert;
         wxAlertPhaseSince = now;
@@ -846,52 +863,35 @@ void resetFlashChangeFlag()
     wxAlertPhaseJustChanged = false;
 }
 
-// Repaint just the bottom status band (market status / weather alert) without
-// redrawing the whole quadrant. Called between minute ticks when the flash
-// toggles or the market/alert alternation swaps.
-void updateStatusBandOnly(WorldClockZone &zone, int quadrantIndex)
+// Repaint the lower dynamic area (day/date/weather/market rows) without
+// redrawing the whole quadrant. Called between minute ticks when a flashing
+// market alert toggles or the weekday/weather-alert alternation swaps.
+void updateDynamicQuadrantArea(WorldClockZone &zone, int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
+    const int bandY = quadrantHeight - 56;
+    const int bandH = quadrantHeight - bandY;
 
     bool usedSprite = false;
     if (quadSpriteMutex) xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
     if (quadSpriteOk) {
-        // Re-render the quadrant off-screen and push only the bottom band
-        // holding the status line and the progress bar. Pixel-identical to a
-        // full redraw - correct text placement, clipped at the quadrant edge,
-        // and the grid / home-border pixels a direct clear rect would notch
-        // are all repainted - without blitting the rest of the quadrant.
+        // Re-render the quadrant off-screen and push only the rows holding the
+        // weekday/alert, date/weather, status line and progress bar.
+        // Pixel-identical to a full redraw - correct text placement, clipped
+        // at the quadrant edge, and grid / home-border pixels a direct clear
+        // rect would notch are all repainted - without blitting the time rows.
         renderQuadrantContent(quadSprite, 0, 0, zone, quadrantIndex);
-        int bandY = quadrantHeight - 12;
-        quadSprite.pushSprite(quad.x, quad.y + bandY, 0, bandY, quadrantWidth, 12);
+        quadSprite.pushSprite(quad.x, quad.y + bandY, 0, bandY, quadrantWidth, bandH);
         usedSprite = true;
     }
     if (quadSpriteMutex) xSemaphoreGive(quadSpriteMutex);
     if (usedSprite) return;
 
     // Degraded direct-to-panel path (sprite allocation failed). Clip to the
-    // quadrant so a wide alert cannot spill over the neighbouring quadrant
-    // (vpDatum=false keeps absolute screen coordinates).
-    refreshZoneWeatherAlert(zone, quadrantIndex);
-    StatusLine line = computeStatusLine(zone);
-    bool visible = line.text.length() > 0 && (!line.flashes || flashState);
-
-    tft.setTextFont(1);
-    tft.setTextSize(1);
-    tft.setTextDatum(TC_DATUM);
-    int textY = quad.y + quadrantHeight - 10;
-    tft.setViewport(quad.x, quad.y, quadrantWidth, quadrantHeight, false);
-
-    // Clear the status-line row (full quadrant width, clipped by the viewport).
-    // Stops just above the bottom-edge market progress bar so an alert cannot
-    // notch it on every swap/flash.
-    tft.fillRect(quad.x + 2, textY - 1, quadrantWidth - 4, tft.fontHeight() + 1, clockBackgroundColor);
-
-    if (visible) {
-        tft.setTextColor(line.color, clockBackgroundColor);
-        tft.drawString(line.text, quad.centerX, textY);
-    }
-
+    // lower quadrant so a wide alert cannot spill over the neighbouring
+    // quadrant (vpDatum=false keeps absolute screen coordinates).
+    tft.setViewport(quad.x, quad.y + bandY, quadrantWidth, bandH, false);
+    renderQuadrantContent(tft, quad.x, quad.y, zone, quadrantIndex);
     tft.resetViewport();
 }
 
@@ -968,24 +968,22 @@ bool hasTimeChanged(WorldClockZone &zone)
     return timeChanged;
 }
 
-// Whether the status band needs a mid-minute repaint this frame: either a
-// flashing market alert toggled while it is the line on screen, or the
-// market/weather-alert alternation just swapped for a zone that has both.
-// Uses only cached values (no locks, no String rebuilds) so it is cheap to
-// call every loop for all four zones.
-bool needsStatusBandUpdate(WorldClockZone &zone)
+// Whether the lower dynamic area needs a mid-minute repaint this frame: either
+// a flashing market alert toggled, or the weekday/weather-alert alternation
+// just swapped for a zone with an alert. Uses only cached values (no locks, no
+// String rebuilds) so it is cheap to call every loop for all four zones.
+bool needsDynamicQuadrantAreaUpdate(WorldClockZone &zone)
 {
     bool hasMkt = zone.lastMarketStatus.length() > 0;
     bool hasAlert = projectConfig.weatherAlerts && zone.weatherAlert.length() > 0;
 
-    // The swap only changes the display when a zone carries both lines.
-    if (wxAlertPhaseJustChanged && hasMkt && hasAlert) return true;
+    // The swap changes the weekday line for any zone carrying an alert.
+    if (wxAlertPhaseJustChanged && hasAlert) return true;
 
-    // A flashing market alert blinks only while the market line is showing
-    // (i.e. not during the alert slot of an alternating zone).
+    // Weather alerts no longer occupy the market line, so market countdown
+    // flashes whenever the market line carries a flashing status.
     if (flashJustChanged) {
-        bool showingMarket = hasMkt && !(hasAlert && wxAlertShowingAlert);
-        if (showingMarket && shouldMessageFlash(zone.lastMarketStatus)) return true;
+        if (hasMkt && shouldMessageFlash(zone.lastMarketStatus)) return true;
     }
     return false;
 }
@@ -1213,8 +1211,8 @@ void showBrightnessBar(int brightness)
     // Fill background (empty part)
     tft.fillRect(barX, barY, barWidth, barHeight, TFT_BLACK);
 
-    // Calculate fill width based on brightness (5-255 range)
-    int fillWidth = map(brightness, 5, 255, 0, barWidth);
+    // Calculate fill width based on the supported brightness range.
+    int fillWidth = map(constrain(brightness, 1, 255), 1, 255, 0, barWidth);
 
     // Draw filled portion with gradient-like effect
     uint16_t fillColor;
@@ -1231,7 +1229,7 @@ void showBrightnessBar(int brightness)
     }
 
     // Draw percentage text
-    int percentage = map(brightness, 5, 255, 0, 100);
+    int percentage = map(constrain(brightness, 1, 255), 1, 255, 0, 100);
     tft.setTextDatum(TC_DATUM);
     tft.drawString(String(percentage) + "%", 160, barY + barHeight + 10);
 }
@@ -1551,7 +1549,7 @@ void drawRollingClock()
     handleSerialCommands();
 
     // Update flash state for market status messages, and advance the slow
-    // market/weather-alert alternation on the quadrant status line.
+    // weekday/weather-alert alternation on the quadrant day line.
     updateFlashState();
     updateWeatherAlertPhase();
 
@@ -1635,11 +1633,11 @@ void drawRollingClock()
                 // Full redraw needed (time, date, or market status changed)
                 CLOCK_DEBUG_PRINTLN("Calling DrawSingleTimeZone for " + worldZones[i].name);
                 DrawSingleTimeZone(worldZones[i], i);
-            } else if (!brightnessBarVisible && needsStatusBandUpdate(worldZones[i])) {
-                // Only the status band changed - flashing market alert toggled,
-                // or the market/weather-alert line swapped (skipped while the
-                // brightness bar overlay owns the center of the screen)
-                updateStatusBandOnly(worldZones[i], i);
+            } else if (!brightnessBarVisible && needsDynamicQuadrantAreaUpdate(worldZones[i])) {
+                // Only the lower dynamic rows changed - flashing market alert
+                // toggled, or the weekday/weather-alert line swapped (skipped
+                // while the brightness bar overlay owns the center of the screen).
+                updateDynamicQuadrantArea(worldZones[i], i);
             }
         }
     }

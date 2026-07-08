@@ -415,11 +415,11 @@ static void handleSettingsPage()
 
     // --- Brightness ---
     page += "<fieldset><legend>Brightness</legend>";
-    int pct = map(backlightLevel, 5, 255, 0, 100);
+    int pct = map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100);
     page += "<label>Brightness (<span id=\"bv\">" + String(pct) + "</span>%)"
-            "<input type=\"range\" name=\"bri\" min=\"5\" max=\"255\" value=\"" +
+            "<input type=\"range\" name=\"bri\" min=\"1\" max=\"255\" value=\"" +
             String(backlightLevel) + "\" oninput=\"document.getElementById('bv')"
-            ".textContent=Math.round((this.value-5)*100/250)\"></label>";
+            ".textContent=Math.round((this.value-1)*100/254)\"></label>";
 
     // Auto-dim master switch + night dimming: window (home-zone hours) and
     // the dimmed level (all ignored while the switch is off).
@@ -459,7 +459,7 @@ static void handleSettingsPage()
     appendToggle(page, "Market-session progress bar", "qmb", projectConfig.marketProgressBar);
     page += "</div><div class=\"row\">";
     appendToggle(page, "Smooth time digits", "qsf", projectConfig.smoothTimeFont);
-    appendToggle(page, "Weather alerts on market line", "qwa", projectConfig.weatherAlerts);
+    appendToggle(page, "Weather alerts on weekday line", "qwa", projectConfig.weatherAlerts);
     page += "</div>";
     page += "</fieldset>";
 
@@ -572,7 +572,7 @@ static void handleSettingsPost()
     }
 
     int bri = webServer.arg("bri").toInt();
-    if (bri >= 5 && bri <= 255 && bri != backlightLevel)
+    if (bri >= 1 && bri <= 255 && bri != backlightLevel)
     {
         backlightLevel = bri;
         analogWrite(BACKLIGHT_PIN, backlightLevel);

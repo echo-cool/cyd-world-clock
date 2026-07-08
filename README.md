@@ -291,8 +291,7 @@ settings page (the choice is saved to flash):
   daytime is orange/yellow from actual sunrise to actual sunset, so London
   correctly reads as night at 4:30 PM in December and as day at 9 PM in
   June. This face also carries a set of extras, each individually
-  switchable from the web settings page (all on by default; turning one off
-  restores the classic look):
+  switchable from the web settings page:
   - **Sun/moon icons + night colors** — a small sun or crescent moon in each
     quadrant's corner marks day/night explicitly, which frees the text
     colors to stay readable around the clock: warm orange by day, cool ice
@@ -310,23 +309,23 @@ settings page (the choice is saved to flash):
     sun's real elevation — deep blue night, orange sunrise/sunset, warm
     yellow midday — with a white tick at "now". One glance shows how deep
     into day or night each city is.
-  - **Market-session progress bar** — while an exchange is inside its
-    regular hours, a green bar along the quadrant's bottom edge fills from
-    open to close (half-day early closes shorten it), showing how much of
-    the trading day is left.
+  - **Market-session progress bar** — optional, off by default; while an
+    exchange is inside its regular hours, a green bar along the quadrant's
+    bottom edge fills from open to close (half-day early closes shorten it),
+    showing how much of the trading day is left.
   - **Smooth time digits** — the quadrant times render in an anti-aliased
     52pt font (a digits-only Liberation Sans Bold subset, ~12KB of flash,
     regenerable with `tools/make_time_font.py`) instead of the blocky
     pixel-doubled built-in font. Off = the classic Font 4 look.
-  - **Weather alerts** — a severe-weather alert on a quadrant's market status
-    line (in orange). For US cities the text comes from the official US
+  - **Weather alerts** — a severe-weather alert on a quadrant's weekday line
+    (in orange). For US cities the text comes from the official US
     National Weather Service active-alerts feed
     ([api.weather.gov](https://www.weather.gov/documentation/services-web-api),
     e.g. `TORNADO WARNING`); for other cities it is derived from the weather
     code the clock already fetches (`STORM`, `HEAVY SNOW`, `FREEZING RAIN`…).
-    If the quadrant has no market, the alert shows on its own; if it does, the
-    line alternates slowly between the market status (shown longer) and the
-    alert, so you still see both without either flickering. Refreshed every 20
+    The weekday/holiday line alternates slowly between its normal text (shown
+    longer) and the alert, so you still see both without either flickering.
+    Refreshed every 20
     minutes with the weather. (Shown on the four-quadrant face; the big-clock
     face's single market line is unchanged.)
 - **Big clock** — the home zone (top-left quadrant) in 75px digits with date
@@ -397,7 +396,7 @@ settings page (the choice is saved to flash):
 - **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
 - **Quadrant grid** — toggle divider lines between the four quadrants of the
   world-clock face (default: off).
-- **Wx alert** — toggle weather alerts on the quadrant market status lines
+- **Wx alert** — toggle weather alerts on the quadrant weekday lines
   (see the *Weather alerts* extra above; default: on).
 - **Brightness** — `-` / `+` buttons adjust the backlight (also pauses
   auto-brightness for 2 hours, same as the home-screen gesture). The level is
@@ -441,10 +440,10 @@ into categories:
   face's extra elements: sun/moon icons + readable night colors, the
   home-quadrant border, per-quadrant weather, the daylight bar, the
   market-session progress bar, the smooth (anti-aliased) time digits and
-  weather alerts on the market status line (see the face description above).
-  The extras all default to on; switching one off restores the classic look
-  of that element. (Weather alerts and the quadrant grid also have on-device
-  toggles on the settings page.)
+  weather alerts on the weekday line (see the face description above).
+  The market-session progress bar defaults to off; weather alerts and
+  per-quadrant weather default to on. (Weather alerts and the quadrant grid
+  also have on-device toggles on the settings page.)
 - **Weather & calendar** — temperatures in °C or °F (weather face and
   per-quadrant weather), the weather refresh interval (default: every 20
   minutes) and whether the calendar face's week starts on Sunday or Monday.

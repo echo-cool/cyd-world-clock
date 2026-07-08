@@ -10,6 +10,9 @@
 
 ProjectConfig projectConfig;
 
+static const char *PROJECT_CONFIG_TMP_JSON = "/project_config.tmp";
+static const char *PROJECT_CONFIG_BAK_JSON = "/project_config.bak";
+
 // Thin String wrapper over the host-tested puretext::sanitizeHostname.
 String sanitizeHostname(const String &raw)
 {
@@ -178,34 +181,50 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
   return any;
 }
 
-bool ProjectConfig::fetchConfigFile()
+static bool loadConfigPath(ProjectConfig &c, const char *path)
 {
-  if (SPIFFS.exists(PROJECT_CONFIG_JSON))
+  // file exists, reading and loading
+  Log.println("reading config file");
+  File configFile = SPIFFS.open(path, "r");
+  if (configFile)
   {
-    // file exists, reading and loading
-    Log.println("reading config file");
-    File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "r");
-    if (configFile)
+    Log.println("opened config file");
+    StaticJsonDocument<2048> json;
+    DeserializationError error = deserializeJson(json, configFile);
+    serializeJsonPretty(json, Serial);
+    configFile.close();
+    if (!error)
     {
-      Log.println("opened config file");
-      StaticJsonDocument<2048> json;
-      DeserializationError error = deserializeJson(json, configFile);
-      serializeJsonPretty(json, Serial);
-      if (!error)
+      Log.println("\nparsed json");
+      if (applyDoc(c, json))
       {
-        Log.println("\nparsed json");
-        applyDoc(*this, json);
         return true;
       }
-      else
-      {
-        Log.println("failed to load json config");
-        return false;
-      }
+      Log.println("config contained no known settings");
+      return false;
+    }
+    Log.println("failed to load json config");
+  }
+  return false;
+}
+
+bool ProjectConfig::fetchConfigFile()
+{
+  if (SPIFFS.exists(PROJECT_CONFIG_JSON) && loadConfigPath(*this, PROJECT_CONFIG_JSON))
+  {
+    return true;
+  }
+
+  if (SPIFFS.exists(PROJECT_CONFIG_BAK_JSON))
+  {
+    Log.println("loading backup config");
+    if (loadConfigPath(*this, PROJECT_CONFIG_BAK_JSON))
+    {
+      return true;
     }
   }
 
-  Log.println("Config file does not exist");
+  Log.println("No usable config file found");
   return false;
 }
 
@@ -215,10 +234,11 @@ bool ProjectConfig::saveConfigFile()
   StaticJsonDocument<2048> json;
   fillJson(*this, json);
 
-  File configFile = SPIFFS.open(PROJECT_CONFIG_JSON, "w");
+  SPIFFS.remove(PROJECT_CONFIG_TMP_JSON);
+  File configFile = SPIFFS.open(PROJECT_CONFIG_TMP_JSON, "w");
   if (!configFile)
   {
-    Log.println("failed to open config file for writing");
+    Log.println("failed to open temp config file for writing");
     return false;
   }
 
@@ -226,9 +246,31 @@ bool ProjectConfig::saveConfigFile()
   if (serializeJson(json, configFile) == 0)
   {
     Log.println(F("Failed to write to file"));
+    configFile.close();
+    SPIFFS.remove(PROJECT_CONFIG_TMP_JSON);
     return false;
   }
   configFile.close();
+
+  SPIFFS.remove(PROJECT_CONFIG_BAK_JSON);
+  bool hadConfig = SPIFFS.exists(PROJECT_CONFIG_JSON);
+  if (hadConfig && !SPIFFS.rename(PROJECT_CONFIG_JSON, PROJECT_CONFIG_BAK_JSON))
+  {
+    Log.println(F("Failed to back up existing config"));
+    SPIFFS.remove(PROJECT_CONFIG_TMP_JSON);
+    return false;
+  }
+  if (!SPIFFS.rename(PROJECT_CONFIG_TMP_JSON, PROJECT_CONFIG_JSON))
+  {
+    Log.println(F("Failed to replace config"));
+    if (hadConfig && SPIFFS.exists(PROJECT_CONFIG_BAK_JSON))
+    {
+      SPIFFS.rename(PROJECT_CONFIG_BAK_JSON, PROJECT_CONFIG_JSON);
+    }
+    SPIFFS.remove(PROJECT_CONFIG_TMP_JSON);
+    return false;
+  }
+  SPIFFS.remove(PROJECT_CONFIG_BAK_JSON);
   return true;
 }
 

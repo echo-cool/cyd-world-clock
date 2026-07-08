@@ -574,14 +574,14 @@ void drawSettingsBrightnessLabel()
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    int pct = map(backlightLevel, 5, 255, 0, 100);
+    int pct = map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100);
     tft.drawString("Brightness " + String(pct) + "%", 160, 191);
 }
 
 void adjustBacklightFromUi(int delta)
 {
     backlightLevel += delta;
-    if (backlightLevel < 5) backlightLevel = 5;
+    if (backlightLevel < 1) backlightLevel = 1;
     if (backlightLevel > 255) backlightLevel = 255;
     analogWrite(BACKLIGHT_PIN, backlightLevel);
     // Hold this manual setting before auto-brightness resumes
@@ -1037,7 +1037,7 @@ static void fillDataValues(String *values, uint16_t *colors)
     }
 
     values[6] = String(backlightLevel) + " (" +
-                String(map(constrain(backlightLevel, 5, 255), 5, 255, 0, 100)) + "%)";
+                String(map(constrain(backlightLevel, 1, 255), 1, 255, 0, 100)) + "%)";
 
     bool ldrTrusted, ldrDark;
     int ldrSmoothed;

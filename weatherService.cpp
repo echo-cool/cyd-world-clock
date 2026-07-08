@@ -132,7 +132,7 @@ void weatherInvalidate()
 
 // Severe-weather alert derived from a WMO code, for non-US cities (which have
 // no NWS feed). "" for ordinary conditions - only genuinely rough weather is
-// surfaced, to keep the market line uncluttered. Kept short for the 160px
+// surfaced, to keep the weekday line uncluttered. Kept short for the 160px
 // quadrant. WMO codes: https://open-meteo.com/en/docs
 static const char *severeWeatherText(int code)
 {
