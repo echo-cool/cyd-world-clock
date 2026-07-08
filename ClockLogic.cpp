@@ -69,13 +69,11 @@ WorldClockZone worldZones[4] = {
          {13, 0, 15, 0, "REGULAR"},    // Afternoon session
          {15, 0, 15, 30, "AFTER-HRS"}   // After-hours session
      }, 4}, ""},
-    {"LONDON", "Europe/London", Timezone(), -1, -1, false, -1, false,
-     {"LSE", true, {
-         {7, 15, 8, 0, "PRE-MARKET"},    // Pre-market trading (order input)
-         {8, 0, 16, 30, "REGULAR"},      // Regular trading hours
-         {16, 30, 17, 0, "CLOSING"},     // Closing auction period
-         {17, 0, 17, 30, "AFTER-HRS"}    // After-hours reporting/settlement
-     }, 4}, ""}
+    {"HONG KONG", "Asia/Hong_Kong", Timezone(), -1, -1, false, -1, false,
+     {"HKEX", true, {
+         {9, 30, 12, 0, "REGULAR"},      // Morning session
+         {13, 0, 16, 0, "REGULAR"}       // Afternoon session
+     }, 2}, ""}
 };
 
 // Global variables for touch and backlight control

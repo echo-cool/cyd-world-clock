@@ -42,26 +42,26 @@ public:
   // https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
   String timeZone = "America/Los_Angeles"; // seems to be something wrong with Europe/Dublin
 
-  bool twentyFourHour = false;
+  bool twentyFourHour = true;
 
-  bool usDateFormat = false;
+  bool usDateFormat = true;
 
   // Per-quadrant world clock timezones, selectable from the touch UI.
   // Defaults match the compiled-in worldZones in ClockLogic.cpp.
-  String zoneName[4] = {"SANTA CLARA", "NEW YORK", "BEIJING", "LONDON"};
+  String zoneName[4] = {"SANTA CLARA", "NEW YORK", "BEIJING", "HONG KONG"};
   String zoneTZ[4] = {"America/Los_Angeles", "America/New_York",
-                      "Asia/Shanghai", "Europe/London"};
+                      "Asia/Shanghai", "Asia/Hong_Kong"};
 
   // User's preferred backlight level (1-255). Restored on boot and used as the
   // daytime target by auto-brightness.
-  int brightness = 80;
+  int brightness = 95;
 
   // Home-screen face (ClockFace enum in clockFaces.h): 0 = quad world clock,
   // 1 = big clock, 2 = calendar, 3 = weather, 4 = markets.
   int clockFace = 0;
 
   // Divider grid between the four quadrants of the world-clock face.
-  bool showGrid = false;
+  bool showGrid = true;
 
   // mDNS / OTA hostname ("<hostname>.local"). Changeable from the web
   // settings page so two clocks on one network don't collide; applied on the
@@ -104,11 +104,11 @@ public:
   //  - weatherAlerts: show a weather alert on a quadrant's market status line
   //    (US cities: official NWS warnings; others: severe conditions from the
   //    weather code). Alternates with the market status when both are present.
-  bool smoothTimeFont = true;
-  bool dayNightIcons = true;
-  bool homeMarker = true;
+  bool smoothTimeFont = false;
+  bool dayNightIcons = false;
+  bool homeMarker = false;
   bool quadWeather = true;
-  bool daylightBar = true;
+  bool daylightBar = false;
   bool marketProgressBar = true;
   bool weatherAlerts = true;
 
