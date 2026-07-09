@@ -12,15 +12,17 @@
 #include <esp_wifi.h>
 
 #include "ClockLogic.h"         // tft - on-device status screen (as otaUpdate does)
+#include "deviceIdentity.h"     // setup SSID + display identity
 #include "logBuffer.h"          // Log
 #include "genericBaseProject.h" // drd - stop it before the success/timeout reboot
 #include "netCheck.h"           // netCheckNow / NetReachability - online vs captive
 #include "projectConfig.h"      // save the picked network's extras
 
 // --- Hotspot identity -------------------------------------------------------
-// One SSID for the whole flow. Kept as the documented "esp32Project" so the
-// README's instructions still apply.
-static const char *AP_SSID = "esp32Project";
+// One SSID for the whole flow, derived from the same device label used by log
+// shipping: "<hostname>-<last six MAC hex>". This keeps multiple clocks in
+// setup mode distinguishable in the Wi-Fi picker.
+static String g_apSsid;
 static const char *AP_PASSWORD = "12345678";
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_MASK(255, 255, 255, 0);
@@ -173,36 +175,42 @@ static void drawScreen()
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(TL_DATUM);
     tft.drawCentreString("Wi-Fi setup", tft.width() / 2, 6, 2);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.drawCentreString(deviceLabel(), tft.width() / 2, 24, 2);
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.drawCentreString(deviceMacAddress(), tft.width() / 2, 42, 1);
 
     if (g_state == PS_SELECTING)
     {
-        tft.drawString("1. Join this Wi-Fi on your phone:", 5, 34, 2);
-        tft.setTextColor(TFT_CYAN, TFT_BLACK);
-        tft.drawString(String(AP_SSID), 20, 54, 2);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.drawString("   password: " + String(AP_PASSWORD), 5, 74, 2);
-        tft.drawString("2. A setup page opens; pick your", 5, 100, 2);
-        tft.drawString("   network and enter its password.", 5, 118, 2);
-        tft.drawString("(or browse to " + AP_IP.toString() + ")", 5, 150, 2);
+        tft.drawString("1. Join this Wi-Fi on your phone:", 5, 58, 2);
+        tft.setTextColor(TFT_CYAN, TFT_BLACK);
+        tft.drawString(g_apSsid, 20, 78, 2);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.drawString("   password: " + String(AP_PASSWORD), 5, 98, 2);
+        tft.drawString("2. A setup page opens; pick your", 5, 124, 2);
+        tft.drawString("   network and enter its password.", 5, 142, 2);
+        tft.drawString("(or browse to " + AP_IP.toString() + ")", 5, 174, 2);
     }
     else
     {
-        tft.drawString("Network: ", 5, 40, 2);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.drawString("Network: ", 5, 64, 2);
         tft.setTextColor(TFT_CYAN, TFT_BLACK);
-        tft.drawString(g_ssid, 90, 40, 2);
+        tft.drawString(g_ssid, 90, 64, 2);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
         // Wrap the status message across two lines if needed.
         String m = g_message;
         if (m.length() <= 34)
         {
-            tft.drawString(m, 5, 80, 2);
+            tft.drawString(m, 5, 104, 2);
         }
         else
         {
             int sp = m.lastIndexOf(' ', 34);
             if (sp < 0) sp = 34;
-            tft.drawString(m.substring(0, sp), 5, 80, 2);
-            tft.drawString(m.substring(sp + 1), 5, 100, 2);
+            tft.drawString(m.substring(0, sp), 5, 104, 2);
+            tft.drawString(m.substring(sp + 1), 5, 124, 2);
         }
     }
 }
@@ -250,7 +258,8 @@ button{background:#0a84ff;border-color:#0a84ff;color:#fff;margin-top:1em;font-we
 #msg{margin:1em 0;padding:.8em;border-radius:8px;background:#1c1c1e}
 .ok{color:#30d158}.warn{color:#ff9f0a}.err{color:#ff6961}small{color:#999}
 </style></head><body>
-<h1>World Clock &mdash; Wi-Fi setup</h1>
+<h1>%DEVICE% &mdash; Wi-Fi setup</h1>
+<p><small>Device MAC: <code>%MAC%</code><br>Setup Wi-Fi: <code>%APSSID%</code></small></p>
 <div id="pick">
 <label for="ssid">Network</label>
 <select id="ssid"><option>Scanning&hellip;</option></select>
@@ -282,7 +291,11 @@ else{m.innerHTML=s.msg||'&hellip;';}
 if(s.state!='online')setTimeout(poll,2000);}).catch(()=>setTimeout(poll,2000));}
 scan();
 </script></body></html>)HTML";
-    g_web.send_P(200, "text/html", PAGE);
+    String page = FPSTR(PAGE);
+    page.replace("%DEVICE%", deviceLabel());
+    page.replace("%MAC%", deviceMacAddress());
+    page.replace("%APSSID%", g_apSsid);
+    g_web.send(200, "text/html", page);
 }
 
 static void handleScan()
@@ -345,7 +358,9 @@ static void handleStatus()
     String msg = g_message;
     String j = "{\"state\":\"" + String(stateName()) + "\",\"ssid\":\"" +
                jsonEscape(g_ssid) + "\",\"msg\":\"" + jsonEscape(msg) +
-               "\",\"mac\":\"" + WiFi.macAddress() + "\"}";
+               "\",\"mac\":\"" + deviceMacAddress() + "\",\"device\":\"" +
+               jsonEscape(deviceLabel()) + "\",\"setupSsid\":\"" +
+               jsonEscape(g_apSsid) + "\"}";
     g_web.send(200, "application/json", j);
 }
 
@@ -386,9 +401,6 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
 {
     (void)forceConfig; // the caller already decided we should run
 
-    Log.println("Setup portal: starting unified Wi-Fi setup hotspot \"" +
-                String(AP_SSID) + "\"");
-
     // AP + STA together so the hotspot survives the upstream connect. (When the
     // STA associates the single radio hops to the STA's channel, briefly
     // dropping AP clients - the phone auto-rejoins the same SSID.)
@@ -402,8 +414,12 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
     // Present the (optional) cloned MAC on the STA before we associate, so the
     // captive login authorizes the same address the clock uses after reboot.
     applyStaMacOverride();
+    g_apSsid = setupPortalSsid();
+    Log.println("Setup portal: starting unified Wi-Fi setup hotspot \"" +
+                g_apSsid + "\" for device " + deviceLabel() +
+                " (MAC " + deviceMacAddress() + ")");
     WiFi.softAPConfig(AP_IP, AP_IP, AP_MASK);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
     delay(100);
 
     g_dns.setErrorReplyCode(DNSReplyCode::NoError);
@@ -425,7 +441,7 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
     unsigned long startedMs = millis();
     g_lastNetPollMs = 0;
 
-    Log.println("Setup portal: join \"" + String(AP_SSID) + "\" (password " +
+    Log.println("Setup portal: join \"" + g_apSsid + "\" (password " +
                 AP_PASSWORD + ") on a phone to configure Wi-Fi");
 
     while (g_state != PS_ONLINE)

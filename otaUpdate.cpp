@@ -8,10 +8,12 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED
+#include <stdlib.h>
 
 #include "brightness.h"
 #include "ClockLogic.h"         // tft, backlightLevel, SHOW_24HOUR, ...
 #include "clockFaces.h"         // FACE_COUNT, clockFaceName
+#include "deviceIdentity.h"     // device label shown in web UI / status JSON
 #include "factoryReset.h"       // factoryReset - /api/factory-reset
 #include "firmwareInfo.h"       // firmwareGitHash
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync counters
@@ -149,6 +151,7 @@ button:disabled{background:#444;cursor:default}
 .err{color:#ff6961}.ok{color:#30d158}
 </style></head><body><div class="card">
 <h1>ESP32 World Clock</h1>
+<p>Device: %DEVICE% &middot; MAC %MAC%</p>
 <p>Running build: %BUILD% &middot; git %GIT% &middot; <a href="/" style="color:#0a84ff">Settings</a></p>
 <p>Select a firmware image (<code>firmware.bin</code> from PlatformIO's
 <code>.pio/build/cyd/</code>, or Arduino IDE &gt; Sketch &gt; Export Compiled
@@ -201,6 +204,8 @@ static void handleUpdatePage()
     String page = FPSTR(UPDATE_PAGE);
     page.replace("%BUILD%", String(__DATE__) + " " + __TIME__);
     page.replace("%GIT%", firmwareGitHash());
+    page.replace("%DEVICE%", deviceLabel());
+    page.replace("%MAC%", deviceMacAddress());
     webServer.send(200, "text/html", page);
 }
 
@@ -369,6 +374,7 @@ static void handleSettingsPage()
     String page;
     page.reserve(14336);
     page += FPSTR(SETTINGS_PAGE_HEAD);
+    page += "<p>Device: " + deviceLabel() + " &middot; MAC " + deviceMacAddress() + "</p>";
     page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
             " &middot; git " + String(firmwareGitHash()) +
             " &middot; <a href=\"/update\">Firmware update</a>"
@@ -599,7 +605,8 @@ static void handleSettingsPost()
             projectConfig.flipDisplay = v;
             // Applies right away: switchToScreen below repaints everything in
             // the new orientation, and touch reads follow the setting.
-            tft.setRotation(v ? 3 : 1);
+            tft.setRotation(v ? BOARD_TFT_ROTATION_FLIPPED
+                              : BOARD_TFT_ROTATION_NORMAL);
             cfgDirty = true;
         }
     }
@@ -842,6 +849,11 @@ static void handleApiStatus()
     doc["utcEpoch"] = (long)UTC.now();
     doc["build"] = String(__DATE__) + " " + __TIME__;
     doc["git"] = firmwareGitHash();
+    doc["device"] = deviceLabel();
+    doc["deviceMac"] = deviceMacAddress();
+    doc["board"] = BOARD_PROFILE_NAME;
+    doc["displayWidth"] = tft.width();
+    doc["displayHeight"] = tft.height();
     doc["clockFace"] = clockFaceName(projectConfig.clockFace);
     doc["brightness"] = backlightLevel;
     doc["weatherAgeMin"] = weatherAgeMinutes();
@@ -953,8 +965,8 @@ static void handleApiLogs()
 }
 
 /*-------- Screenshot (debug) ----------*/
-// GET /screenshot streams the panel's current contents as a 24-bit BMP
-// (320x240, ~226 KB), read back from the display controller over SPI one
+// GET /screenshot streams the panel's current contents as a 24-bit BMP,
+// read back from the display controller over SPI one
 // line at a time. Lets a developer see exactly what a remote clock is
 // showing (bug reports, UI work) without standing in front of it. Runs on
 // the main loop core between frame updates like every other handler, so the
@@ -969,11 +981,21 @@ static void handleScreenshot()
         return;
     }
 
-    const int w = tft.width();  // 320x240 in both mounting orientations
+    const int w = tft.width();
     const int h = tft.height();
-    const uint32_t rowBytes = (uint32_t)w * 3; // 24bpp; 320*3 is 4-aligned
+    const uint32_t rowBytes = (uint32_t)w * 3; // 24bpp
     const uint32_t imgBytes = rowBytes * h;
     const uint32_t fileSize = 54 + imgBytes;
+
+    uint16_t *line = (uint16_t *)malloc((size_t)w * sizeof(uint16_t));
+    uint8_t *row = (uint8_t *)malloc((size_t)rowBytes);
+    if (!line || !row)
+    {
+        free(line);
+        free(row);
+        webServer.send(503, "text/plain", "not enough heap for screenshot");
+        return;
+    }
 
     // BITMAPFILEHEADER + BITMAPINFOHEADER, little-endian
     uint8_t hdr[54] = {0};
@@ -1000,8 +1022,6 @@ static void handleScreenshot()
     webServer.send(200, "image/bmp", "");
     webServer.sendContent((const char *)hdr, sizeof(hdr));
 
-    uint16_t line[320];
-    uint8_t row[320 * 3];
     for (int y = h - 1; y >= 0; y--) // BMP pixel rows run bottom-up
     {
         tft.readRect(0, y, w, 1, line);
@@ -1020,6 +1040,8 @@ static void handleScreenshot()
         }
         webServer.sendContent((const char *)row, rowBytes);
     }
+    free(line);
+    free(row);
 }
 
 /*-------- Remote UI navigation (debug) ----------*/

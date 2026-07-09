@@ -8,6 +8,7 @@
 #include <XPT2046_Bitbang.h>
 #include <ezTime.h>
 
+#include "boardProfile.h"
 #include "logBuffer.h" // the Log tee used by CLOCK_DEBUG_PRINTLN and all logging
 #include "dateMath.h"  // daysFromCivil / civilFromDays (host-tested pure math)
 
@@ -43,7 +44,7 @@ const unsigned long BRIGHTNESS_BAR_TIMEOUT_MS = 2000; // 2 seconds
 // it falls back to a time-of-day schedule (the configurable night window on
 // home-zone time). Use the LDR serial command to inspect the live readings.
 #ifndef USE_LDR_AUTOBRIGHTNESS
-#define USE_LDR_AUTOBRIGHTNESS 1
+#define USE_LDR_AUTOBRIGHTNESS BOARD_HAS_LDR_AUTOBRIGHTNESS
 #endif
 // Most CYDs read HIGH in the dark; set to 0 if yours is wired the other way
 // (check with the LDR serial command: cover the sensor and watch the value).
@@ -94,6 +95,10 @@ extern XPT2046_Bitbang touchscreen;
 extern WorldClockZone worldZones[4];
 
 extern uint16_t clockBackgroundColor;
+extern int screenWidth;
+extern int screenHeight;
+extern int quadrantWidth;
+extern int quadrantHeight;
 
 // Display format settings (mirrored to/from projectConfig by the settings UI)
 extern bool SHOW_24HOUR;

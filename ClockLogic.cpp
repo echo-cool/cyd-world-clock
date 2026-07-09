@@ -21,7 +21,8 @@
 #include "timeFormat.h"     // puretime::formatHHMM - host-tested 12/24h formatting
 #include "marketSession.h"  // host-tested trading-session membership math
 
-// Off-screen buffer for one full clock quadrant (160x120x16bpp = 38KB). Each
+// Off-screen buffer for one full clock quadrant (160x120 on CYD, 240x160 on
+// Hosyond 4.0). Each
 // quadrant is rendered here and pushed to the panel in a single blit, so the
 // per-minute updates never show a half-drawn (black-flashing) quadrant. If the
 // allocation ever fails the code falls back to drawing directly on the panel.
@@ -35,13 +36,9 @@ static void ensureQuadSpriteMutex()
     if (!quadSpriteMutex) quadSpriteMutex = xSemaphoreCreateMutex();
 }
 
-// Touch screen pins (bit-banged SPI)
-#define MOSI_PIN 32
-#define MISO_PIN 39
-#define CLK_PIN  25
-#define CS_PIN   33
-
-XPT2046_Bitbang touchscreen(MOSI_PIN, MISO_PIN, CLK_PIN, CS_PIN);
+XPT2046_Bitbang touchscreen(BOARD_TOUCH_MOSI, BOARD_TOUCH_MISO,
+                            BOARD_TOUCH_CLK, BOARD_TOUCH_CS,
+                            BOARD_TOUCH_WIDTH, BOARD_TOUCH_HEIGHT);
 
 int clockFont = 4;  // Changed to font 4 for better readability
 int clockSize = 2;  // Moderate size for Font 4 to fit in quadrants
@@ -117,22 +114,23 @@ void adjustBrightnessAuto();
 
 void SetupCYD()
 {
-    Log.println("SetupCYD");
+    Log.println(String("Setup display: ") + BOARD_PROFILE_NAME);
     // tft.init();
     tft.fillScreen(clockBackgroundColor);
     tft.setTextColor(clockFontColor, clockBackgroundColor);
 
-    tft.setRotation(projectConfig.flipDisplay ? 3 : 1);
+    tft.setRotation(projectConfig.flipDisplay ? BOARD_TFT_ROTATION_FLIPPED
+                                              : BOARD_TFT_ROTATION_NORMAL);
     tft.setTextFont(clockFont);
     tft.setTextSize(clockSize);
     tft.setTextDatum(clockDatum);
 }
 
-// Screen dimensions (320x240)
-int screenWidth = 320;
-int screenHeight = 240;
-int quadrantWidth = 160;  // 320/2
-int quadrantHeight = 120; // 240/2
+// Screen dimensions for the selected board profile.
+int screenWidth = BOARD_DISPLAY_WIDTH;
+int screenHeight = BOARD_DISPLAY_HEIGHT;
+int quadrantWidth = BOARD_DISPLAY_WIDTH / 2;
+int quadrantHeight = BOARD_DISPLAY_HEIGHT / 2;
 
 static bool createQuadSpriteLocked()
 {
@@ -147,10 +145,11 @@ struct QuadrantPos {
 };
 
 QuadrantPos quadrants[4] = {
-    {0, 0, 80, 60},           // Top-left
-    {160, 0, 240, 60},        // Top-right
-    {0, 120, 80, 180},        // Bottom-left
-    {160, 120, 240, 180}      // Bottom-right
+    {0, 0, BOARD_DISPLAY_WIDTH / 4, BOARD_DISPLAY_HEIGHT / 4},
+    {BOARD_DISPLAY_WIDTH / 2, 0, BOARD_DISPLAY_WIDTH * 3 / 4, BOARD_DISPLAY_HEIGHT / 4},
+    {0, BOARD_DISPLAY_HEIGHT / 2, BOARD_DISPLAY_WIDTH / 4, BOARD_DISPLAY_HEIGHT * 3 / 4},
+    {BOARD_DISPLAY_WIDTH / 2, BOARD_DISPLAY_HEIGHT / 2,
+     BOARD_DISPLAY_WIDTH * 3 / 4, BOARD_DISPLAY_HEIGHT * 3 / 4}
 };
 
 String formatHHMM(time_t local, bool &pm)
@@ -711,6 +710,64 @@ static String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth)
     return out.length() > 0 ? out + "..." : String("");
 }
 
+static bool useLargeQuadrantLayout()
+{
+    return quadrantWidth >= 220 && quadrantHeight >= 150;
+}
+
+static void drawQuadrantTime(TFT_eSPI &gfx, const String &hhmm, int centerX,
+                             int y, uint16_t color, bool largeLayout)
+{
+    gfx.setTextDatum(TC_DATUM);
+    gfx.setTextColor(color, clockBackgroundColor);
+
+    if (largeLayout && !projectConfig.smoothTimeFont) {
+        // Use a narrower centered time than TFT_eSPI Font 8. Font 8 fills the
+        // 240px quadrant almost edge-to-edge, which reads visually left-heavy
+        // on this panel even when mathematically centered.
+        gfx.setTextFont(clockFont);
+        gfx.setTextSize(3);
+        if (gfx.textWidth(hhmm) <= quadrantWidth - 24) {
+            gfx.drawString(hhmm, centerX, y);
+            return;
+        }
+
+        gfx.setTextSize(2);
+        gfx.drawString(hhmm, centerX, y + 8);
+        return;
+    }
+
+    if (projectConfig.smoothTimeFont) {
+        // Anti-aliased 52pt digits (fontTimeDigits.h). The font was designed
+        // for the 160x120 CYD quadrants, but still remains available on larger
+        // panels when the user explicitly prefers the smooth style.
+        gfx.loadFont(TIME_DIGITS_VLW);
+        gfx.drawString(hhmm, centerX, largeLayout ? y + 8 : y + 4);
+        gfx.unloadFont();
+    } else {
+        gfx.setTextFont(clockFont);
+        gfx.setTextSize(clockSize);
+        gfx.drawString(hhmm, centerX, largeLayout ? y + 8 : y);
+    }
+}
+
+static void drawCenteredTextFit(TFT_eSPI &gfx, const String &text, int centerX, int y,
+                                uint16_t color, int maxWidth,
+                                int preferredSize, int minSize)
+{
+    gfx.setTextFont(1);
+    gfx.setTextDatum(TC_DATUM);
+    gfx.setTextColor(color, clockBackgroundColor);
+    for (int size = preferredSize; size >= minSize; --size) {
+        gfx.setTextSize(size);
+        if (gfx.textWidth(text) <= maxWidth) {
+            gfx.drawString(text, centerX, y);
+            return;
+        }
+    }
+    gfx.drawString(fitTextToWidth(gfx, text, maxWidth), centerX, y);
+}
+
 // Render one quadrant's full content (label, time, AM/PM, day/date, market
 // status) with gfx primitives at offset (ox, oy). gfx is normally the
 // off-screen quadSprite (ox = oy = 0), which is then pushed to the panel in
@@ -739,6 +796,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     uint16_t timeColor = getDayNightColor(zone);
     uint16_t labelColor = getDayNightLabelColor(zone);
     int centerX = ox + quadrantWidth / 2;
+    bool largeLayout = useLargeQuadrantLayout();
 
     // Accent border marking the home quadrant - the reference all the (+1)
     // day offsets are computed against. Drawn first so the bars/text win any
@@ -750,35 +808,28 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Sun/moon glyph in the top-left corner: the explicit day/night marker
     // (the text colors alone used to carry this meaning)
     if (projectConfig.dayNightIcons) {
-        drawDayNightIcon(gfx, ox + 7, oy + 11, phase);
+        drawDayNightIcon(gfx, ox + (largeLayout ? 12 : 7),
+                         oy + (largeLayout ? 14 : 11), phase);
     }
 
-    // Timezone label, top-center
-    gfx.setTextFont(1);
-    gfx.setTextSize(2);
-    gfx.setTextDatum(TC_DATUM);
-    gfx.setTextColor(labelColor, clockBackgroundColor);
-    gfx.drawString(zone.name, centerX, oy + 5);
+    // Timezone label, top-center. Large panels can afford a stronger city
+    // header; long names fall back by measured pixel width.
+    if (largeLayout) {
+        drawCenteredTextFit(gfx, zone.name, centerX, oy + 2, labelColor,
+                            quadrantWidth - 14, 3, 2);
+    } else {
+        gfx.setTextFont(1);
+        gfx.setTextSize(2);
+        gfx.setTextDatum(TC_DATUM);
+        gfx.setTextColor(labelColor, clockBackgroundColor);
+        gfx.drawString(zone.name, centerX, oy + 5);
+    }
 
     // Time (HH:MM), centered between the label and the date block
     bool pm;
     String hhmm = formatHHMM(local, pm);
-    gfx.setTextDatum(TC_DATUM);
-    gfx.setTextColor(timeColor, clockBackgroundColor);
-    if (projectConfig.smoothTimeFont) {
-        // Anti-aliased 52pt digits (fontTimeDigits.h) instead of the blocky
-        // pixel-doubled Font 4. The font's ascent equals the digit cap
-        // height, so with TC_DATUM the digit tops land exactly on this y
-        // (37px tall - clears the city name above and the daylight bar /
-        // day line below).
-        gfx.loadFont(TIME_DIGITS_VLW);
-        gfx.drawString(hhmm, centerX, oy + 26);
-        gfx.unloadFont();
-    } else {
-        gfx.setTextFont(clockFont);
-        gfx.setTextSize(clockSize);
-        gfx.drawString(hhmm, centerX, oy + 22);
-    }
+    drawQuadrantTime(gfx, hhmm, centerX, oy + (largeLayout ? 29 : 22),
+                     timeColor, largeLayout);
 
     // In 12-hour mode, an AM/PM indicator in the top-right of the quadrant
     if (!SHOW_24HOUR) {
@@ -792,14 +843,16 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Daylight gradient bar under the time. It needs a few extra rows, so the
     // day/date lines shift down slightly while it is enabled; with it off the
     // layout is exactly the classic one.
-    int dayY = oy + quadrantHeight - 50;     // day name (size 2)
-    int holidayY = oy + quadrantHeight - 46; // holiday day line (size 1)
-    int dateY = oy + quadrantHeight - 30;    // date (size 2)
+    int dayY = oy + quadrantHeight - (largeLayout ? 68 : 50);     // day name
+    int holidayY = oy + quadrantHeight - (largeLayout ? 63 : 46); // holiday day line
+    int dateY = oy + quadrantHeight - (largeLayout ? 43 : 30);    // date/weather
     if (projectConfig.daylightBar) {
-        renderDaylightBar(gfx, centerX - 60, oy + 69, 120, zone);
-        dayY = oy + 74;
-        holidayY = oy + 78;
-        dateY = oy + 92;
+        int barWidth = largeLayout ? min(180, quadrantWidth - 40) : 120;
+        int barY = largeLayout ? oy + 92 : oy + 69;
+        renderDaylightBar(gfx, centerX - barWidth / 2, barY, barWidth, zone);
+        dayY = largeLayout ? oy + 98 : oy + 74;
+        holidayY = largeLayout ? oy + 103 : oy + 78;
+        dateY = largeLayout ? oy + 119 : oy + 92;
     }
 
     // Weather alerts share the weekday/holiday line, so refresh the cached
@@ -849,12 +902,9 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     } else if (isHoliday) {
         gfx.setTextColor(TFT_GOLD, clockBackgroundColor);
         String dayLine = dayText + " - " + holidayName;
-        if (dayLine.length() > 26) {
-            dayLine = dayLine.substring(0, 26); // keep it inside the quadrant
-        }
         gfx.setTextSize(1);
         // Vertically centered in the slot the size-2 day name normally fills
-        gfx.drawString(dayLine, centerX, holidayY);
+        gfx.drawString(fitTextToWidth(gfx, dayLine, quadrantWidth - 8), centerX, holidayY);
     } else {
         gfx.setTextColor(labelColor, clockBackgroundColor);
         gfx.setTextSize(2);
@@ -864,19 +914,29 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     gfx.setTextSize(2);
     if (showNoticeOnDateLine(zone)) {
         // The date/weather line alternates with near-term precipitation
-        // changes. Font 2 is readable in the 160px quadrant; measured clipping
-        // keeps unusual strings inside the column.
-        gfx.setTextFont(2);
-        gfx.setTextSize(1);
+        // changes. Large quadrants use the full-width GLCD x2 row; measured
+        // clipping keeps unusual strings inside either column size.
+        gfx.setTextFont(largeLayout ? 1 : 2);
+        gfx.setTextSize(largeLayout ? 2 : 1);
         gfx.setTextDatum(TC_DATUM);
         gfx.setTextColor(weatherNoticeColor(zone.weatherNotice), clockBackgroundColor);
-        gfx.drawString(fitTextToWidth(gfx, zone.weatherNotice, quadrantWidth - 8),
-                       centerX, dateY + 1);
+        gfx.drawString(fitTextToWidth(gfx, zone.weatherNotice,
+                                      quadrantWidth - (largeLayout ? 16 : 8)),
+                       centerX, dateY + (largeLayout ? 0 : 1));
     } else {
-        // With quadrant weather enabled the date shifts left to leave a stable
-        // slot for the temperature and icon.
-        int dateX = projectConfig.quadWeather ? centerX - 12 : centerX;
-        gfx.drawString(dateBuffer, dateX, dateY);
+        // With quadrant weather enabled, large panels keep the date centered;
+        // the weather badge moves to the day row so it does not pull the
+        // primary time/date stack off-center.
+        int dateX = centerX;
+        if (projectConfig.quadWeather) {
+            dateX = largeLayout ? centerX - 34 : centerX - 12;
+        }
+        if (largeLayout && projectConfig.quadWeather) {
+            gfx.setTextDatum(TC_DATUM);
+            gfx.drawString(dateBuffer, centerX, dateY);
+        } else {
+            gfx.drawString(dateBuffer, dateX, dateY);
+        }
     }
 
     // Current temperature on the right of the date line (the date is always
@@ -890,15 +950,18 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         if (w.valid) {
             String temp = String(displayTemp(w.tempC));
             gfx.setTextFont(1);
-            gfx.setTextSize(1);
+            gfx.setTextSize(largeLayout ? 2 : 1);
             gfx.setTextDatum(TR_DATUM);
             gfx.setTextColor(TFT_WHITE, clockBackgroundColor);
-            int tempRight = ox + quadrantWidth - 10;
-            gfx.drawString(temp, tempRight, dateY + 4);
-            gfx.drawCircle(ox + quadrantWidth - 7, dateY + 5, 2, TFT_WHITE); // degree mark
+            int tempRight = ox + quadrantWidth - (largeLayout ? 16 : 10);
+            int tempY = largeLayout ? dayY + 1 : dateY + 4;
+            gfx.drawString(temp, tempRight, tempY);
+            gfx.drawCircle(tempRight + (largeLayout ? 4 : 3),
+                           tempY + (largeLayout ? 4 : 1), 2, TFT_WHITE); // degree mark
             if (temp.length() <= 3) {
-                drawWeatherIcon(gfx, tempRight - gfx.textWidth(temp) - 10,
-                                dateY + 8, w.weatherCode);
+                drawWeatherIcon(gfx, tempRight - gfx.textWidth(temp) -
+                                      (largeLayout ? 17 : 10),
+                                largeLayout ? tempY + 8 : dateY + 8, w.weatherCode);
             }
         }
     }
@@ -908,11 +971,17 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // not drawn.
     StatusLine line = computeMarketStatusLine(zone);
     if (line.text.length() > 0 && (!line.flashes || flashState)) {
-        gfx.setTextFont(1);
-        gfx.setTextSize(1);
-        gfx.setTextDatum(TC_DATUM);
-        gfx.setTextColor(line.color, clockBackgroundColor);
-        gfx.drawString(line.text, centerX, oy + quadrantHeight - 10);
+        if (largeLayout) {
+            drawCenteredTextFit(gfx, line.text, centerX, oy + quadrantHeight - 18,
+                                line.color, quadrantWidth - 8, 2, 2);
+        } else {
+            gfx.setTextFont(1);
+            gfx.setTextSize(1);
+            gfx.setTextDatum(TC_DATUM);
+            gfx.setTextColor(line.color, clockBackgroundColor);
+            gfx.drawString(fitTextToWidth(gfx, line.text, quadrantWidth - 8),
+                           centerX, oy + quadrantHeight - 10);
+        }
     }
 
     // Trading-day progress along the bottom edge while the exchange is inside
@@ -921,7 +990,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     if (projectConfig.marketProgressBar) {
         float frac;
         if (marketDayProgress(zone, frac)) {
-            int barWidth = 120;
+            int barWidth = largeLayout ? min(180, quadrantWidth - 40) : 120;
             int barX = centerX - barWidth / 2;
             int barY = oy + quadrantHeight - 2;
             gfx.fillRect(barX, barY, barWidth, 2, 0x39E7 /* dim grey track */);
@@ -972,7 +1041,8 @@ void resetFlashChangeFlag()
 void updateDynamicQuadrantArea(WorldClockZone &zone, int quadrantIndex)
 {
     QuadrantPos quad = quadrants[quadrantIndex];
-    const int bandY = quadrantHeight - 56;
+    const int bandY = useLargeQuadrantLayout() ? quadrantHeight - 78
+                                               : quadrantHeight - 56;
     const int bandH = quadrantHeight - bandY;
 
     bool usedSprite = false;
@@ -1295,10 +1365,11 @@ void clockRestoreRenderBufferForNetwork(bool released)
 void showBrightnessBar(int brightness)
 {
     // Draw brightness bar in center of screen
-    int barWidth = 200;
+    int barWidth = min(260, screenWidth - 80);
     int barHeight = 20;
-    int barX = (320 - barWidth) / 2;  // Center horizontally
-    int barY = 110;  // Center vertically
+    int centerX = screenWidth / 2;
+    int barX = (screenWidth - barWidth) / 2;
+    int barY = (screenHeight - barHeight) / 2;
 
     // Clear area around the bar
     tft.fillRect(barX - 10, barY - 30, barWidth + 20, barHeight + 60, clockBackgroundColor);
@@ -1308,7 +1379,7 @@ void showBrightnessBar(int brightness)
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("BRIGHTNESS", 160, barY - 20);
+    tft.drawString("BRIGHTNESS", centerX, barY - 20);
 
     // Draw outer border
     tft.drawRect(barX - 2, barY - 2, barWidth + 4, barHeight + 4, TFT_WHITE);
@@ -1336,7 +1407,7 @@ void showBrightnessBar(int brightness)
     // Draw percentage text
     int percentage = brightnessPercent(brightness);
     tft.setTextDatum(TC_DATUM);
-    tft.drawString(String(percentage) + "%", 160, barY + barHeight + 10);
+    tft.drawString(String(percentage) + "%", centerX, barY + barHeight + 10);
 }
 
 void rollingClockSetup(bool is24Hour, bool usDate)
@@ -1350,19 +1421,25 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // back for the zone-setup steps below.
     bootUiRefresh();
 
-    // Off-screen quadrant buffer for flicker-free updates (see quadSprite)
+    // Off-screen quadrant buffer for flicker-free updates (see quadSprite).
+    // Larger boards can opt out to keep heap available for network fetchers.
     ensureQuadSpriteMutex();
     if (quadSpriteMutex) xSemaphoreTake(quadSpriteMutex, portMAX_DELAY);
-    quadSpriteWanted = true;
-    bool spriteReady = createQuadSpriteLocked();
+    quadSpriteWanted = BOARD_USE_QUAD_SPRITE;
+    bool spriteReady = !quadSpriteWanted || createQuadSpriteLocked();
     if (quadSpriteMutex) xSemaphoreGive(quadSpriteMutex);
-    if (!spriteReady) {
+    if (quadSpriteWanted && !spriteReady) {
         Log.println("WARNING: quadrant sprite allocation failed - drawing direct to panel");
     }
 
-    // Initialize touch screen
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_BITBANG
+    // Initialize touch screen. Hosyond's touch shares the LCD SPI pins, so that
+    // profile uses TFT_eSPI's SPI-transaction touch path instead.
     touchscreen.begin();
-    Log.println("Touch screen initialized");
+    Log.println("Touch screen initialized (bitbang)");
+#else
+    Log.println("Touch screen initialized (TFT_eSPI shared SPI)");
+#endif
 
 #if USE_LDR_AUTOBRIGHTNESS
     // 0 dB attenuation: the CYD's LDR divider only produces small voltages,
@@ -1500,12 +1577,19 @@ void rollingClockSetup(bool is24Hour, bool usDate)
 
 TouchPoint readTouchPoint()
 {
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+    uint16_t x = 0;
+    uint16_t y = 0;
+    TouchPoint t = tft.getTouch(&x, &y) ? TouchPoint{x, y, x, y, 1000}
+                                        : TouchPoint{0, 0, 0, 0, 0};
+#else
     TouchPoint t = touchscreen.getTouch();
+#endif
     if (projectConfig.flipDisplay) {
-        // Rotation 3 mirrors both axes relative to the touch panel's fixed
-        // orientation (calibrated for rotation 1).
-        t.x = 320 - 1 - t.x;
-        t.y = 240 - 1 - t.y;
+        // The flipped board rotation mirrors both axes relative to the touch
+        // panel's fixed orientation.
+        t.x = screenWidth - 1 - t.x;
+        t.y = screenHeight - 1 - t.y;
     }
     return t;
 }
@@ -1525,10 +1609,12 @@ void handleTouch()
     {
         unsigned long currentTime = millis();
 
-        // getTouch() already maps touch.x into screen pixels (0..screenWidth),
-        // so the 320px screen splits into three touch zones:
+        // getTouch() already maps touch.x into screen pixels, so the screen
+        // splits into three touch zones:
         //   left third  = dimmer, center third = settings, right third = brighter
-        if (touch.x >= 107 && touch.x <= 213)
+        int leftThird = screenWidth / 3;
+        int rightThird = (screenWidth * 2) / 3;
+        if (touch.x >= leftThird && touch.x <= rightThird)
         {
             // Center tap opens the settings page. switchToScreen suppresses
             // further touch input until the finger is lifted.
@@ -1541,7 +1627,7 @@ void handleTouch()
         // Debounce - only allow one touch every 10ms for brightness control
         if (currentTime - lastTouchTime > 10)
         {
-            if (touch.x < 107) // Left third - make dimmer
+            if (touch.x < leftThird) // Left third - make dimmer
             {
                 backlightLevel = clampBrightness(backlightLevel - 1);
 
@@ -1637,9 +1723,11 @@ static void serviceWifiIndicator()
             int w = tft.textWidth(label);
             // Clear rect + the 8px text cell both end at row 237: rows 238-239
             // belong to the bottom quadrants' market progress bars.
-            tft.fillRect(160 - w / 2 - 2, 230, w + 4, 8, clockBackgroundColor);
+            int cx = screenWidth / 2;
+            int y = screenHeight - 10;
+            tft.fillRect(cx - w / 2 - 2, y, w + 4, 8, clockBackgroundColor);
             tft.setTextColor(captive ? TFT_ORANGE : TFT_RED, clockBackgroundColor);
-            tft.drawString(label, 160, 230);
+            tft.drawString(label, cx, y);
             drawn = true;
             shownLabel = label;
             lastDrawMs = millis();

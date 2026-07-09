@@ -1,21 +1,20 @@
 # Build verification + firmware releases.
 #
-# - Every push to main / pull request / manual run: compile the firmware with
-#   PlatformIO (same toolchain as local `pio run`) and upload the images as a
-#   workflow artifact.
+# - Every push to main / pull request / manual run: compile firmware for every
+#   supported display profile with PlatformIO and upload the images as workflow
+#   artifacts.
 # - Pushing a tag like v1.2.0 additionally creates a GitHub Release with the
-#   firmware attached:
-#     esp32worldclock-<tag>-ota.bin      upload via the web updater (/update)
-#                                        or espota - app image only
-#     esp32worldclock-<tag>-factory.bin  full image (bootloader + partition
-#                                        table + app) for a first USB flash:
-#                                        esptool write_flash 0x0 <file>
+#   board-specific firmware attached:
+#     esp32worldclock-<tag>-cyd28-320x240-ota.bin
+#     esp32worldclock-<tag>-cyd28-320x240-factory.bin
+#     esp32worldclock-<tag>-hosyond40-320x480-ota.bin
+#     esp32worldclock-<tag>-hosyond40-320x480-factory.bin
 #
 # To cut a release:  git tag v1.2.0 && git push origin v1.2.0
 #
 # CI builds use secrets.h.example verbatim, so released binaries contain no
-# WiFi credentials - a freshly flashed device opens the WiFiManager captive
-# portal (and devices updated over OTA keep their stored WiFi).
+# WiFi credentials - a freshly flashed device opens the captive setup portal
+# (and devices updated over OTA keep their stored WiFi).
 
 name: Build
 
@@ -63,6 +62,16 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: cyd
+            suffix: cyd28-320x240
+            label: CYD 2.8 in 320x240
+          - env: hosyond40
+            suffix: hosyond40-320x480
+            label: Hosyond 4.0 in 320x480
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -91,36 +100,58 @@ jobs:
       - name: Create secrets.h from template
         run: cp secrets.h.example secrets.h
 
-      - name: Build firmware
-        run: pio run
+      - name: Build firmware (${{ matrix.label }})
+        run: pio run -e "${{ matrix.env }}"
 
-      - name: Stage firmware images
+      - name: Stage firmware images (${{ matrix.label }})
         run: |
           VERSION="${GITHUB_REF_NAME}"
           if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
             VERSION="${GITHUB_SHA::7}"
           fi
           mkdir -p out
-          cp .pio/build/cyd/firmware.bin "out/esp32worldclock-${VERSION}-ota.bin"
-          if [ -f .pio/build/cyd/firmware.factory.bin ]; then
-            cp .pio/build/cyd/firmware.factory.bin "out/esp32worldclock-${VERSION}-factory.bin"
+          cp ".pio/build/${{ matrix.env }}/firmware.bin" \
+            "out/esp32worldclock-${VERSION}-${{ matrix.suffix }}-ota.bin"
+          if [ -f ".pio/build/${{ matrix.env }}/firmware.factory.bin" ]; then
+            cp ".pio/build/${{ matrix.env }}/firmware.factory.bin" \
+              "out/esp32worldclock-${VERSION}-${{ matrix.suffix }}-factory.bin"
           fi
           ls -l out/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: firmware-${{ matrix.suffix }}
           path: out/
 
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: out
+          merge-multiple: true
+
+      - name: List release files
+        run: ls -l out/
+
       - name: Create release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: out/*
           generate_release_notes: true
           body: |
-            Firmware images for the ESP32 World Clock (CYD, min_spiffs partitions):
+            Firmware images for the ESP32 World Clock. Download the file that
+            matches your display board:
+
+            - **CYD 2.8" 320x240 ILI9341**:
+              `esp32worldclock-*-cyd28-320x240-*.bin`
+            - **Hosyond/LCDWiki 4.0" 320x480 ST7796S**:
+              `esp32worldclock-*-hosyond40-320x480-*.bin`
 
             - **`-ota.bin`** — app image. Upload it through the device's web
               updater at `http://esp32worldclock.local/update` (or via espota).
@@ -130,6 +161,7 @@ jobs:
 
             These binaries are built from `secrets.h.example`, so they contain
             no WiFi credentials: a freshly flashed device opens the
-            `esp32Project` captive portal for setup, and OTA is unauthenticated
-            until you build locally with an `OTA_PASSWORD`. Devices updated
-            over OTA keep their stored WiFi and display settings.
+            per-device setup captive portal for WiFi setup, and OTA is
+            unauthenticated until you build locally with an `OTA_PASSWORD`.
+            Devices updated over OTA keep their stored WiFi and display
+            settings.

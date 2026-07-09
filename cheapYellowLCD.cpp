@@ -4,6 +4,8 @@
 #include <FS.h>
 
 #include "cheapYellowLCD.h"
+#include "boardProfile.h"
+#include "deviceIdentity.h"
 #include "logBuffer.h"
 #include "projectConfig.h" // flipDisplay - panel orientation
 
@@ -12,14 +14,15 @@ TFT_eSPI tft = TFT_eSPI();
 void CheapYellowDisplay::displaySetup()
 {
 
-  Log.println("cyd display setup");
-  setWidth(320);
-  setHeight(240);
+  Log.println(String("display setup: ") + BOARD_PROFILE_NAME);
+  setWidth(BOARD_DISPLAY_WIDTH);
+  setHeight(BOARD_DISPLAY_HEIGHT);
 
-  // Start the tft display and set it to black. Rotation 1 is the CYD's
-  // native landscape; 3 is the same panel mounted upside down (flipDisplay).
+  // Start the tft display and set it to black. Board profiles supply the
+  // rotations that make the UI coordinate system landscape.
   tft.init();
-  tft.setRotation(projectConfig.flipDisplay ? 3 : 1);
+  tft.setRotation(projectConfig.flipDisplay ? BOARD_TFT_ROTATION_FLIPPED
+                                            : BOARD_TFT_ROTATION_NORMAL);
   tft.fillScreen(TFT_BLACK);
 
   // Compact title at the top: the area below is the boot console (uiPages),
@@ -28,14 +31,15 @@ void CheapYellowDisplay::displaySetup()
   tft.setTextSize(1);
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("System initializing...", 160, 2);
+  tft.drawString("System initializing...", BOARD_DISPLAY_WIDTH / 2, 2);
 
-  // Firmware version (compile timestamp) right under the title, so the running
-  // build is clearly readable the moment the screen comes up. Kept in sync with
-  // bootUiRefresh in uiPages.cpp, which repaints this same header.
+  // Device identity is shown immediately so two clocks in setup mode are easy
+  // to tell apart before the phone joins the setup hotspot.
   tft.setTextFont(1);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.drawString(String(__DATE__) + " " + __TIME__, 160, 22);
+  tft.drawString(deviceLabel(), BOARD_DISPLAY_WIDTH / 2, 18);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.drawString(deviceMacAddress(), BOARD_DISPLAY_WIDTH / 2, 28);
 
-  tft.drawFastHLine(0, 32, 320, TFT_DARKGREY);
+  tft.drawFastHLine(0, 38, BOARD_DISPLAY_WIDTH, TFT_DARKGREY);
 }

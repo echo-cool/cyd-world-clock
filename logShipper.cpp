@@ -31,6 +31,7 @@ void logShipperPrintStatus(Print &out)
 
 #include "ClockLogic.h" // release 38KB quadrant sprite for optional HTTPS sink
 #include "genericBaseProject.h" // ntpSyncStatus
+#include "deviceIdentity.h"
 #include "logBuffer.h"
 #include "otaUpdate.h"    // otaInProgress
 #include "projectConfig.h" // hostname -> prefix for the "device" label
@@ -84,7 +85,7 @@ static volatile int lastPushCode = 0;      // last HTTP result (0 = none yet)
 static volatile uint32_t consecutiveFailures = 0;
 static volatile bool taskStarted = false;
 
-static String deviceLabel; // hostname + MAC suffix snapshot (changes need a reboot)
+static String shipDeviceLabel; // hostname + MAC suffix snapshot (changes need a reboot)
 static char bootId[9];
 
 struct RenderBufferReleaseGuard
@@ -93,28 +94,6 @@ struct RenderBufferReleaseGuard
     RenderBufferReleaseGuard(bool active) : released(active ? clockReleaseRenderBufferForNetwork() : false) {}
     ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
 };
-
-static String compactStaMacSuffix()
-{
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    mac.toLowerCase();
-    if (mac.length() >= 6)
-    {
-        return mac.substring(mac.length() - 6);
-    }
-    return "nomac";
-}
-
-static String makeDeviceLabel()
-{
-    String label = projectConfig.hostname;
-    if (label.length() == 0)
-    {
-        label = "esp32worldclock";
-    }
-    return label + "-" + compactStaMacSuffix();
-}
 
 // millis() wraps at ~49.7 days; extend to 64 bits. Call under shipMux only
 // (the wrap detection needs serialized callers).
@@ -274,7 +253,7 @@ static bool shipBatch()
     String json;
     json.reserve(copied + copied / 3 + 256);
     json += "{\"streams\":[{\"stream\":{\"job\":\"cyd-world-clock\",\"device\":\"";
-    json += deviceLabel;
+    json += shipDeviceLabel;
     json += "\",\"boot_id\":\"";
     json += bootId;
     json += "\"},\"values\":[";
@@ -388,9 +367,9 @@ void logShipperBegin()
 {
     if (taskStarted) return;
     taskStarted = true;
-    deviceLabel = makeDeviceLabel();
+    shipDeviceLabel = deviceLabel();
     snprintf(bootId, sizeof(bootId), "%08x", (unsigned)esp_random());
-    Log.println("Log shipper: enabled, device \"" + deviceLabel + "\" boot " +
+    Log.println("Log shipper: enabled, device \"" + shipDeviceLabel + "\" boot " +
                 bootId + " -> " LOG_PUSH_URL);
     // Core 0 (the Arduino loop runs on core 1). 16KB stack: HTTPS through
     // WiFiClientSecure needs far more headroom than the FreeRTOS default.
@@ -408,7 +387,7 @@ void logShipperPrintStatus(Print &out)
 
     out.println("=== Log shipper ===");
     out.println("Target:   " LOG_PUSH_URL);
-    out.println("Device:   " + deviceLabel + " (boot " + bootId + ")");
+    out.println("Device:   " + shipDeviceLabel + " (boot " + bootId + ")");
     out.println("State:    " + String(!taskStarted ? "not started"
                                       : !anchorSet ? "waiting for first NTP sync"
                                                    : "shipping"));

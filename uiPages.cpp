@@ -7,6 +7,7 @@
 
 #include "brightness.h"
 #include "clockFaces.h"         // ClockFace enum, clockFaceName
+#include "deviceIdentity.h"     // startup device label + MAC
 #include "firmwareInfo.h"       // firmwareGitHash
 #include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
 #include "holidayService.h"     // holidaysInvalidate, holidayZonesLoaded
@@ -303,12 +304,12 @@ const UIButton BTN_BOOT_SETTINGS = {90, 192, 140, 32};
 static bool bootUiActive = false;       // button drawn, polling enabled
 static bool bootSettingsWanted = false; // sticky once the button is tapped
 
-// Console geometry: font 1 (6x8 px) rows between the title rule (y=32, drawn
+// Console geometry: font 1 (6x8 px) rows between the title rule (y=38, drawn
 // in displaySetup below the title + version line) and the Settings button
 // (y=192).
-static const int BOOT_CON_TOP = 34;
+static const int BOOT_CON_TOP = 42;
 static const int BOOT_CON_LINE_H = 8;
-static const int BOOT_CON_ROWS = 19;
+static const int BOOT_CON_ROWS = 18;
 static const int BOOT_CON_COLS = 52; // 6 px glyphs, 2 px left margin
 
 static String bootConShown[BOOT_CON_ROWS]; // what each row currently displays
@@ -376,7 +377,7 @@ static void bootConsoleRender(bool force)
             continue;
         bootConShown[i] = line;
         int y = BOOT_CON_TOP + i * BOOT_CON_LINE_H;
-        tft.fillRect(0, y, 320, BOOT_CON_LINE_H, clockBackgroundColor);
+        tft.fillRect(0, y, screenWidth, BOOT_CON_LINE_H, clockBackgroundColor);
         tft.drawString(line, 2, y);
     }
 }
@@ -390,14 +391,18 @@ static void bootUiDrawChrome()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("WiFi login / status / logs", 160, 230);
+    tft.drawString("WiFi login / status / logs", screenWidth / 2, screenHeight - 10);
 }
 
 void bootUiBegin()
 {
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_BITBANG
     // The touch controller normally starts later (rollingClockSetup), but
     // begin() only sets pin modes, so starting it early here is harmless.
+    // On shared-SPI boards this would steal the LCD's SPI pins, so those use
+    // TFT_eSPI touch and need no separate begin call.
     touchscreen.begin();
+#endif
 
     bootUiActive = true;
     bootUiDrawChrome();
@@ -415,12 +420,14 @@ void bootUiRefresh()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("System initializing...", 160, 2);
-    // Firmware version (compile timestamp) under the title - see displaySetup.
+    tft.drawString("System initializing...", screenWidth / 2, 2);
+    // Device identity under the title - see displaySetup.
     tft.setTextFont(1);
     tft.setTextColor(TFT_CYAN, clockBackgroundColor);
-    tft.drawString(String(__DATE__) + " " + __TIME__, 160, 22);
-    tft.drawFastHLine(0, 32, 320, TFT_DARKGREY);
+    tft.drawString(deviceLabel(), screenWidth / 2, 18);
+    tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+    tft.drawString(deviceMacAddress(), screenWidth / 2, 28);
+    tft.drawFastHLine(0, 38, screenWidth, TFT_DARKGREY);
     bootUiDrawChrome();
     bootConsoleRender(true);
 }

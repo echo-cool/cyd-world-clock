@@ -1,4 +1,4 @@
-# CYD World Clock
+# ESP32 World Clock
 
 <p align="center">
   <img src="img/demo.jpg" alt="Four-quadrant world clock face" width="65%"/>
@@ -6,7 +6,11 @@
 
 # Hardware
 
-- ESP32 with 320 x 240 2.8" LCD display ([ESP32-Cheap-Yellow-Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/))
+- ESP32 with 2.8" 320x240 ILI9341 LCD display
+  ([ESP32-Cheap-Yellow-Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/)).
+  Release files use the `cyd28-320x240` name.
+- Hosyond/LCDWiki 4.0" ESP32-32E board with 320x480 ST7796S LCD and XPT2046
+  touch. Release files use the `hosyond40-320x480` name.
 
 # Setup
 
@@ -18,20 +22,27 @@ There are two ways to get the firmware onto a device:
   the code, preconfigure WiFi credentials or set an OTA password. Copy
   `secrets.h.example` to `secrets.h` first and fill in your values
   (`secrets.h` is git-ignored so your credentials are never committed). All
-  three toolchains use the vendored `libraries/` folder in this repo (its
-  TFT_eSPI copy carries the display config for the CYD), so no library
-  installation is needed except for the Arduino IDE.
+  three toolchains use the vendored `libraries/` folder in this repo. The CYD
+  is the default build; the Hosyond 4.0" board is selected with the
+  `hosyond40` PlatformIO environment.
 
 ## Flashing a release (no build needed)
 
-Each [GitHub release](../../releases/latest) has a
-`esp32worldclock-<tag>-factory.bin` attached: a full flash image (bootloader +
-partition table + app) that brings a brand-new ESP32 to a working clock in one
-step.
+Each [GitHub release](../../releases/latest) has board-specific firmware
+images. Pick the file that matches your display; the wrong file can boot but
+will use the wrong display driver, resolution, pins, or touch setup.
 
-1. Download `esp32worldclock-<tag>-factory.bin` from the
+| Board | First USB flash | Later web/OTA update |
+| --- | --- | --- |
+| CYD 2.8" 320x240 ILI9341 | `esp32worldclock-<tag>-cyd28-320x240-factory.bin` | `esp32worldclock-<tag>-cyd28-320x240-ota.bin` |
+| Hosyond/LCDWiki 4.0" 320x480 ST7796S | `esp32worldclock-<tag>-hosyond40-320x480-factory.bin` | `esp32worldclock-<tag>-hosyond40-320x480-ota.bin` |
+
+The `-factory.bin` files are full flash images (bootloader + partition table +
+app) that bring a brand-new ESP32 to a working clock in one step.
+
+1. Download the matching `*-factory.bin` from the
    [latest release](../../releases/latest).
-2. Connect the CYD over USB. If no serial port appears, install the
+2. Connect the board over USB. If no serial port appears on a CYD, install the
    [CH340 USB-to-UART driver](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/SETUP.md)
    (the port shows up as `COMx` on Windows, `/dev/ttyUSB0` on Linux,
    `/dev/tty.usbserial-*` on macOS).
@@ -40,15 +51,17 @@ step.
    esptool`):
 
    ```
-   esptool.py --chip esp32 --port COM3 --baud 921600 write_flash 0x0 esp32worldclock-<tag>-factory.bin
+   esptool.py --chip esp32 --port COM3 --baud 921600 write_flash 0x0 esp32worldclock-<tag>-<board>-factory.bin
    ```
 
-   Replace `COM3` with your port. No install needed alternative: open
+   Replace `COM3` with your port and use the board-specific factory filename.
+   No install needed alternative: open
    [Espressif's web flasher](https://espressif.github.io/esptool-js/) in
    Chrome/Edge, connect, and program the same file at address `0x0`.
 4. Press reset (or replug USB). The released binaries are built without WiFi
-   credentials, so the device starts the `esp32Project` captive portal — see
-   "Connect Wifi" below to get it online.
+   credentials, so the device starts its setup captive portal with a per-device
+   SSID like `esp32worldclock-37a458` — see "Connect Wifi" below to get it
+   online.
 
 Flashing at `0x0` replaces the bootloader, partition table and app, so it also
 works to recover a device in a bad state or one running different firmware.
@@ -57,7 +70,7 @@ If a previous project left settings behind that you want gone, run
 stored WiFi credentials).
 
 Once the device is on WiFi, future releases don't need the cable: upload the
-release's `esp32worldclock-<tag>-ota.bin` through the web updater at
+matching board-specific `*-ota.bin` through the web updater at
 `http://esp32worldclock.local/update` (see "Over-the-air updates" below).
 Settings and WiFi credentials survive OTA updates.
 
@@ -66,9 +79,11 @@ Settings and WiFi credentials survive OTA updates.
 **PlatformIO** (fastest incremental builds):
 
 ```
-pio run                 # build
-pio run -t upload       # build + flash
-pio device monitor      # serial monitor (115200 baud)
+pio run -e cyd             # build CYD 2.8" 320x240 firmware
+pio run -e hosyond40       # build Hosyond 4.0" 320x480 firmware
+pio run -e cyd -t upload   # build + flash CYD over USB
+pio run -e hosyond40 -t upload --upload-port COM4
+pio device monitor         # serial monitor (115200 baud)
 ```
 
 **arduino-cli**:
@@ -105,22 +120,28 @@ how to add a test. The `test_wifi_credentials` suite specifically pins down the
 ## CI builds and releases
 
 Every push and pull request is build-verified by GitHub Actions
-([`.github/workflows/build.yml`](.github/workflows/build.yml)), which uploads
-the compiled images as a workflow artifact. To publish a release with
-firmware attached, push a version tag:
+([`.github/workflows/build.yml`](.github/workflows/build.yml)). CI compiles
+both release environments (`cyd` and `hosyond40`) and uploads the board-specific
+images as workflow artifacts. To publish a release with firmware attached,
+push a version tag:
 
 ```
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The release gets two files: `esp32worldclock-<tag>-ota.bin` (app image —
-upload it straight through the web updater below, no toolchain needed) and
-`esp32worldclock-<tag>-factory.bin` (bootloader + partition table + app, for
-a first USB flash — see "Flashing a release" above). CI builds from
-`secrets.h.example`, so release binaries contain no WiFi credentials — a
-freshly flashed device opens the captive portal, and OTA-updated devices
-keep their stored settings.
+The release gets four firmware files, two per supported display:
+
+- `esp32worldclock-<tag>-cyd28-320x240-ota.bin`
+- `esp32worldclock-<tag>-cyd28-320x240-factory.bin`
+- `esp32worldclock-<tag>-hosyond40-320x480-ota.bin`
+- `esp32worldclock-<tag>-hosyond40-320x480-factory.bin`
+
+Use the file whose board name and resolution match your device. `-ota.bin` is
+the app image for the web updater below; `-factory.bin` is the full image for
+a first USB flash. CI builds from `secrets.h.example`, so release binaries
+contain no WiFi credentials — a freshly flashed device opens the captive
+portal, and OTA-updated devices keep their stored settings.
 
 ## Over-the-air updates
 
@@ -135,10 +156,10 @@ new firmware. There are two ways in:
 - **Web page** (no tools needed): browse to `http://esp32worldclock.local/update`
   (or follow the *Firmware update* link from the settings page at
   `http://<device-ip>/`), pick a compiled firmware image and press
-  *Update firmware*. The `.bin` to upload is
-  `.pio/build/cyd/firmware.bin` for PlatformIO, the exported binary from
-  Arduino IDE → Sketch → Export Compiled Binary, or add
-  `--output-dir build` to the `arduino-cli compile` command. The page shows
+  *Update firmware*. For a release, upload the `*-ota.bin` that matches your
+  board (`cyd28-320x240` or `hosyond40-320x480`). For a local PlatformIO
+  build, upload `.pio/build/cyd/firmware.bin` for the CYD or
+  `.pio/build/hosyond40/firmware.bin` for the Hosyond board. The page shows
   upload progress, the running build's compile timestamp and a short git hash
   (`-dirty` when built from uncommitted changes).
 - **PlatformIO / espota**: uncomment the `espota` lines in `platformio.ini`
@@ -183,8 +204,10 @@ There are two ways to get the clock online:
    `secrets.h` (leave the placeholders unchanged to skip the latter).
 2. **Setup portal (fallback):** If none of those connect — or you double-press
    reset to force setup mode — the device starts a captive setup portal.
-   Connect to SSID `esp32Project` (password `12345678`) on a phone and a setup
-   page opens automatically; pick your network and enter its password. The clock
+   Connect to the setup SSID shown on the clock, named
+   `<hostname>-<macSuffix>` such as `esp32worldclock-37a458` (password
+   `12345678`) on a phone and a setup page opens automatically; pick your
+   network and enter its password. The clock
    connects while keeping the hotspot up, so if the network needs a captive-portal
    login you complete it on your phone through that same hotspot (see
    [Login-required networks](#login-required-networks-captive-portals) below).
@@ -195,8 +218,8 @@ There are two ways to get the clock online:
 The whole sequence plays out live on the boot screen: it mirrors the log as a
 console (which network is being tried, each attempt's count and failure
 reason, portal / NTP / timezone progress), so the boot never sits on a silent
-"System initializing..." message. The firmware version (compile timestamp) is
-printed just under that title so you can see which build is starting up.
+"System initializing..." message. The device label and full MAC are printed
+under that title so you can tell identical clocks apart during setup.
 
 If nobody uses the portal within 5 minutes, the device reboots and retries the
 whole sequence (saved + preconfigured credentials first). So after a power cut
@@ -468,8 +491,8 @@ into categories:
 The page also links to the firmware updater (`/update`), the log viewer
 (`/logs`), a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
 RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...) and
-a live screenshot of the panel (`/screenshot`, a 320x240 BMP read back from
-the display controller — see exactly what a remote clock is showing:
+a live screenshot of the panel (`/screenshot`, a board-resolution BMP read
+back from the display controller — see exactly what a remote clock is showing:
 `curl http://esp32worldclock.local/screenshot -o clock.bmp`; the clock UI
 pauses for the 1–2 s read). `/api/screen?name=<page>` switches the on-device
 UI to any page remotely (`home`, `settings`, `zones`, `tzlist`, `status`,
@@ -485,18 +508,19 @@ credentials (username `admin`) protect these pages.
 
 ## Auto-brightness
 
-The clock dims itself using the CYD's onboard light sensor (LDR on GPIO 34):
-when the room goes dark the backlight fades to the configured night
-brightness, and it fades back to the saved brightness when the lights come
-on. The LDR circuit is unreliable on some CYD board revisions, so the sensor
-is only trusted after its reading has actually been seen to move; until then
-the clock falls back to a time schedule (default: dim between 1–7 AM
-home-zone time). The night brightness, the schedule window and the auto-dim
-master switch (Off = the backlight never changes on its own) are all
+On CYD hardware, the clock can dim itself using the onboard light sensor (LDR
+on GPIO 34): when the room goes dark the backlight fades to the configured
+night brightness, and it fades back to the saved brightness when the lights
+come on. The LDR circuit is unreliable on some CYD board revisions, so the
+sensor is only trusted after its reading has actually been seen to move; until
+then the clock falls back to a time schedule (default: dim between 1–7 AM
+home-zone time). The Hosyond 4.0" profile has no usable LDR pin, so it uses
+the time schedule fallback. The night brightness, the schedule window and the
+auto-dim master switch (Off = the backlight never changes on its own) are all
 configurable on the web settings page. Type `LDR` in the serial monitor to
-see the live readings, and set `LDR_DARK_IS_HIGH` to 0 in `ClockLogic.h` if
-your board's sensor reads inverted. Manual brightness changes (touch gesture
-or settings page) always win for 2 hours.
+see the live readings when tuning a CYD, and set `LDR_DARK_IS_HIGH` to 0 in
+`ClockLogic.h` if your board's sensor reads inverted. Manual brightness
+changes (touch gesture or settings page) always win for 2 hours.
 
 ## System status pages
 

@@ -4,11 +4,12 @@
 #include <Arduino.h>
 #include <ezTime.h>
 
+#include "boardProfile.h"
 #include "projectConfig.h"
 #include "projectDisplay.h"
 
-// Backlight control pin (CYD / ESP32-Cheap-Yellow-Display)
-#define BACKLIGHT_PIN 21
+// Backlight control pin for the selected board profile.
+#define BACKLIGHT_PIN BOARD_BACKLIGHT_PIN
 
 // NTP sync monitoring variables (updated by handleTimeSync in genericBaseProject.cpp)
 extern unsigned long lastSyncTime;
