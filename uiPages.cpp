@@ -624,6 +624,8 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     worldZones[slot].lastMinute = -1;
     worldZones[slot].lastDay = -1;
     worldZones[slot].initialized = false;
+    worldZones[slot].weatherAlert = "";
+    worldZones[slot].weatherNotice = "";
 
     // Start from a clean ezTime object when a slot changes. Reusing the old
     // object can leave the previous city's rules alive if a rapid sequence of

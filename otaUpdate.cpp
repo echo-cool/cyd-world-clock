@@ -795,7 +795,7 @@ static void handleApiStatus()
 {
     if (!webAuthenticate()) return;
 
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(5120);
     doc["hostname"] = projectConfig.hostname;
     doc["ip"] = WiFi.localIP().toString();
     doc["ssid"] = WiFi.SSID();
@@ -883,6 +883,19 @@ static void handleApiStatus()
         z["utcOffsetMin"] = -worldZones[i].tz.getOffset();
         z["olson"] = worldZones[i].tz.getOlson();
         z["posix"] = worldZones[i].tz.getPosix();
+        ZoneWeather w = getZoneWeather(i);
+        if (w.valid)
+        {
+            z["temp"] = displayTemp(w.tempC);
+            z["tempUnit"] = String(tempUnitLetter());
+            z["weatherCode"] = w.weatherCode;
+            z["weather"] = weatherCodeText(w.weatherCode);
+            String notice = getZonePrecipNotice(i);
+            if (notice.length() > 0)
+            {
+                z["weatherNotice"] = notice;
+            }
+        }
         if (worldZones[i].lastMarketStatus.length() > 0)
         {
             z["market"] = worldZones[i].lastMarketStatus;

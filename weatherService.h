@@ -36,6 +36,11 @@ ZoneWeather getZoneWeather(int i);
 // weatherAlerts setting is off. Uppercased and length-capped for the display.
 String getZoneAlert(int i);
 
+// Short near-term precipitation transition for the quadrant date/weather line,
+// e.g. "RAIN IN 30M" or "RAIN STOPS IN 2H". Derived from Open-Meteo's
+// 15-minute weather-code forecast for the next few hours.
+String getZonePrecipNotice(int i);
+
 // Age of the current data in minutes, or -1 if no successful fetch yet.
 long weatherAgeMinutes();
 
@@ -58,5 +63,6 @@ char tempUnitLetter();
 // Short display text / color for a WMO weather code, e.g. 61 -> "RAIN".
 const char *weatherCodeText(int code);
 uint16_t weatherCodeColor(int code);
+bool weatherCodeHasPrecip(int code);
 
 #endif // WEATHER_SERVICE_H

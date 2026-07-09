@@ -266,6 +266,87 @@ static void drawDayNightIcon(TFT_eSPI &gfx, int cx, int cy, DayPhase phase)
     }
 }
 
+static void drawMiniSun(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
+{
+    gfx.fillCircle(cx, cy, 3, color);
+    gfx.drawLine(cx - 6, cy, cx - 5, cy, color);
+    gfx.drawLine(cx + 5, cy, cx + 6, cy, color);
+    gfx.drawLine(cx, cy - 6, cx, cy - 5, color);
+    gfx.drawLine(cx, cy + 5, cx, cy + 6, color);
+    gfx.drawLine(cx - 4, cy - 4, cx - 3, cy - 3, color);
+    gfx.drawLine(cx + 3, cy - 3, cx + 4, cy - 4, color);
+    gfx.drawLine(cx - 4, cy + 4, cx - 3, cy + 3, color);
+    gfx.drawLine(cx + 3, cy + 3, cx + 4, cy + 4, color);
+}
+
+static void drawMiniCloud(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
+{
+    gfx.fillCircle(cx - 4, cy + 1, 3, color);
+    gfx.fillCircle(cx, cy - 1, 4, color);
+    gfx.fillCircle(cx + 5, cy + 1, 3, color);
+    gfx.fillRect(cx - 7, cy + 1, 15, 5, color);
+}
+
+static void drawMiniSnowflake(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
+{
+    gfx.drawLine(cx - 4, cy, cx + 4, cy, color);
+    gfx.drawLine(cx, cy - 4, cx, cy + 4, color);
+    gfx.drawLine(cx - 3, cy - 3, cx + 3, cy + 3, color);
+    gfx.drawLine(cx - 3, cy + 3, cx + 3, cy - 3, color);
+}
+
+static void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code)
+{
+    if (code == 0 || code == 1) {
+        drawMiniSun(gfx, cx, cy, TFT_YELLOW);
+        return;
+    }
+
+    if (code == 2) {
+        drawMiniSun(gfx, cx - 4, cy - 3, TFT_YELLOW);
+        drawMiniCloud(gfx, cx + 2, cy + 1, TFT_LIGHTGREY);
+        return;
+    }
+
+    if (code == 3) {
+        drawMiniCloud(gfx, cx, cy, TFT_LIGHTGREY);
+        return;
+    }
+
+    if (code == 45 || code == 48) {
+        uint16_t c = TFT_LIGHTGREY;
+        gfx.drawFastHLine(cx - 7, cy - 3, 14, c);
+        gfx.drawFastHLine(cx - 5, cy + 1, 12, c);
+        gfx.drawFastHLine(cx - 7, cy + 5, 10, c);
+        return;
+    }
+
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+        drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
+        drawMiniSnowflake(gfx, cx, cy + 6, TFT_WHITE);
+        return;
+    }
+
+    if (code >= 95) {
+        drawMiniCloud(gfx, cx, cy - 2, TFT_DARKGREY);
+        gfx.drawLine(cx - 1, cy + 2, cx - 4, cy + 8, TFT_ORANGE);
+        gfx.drawLine(cx - 4, cy + 8, cx + 1, cy + 6, TFT_ORANGE);
+        gfx.drawLine(cx + 1, cy + 6, cx - 2, cy + 11, TFT_ORANGE);
+        return;
+    }
+
+    if (weatherCodeHasPrecip(code)) {
+        drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
+        uint16_t rain = TFT_CYAN;
+        gfx.drawLine(cx - 5, cy + 4, cx - 7, cy + 8, rain);
+        gfx.drawLine(cx, cy + 4, cx - 2, cy + 9, rain);
+        gfx.drawLine(cx + 5, cy + 4, cx + 3, cy + 8, rain);
+        return;
+    }
+
+    gfx.drawCircle(cx, cy, 5, TFT_DARKGREY);
+}
+
 
 // Days since 1970-01-01 for a given civil date (Howard Hinnant's algorithm).
 // Used to compare calendar dates between timezones robustly across month/year
@@ -599,11 +680,24 @@ static StatusLine computeMarketStatusLine(WorldClockZone &zone)
 static void refreshZoneWeatherAlert(WorldClockZone &zone, int zoneIdx)
 {
     zone.weatherAlert = projectConfig.weatherAlerts ? getZoneAlert(zoneIdx) : String("");
+    zone.weatherNotice = projectConfig.quadWeather ? getZonePrecipNotice(zoneIdx) : String("");
 }
 
 static bool showAlertOnDayLine(WorldClockZone &zone)
 {
     return projectConfig.weatherAlerts && wxAlertShowingAlert && zone.weatherAlert.length() > 0;
+}
+
+static bool showNoticeOnDateLine(WorldClockZone &zone)
+{
+    return projectConfig.quadWeather && wxAlertShowingAlert && zone.weatherNotice.length() > 0;
+}
+
+static uint16_t weatherNoticeColor(const String &notice)
+{
+    if (notice.startsWith("SNOW")) return TFT_WHITE;
+    if (notice.startsWith("STORM")) return TFT_ORANGE;
+    return TFT_CYAN;
 }
 
 static String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth)
@@ -768,35 +862,43 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     }
     gfx.setTextFont(1);
     gfx.setTextSize(2);
-    // With the quadrant temperature enabled the date shifts left a little:
-    // dead-centered, its last digit touches the condition dot of a two-digit
-    // reading (date right edge and dot left edge both land on x+128).
-    int dateX = projectConfig.quadWeather ? centerX - 8 : centerX;
-    gfx.drawString(dateBuffer, dateX, dateY);
+    if (showNoticeOnDateLine(zone)) {
+        // The date/weather line alternates with near-term precipitation
+        // changes. Font 2 is readable in the 160px quadrant; measured clipping
+        // keeps unusual strings inside the column.
+        gfx.setTextFont(2);
+        gfx.setTextSize(1);
+        gfx.setTextDatum(TC_DATUM);
+        gfx.setTextColor(weatherNoticeColor(zone.weatherNotice), clockBackgroundColor);
+        gfx.drawString(fitTextToWidth(gfx, zone.weatherNotice, quadrantWidth - 8),
+                       centerX, dateY + 1);
+    } else {
+        // With quadrant weather enabled the date shifts left to leave a stable
+        // slot for the temperature and icon.
+        int dateX = projectConfig.quadWeather ? centerX - 12 : centerX;
+        gfx.drawString(dateBuffer, dateX, dateY);
+    }
 
     // Current temperature on the right of the date line (the date is always
-    // 8 chars, so this slot is guaranteed free). The condition rides
-    // in a color dot next to a white reading; sub -9 degree readings are a
-    // character wider, so they drop the dot and carry the condition in the
-    // digit color instead. Data comes from the background fetch task that
-    // already serves the weather face; nothing is shown until the first
-    // fetch lands (or for zones without preset coordinates).
-    if (projectConfig.quadWeather) {
+    // 8 chars, so this slot is guaranteed free). A small condition icon sits
+    // next to the white reading; very wide readings still fit by dropping only
+    // the icon. Data comes from the background fetch task that already serves
+    // the weather face; nothing is shown until the first fetch lands (or for
+    // zones without preset coordinates).
+    if (projectConfig.quadWeather && !showNoticeOnDateLine(zone)) {
         ZoneWeather w = getZoneWeather(zoneIdx);
         if (w.valid) {
             String temp = String(displayTemp(w.tempC));
-            uint16_t condColor = weatherCodeColor(w.weatherCode);
-            bool dotFits = temp.length() <= 2;
-            uint16_t tempColor = dotFits ? TFT_WHITE : condColor;
             gfx.setTextFont(1);
             gfx.setTextSize(1);
             gfx.setTextDatum(TR_DATUM);
-            gfx.setTextColor(tempColor, clockBackgroundColor);
+            gfx.setTextColor(TFT_WHITE, clockBackgroundColor);
             int tempRight = ox + quadrantWidth - 10;
             gfx.drawString(temp, tempRight, dateY + 4);
-            gfx.drawCircle(ox + quadrantWidth - 7, dateY + 5, 2, tempColor); // degree mark
-            if (dotFits) {
-                gfx.fillCircle(tempRight - gfx.textWidth(temp) - 7, dateY + 8, 3, condColor);
+            gfx.drawCircle(ox + quadrantWidth - 7, dateY + 5, 2, TFT_WHITE); // degree mark
+            if (temp.length() <= 3) {
+                drawWeatherIcon(gfx, tempRight - gfx.textWidth(temp) - 10,
+                                dateY + 8, w.weatherCode);
             }
         }
     }
@@ -977,9 +1079,11 @@ bool needsDynamicQuadrantAreaUpdate(WorldClockZone &zone)
 {
     bool hasMkt = zone.lastMarketStatus.length() > 0;
     bool hasAlert = projectConfig.weatherAlerts && zone.weatherAlert.length() > 0;
+    bool hasNotice = projectConfig.quadWeather && zone.weatherNotice.length() > 0;
 
-    // The swap changes the weekday line for any zone carrying an alert.
-    if (wxAlertPhaseJustChanged && hasAlert) return true;
+    // The swap changes the weekday line for alerts and the date/weather line
+    // for near-term rain/snow notices.
+    if (wxAlertPhaseJustChanged && (hasAlert || hasNotice)) return true;
 
     // Weather alerts no longer occupy the market line, so market countdown
     // flashes whenever the market line carries a flashing status.

@@ -82,6 +82,7 @@ struct WorldClockZone {
     MarketInfo market;
     String lastMarketStatus;
     String weatherAlert; // cached weather-alert text for this zone ("" = none)
+    String weatherNotice; // cached rain/snow start-stop text for the date/weather row
 };
 
 // Display objects: tft is defined in cheapYellowLCD.cpp, the bit-banged
