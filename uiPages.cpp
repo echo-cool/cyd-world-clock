@@ -176,6 +176,37 @@ bool buttonContains(const UIButton &b, int tx, int ty)
     return tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h;
 }
 
+static int scaleUiX(int value)
+{
+    return (value * screenWidth + 160) / 320;
+}
+
+static int scaleUiY(int value)
+{
+    return (value * screenHeight + 120) / 240;
+}
+
+static UIButton scaleUiButton(const UIButton &base)
+{
+    UIButton b = {
+        scaleUiX(base.x),
+        scaleUiY(base.y),
+        scaleUiX(base.w),
+        scaleUiY(base.h)
+    };
+    if (b.x + b.w > screenWidth)
+        b.w = screenWidth - b.x;
+    if (b.y + b.h > screenHeight)
+        b.h = screenHeight - b.y;
+    return b;
+}
+
+static int uiTextColsFromX(int x)
+{
+    int px = screenWidth - x - scaleUiX(4);
+    return max(1, px / 6);
+}
+
 void drawButton(const UIButton &b, const String &label, uint16_t border, uint16_t textColor)
 {
     tft.drawRoundRect(b.x, b.y, b.w, b.h, 6, border);
@@ -201,6 +232,12 @@ const UIButton BTN_SET_STAT = {20, 208, 62, 26};
 const UIButton BTN_SET_LOGS = {88, 208, 46, 26};
 const UIButton BTN_SET_WIFI = {140, 208, 92, 26};
 const UIButton BTN_SET_BACK = {238, 208, 62, 26};
+const UIButton SETTINGS_BRIGHTNESS_LABEL = {85, 178, 150, 26};
+
+static UIButton settingsButton(const UIButton &base)
+{
+    return scaleUiButton(base);
+}
 
 // Wi-Fi login helper page: a single "Done" button (mirrors BTN_SET_BACK).
 const UIButton BTN_WIFI_DONE = {90, 202, 140, 32};
@@ -223,7 +260,7 @@ const char *SLOT_LABELS[4] = {"TOP-LEFT", "TOP-RIGHT", "BOTTOM-LEFT", "BOTTOM-RI
 UIButton tzRowButton(int row)
 {
     UIButton b = {10, 34 + row * 32, 300, 28};
-    return b;
+    return scaleUiButton(b);
 }
 const UIButton BTN_TZ_PREV = {10, 202, 90, 32};
 const UIButton BTN_TZ_BACK = {115, 202, 90, 32};
@@ -310,11 +347,25 @@ static bool bootSettingsWanted = false; // sticky once the button is tapped
 static const int BOOT_CON_TOP = 42;
 static const int BOOT_CON_LINE_H = 8;
 static const int BOOT_CON_ROWS = 18;
-static const int BOOT_CON_COLS = 52; // 6 px glyphs, 2 px left margin
 
 static String bootConShown[BOOT_CON_ROWS]; // what each row currently displays
 static uint32_t bootConLastBytes = 0;
 static unsigned long bootConLastDraw = 0;
+
+static int bootConsoleTop()
+{
+    return scaleUiY(BOOT_CON_TOP);
+}
+
+static int bootConsoleLineH()
+{
+    return max(BOOT_CON_LINE_H, scaleUiY(BOOT_CON_LINE_H));
+}
+
+static int bootConsoleCols()
+{
+    return uiTextColsFromX(scaleUiX(2));
+}
 
 // Mirror the tail of the log ring into the console area. Rows are cached and
 // only repainted when their text changes, so the frequent polls stay cheap
@@ -339,7 +390,8 @@ static void bootConsoleRender(bool force)
     // Generous byte budget so even long (later-truncated) lines still leave a
     // full screen of rows - logTail starts at a line boundary and drops a
     // clipped first line itself.
-    String tail = logTail(BOOT_CON_ROWS * 96);
+    int cols = bootConsoleCols();
+    String tail = logTail(BOOT_CON_ROWS * (cols + 48));
     // A trailing newline would show as a phantom empty last line; without it
     // the last line is the newest (possibly still-forming) one.
     if (tail.endsWith("\n"))
@@ -371,27 +423,28 @@ static void bootConsoleRender(bool force)
     {
         int idx = total - BOOT_CON_ROWS + i; // log line shown on row i
         String line = (idx >= 0) ? rows[idx % BOOT_CON_ROWS] : String();
-        if (line.length() > BOOT_CON_COLS)
-            line = line.substring(0, BOOT_CON_COLS);
+        if (line.length() > cols)
+            line = line.substring(0, cols);
         if (!force && line == bootConShown[i])
             continue;
         bootConShown[i] = line;
-        int y = BOOT_CON_TOP + i * BOOT_CON_LINE_H;
-        tft.fillRect(0, y, screenWidth, BOOT_CON_LINE_H, clockBackgroundColor);
-        tft.drawString(line, 2, y);
+        int y = bootConsoleTop() + i * bootConsoleLineH();
+        tft.fillRect(0, y, screenWidth, bootConsoleLineH(), clockBackgroundColor);
+        tft.drawString(line, scaleUiX(2), y);
     }
 }
 
 static void bootUiDrawChrome()
 {
     bool tapped = bootSettingsWanted;
-    drawButton(BTN_BOOT_SETTINGS, "Settings",
+    drawButton(scaleUiButton(BTN_BOOT_SETTINGS), "Settings",
                tapped ? TFT_GREEN : TFT_CYAN, tapped ? TFT_GREEN : TFT_WHITE);
     tft.setTextFont(1);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("WiFi login / status / logs", screenWidth / 2, screenHeight - 10);
+    tft.drawString("WiFi login / status / logs", screenWidth / 2,
+                   screenHeight - scaleUiY(10));
 }
 
 void bootUiBegin()
@@ -420,14 +473,14 @@ void bootUiRefresh()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("System initializing...", screenWidth / 2, 2);
+    tft.drawString("System initializing...", screenWidth / 2, scaleUiY(2));
     // Device identity under the title - see displaySetup.
     tft.setTextFont(1);
     tft.setTextColor(TFT_CYAN, clockBackgroundColor);
-    tft.drawString(deviceLabel(), screenWidth / 2, 18);
+    tft.drawString(deviceLabel(), screenWidth / 2, scaleUiY(18));
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString(deviceMacAddress(), screenWidth / 2, 28);
-    tft.drawFastHLine(0, 38, screenWidth, TFT_DARKGREY);
+    tft.drawString(deviceMacAddress(), screenWidth / 2, scaleUiY(28));
+    tft.drawFastHLine(0, scaleUiY(38), screenWidth, TFT_DARKGREY);
     bootUiDrawChrome();
     bootConsoleRender(true);
 }
@@ -453,12 +506,12 @@ bool bootUiPoll()
         return true;
 
     TouchPoint t = readTouchPoint();
-    if (t.zRaw > 800 && buttonContains(BTN_BOOT_SETTINGS, t.x, t.y))
+    if (t.zRaw > 800 && buttonContains(scaleUiButton(BTN_BOOT_SETTINGS), t.x, t.y))
     {
         bootSettingsWanted = true;
         // Acknowledge right away - the remaining boot steps can still take a
         // few seconds before the settings page actually appears.
-        drawButton(BTN_BOOT_SETTINGS, "Settings", TFT_GREEN, TFT_GREEN);
+        drawButton(scaleUiButton(BTN_BOOT_SETTINGS), "Settings", TFT_GREEN, TFT_GREEN);
         Log.println("Settings requested from the init screen - cutting the "
                     "remaining boot waits short");
         bootConsoleRender(true);
@@ -539,7 +592,7 @@ void renderWifiFailPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_RED, clockBackgroundColor);
-    tft.drawString("WIFI CONNECT FAILED", 160, 2);
+    tft.drawString("WIFI CONNECT FAILED", screenWidth / 2, scaleUiY(2));
 
     const char *problem, *detail;
     wifiFailReason(wifiFailStatus, problem, detail);
@@ -550,29 +603,30 @@ void renderWifiFailPage()
     tft.setTextFont(2);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString("Network:", 12, 36);
+    tft.drawString("Network:", scaleUiX(12), scaleUiY(36));
     tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
-    tft.drawString(ssid, 90, 36);
+    tft.drawString(ssid, scaleUiX(90), scaleUiY(36));
 
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString("Problem:", 12, 56);
+    tft.drawString("Problem:", scaleUiX(12), scaleUiY(56));
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString(String(problem) + " (" + String(wifiFailStatus) + ")", 90, 56);
+    tft.drawString(String(problem) + " (" + String(wifiFailStatus) + ")",
+                   scaleUiX(90), scaleUiY(56));
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString(detail, 12, 76);
+    tft.drawString(detail, scaleUiX(12), scaleUiY(76));
 
-    tft.drawString("Reboot: try again now (the setup", 12, 104);
-    tft.drawString("portal reopens if it fails again).", 12, 120);
-    tft.drawString("Settings: open status & logs; WiFi", 12, 144);
-    tft.drawString("keeps retrying in the background.", 12, 160);
+    tft.drawString("Reboot: try again now (the setup", scaleUiX(12), scaleUiY(104));
+    tft.drawString("portal reopens if it fails again).", scaleUiX(12), scaleUiY(120));
+    tft.drawString("Settings: open status & logs; WiFi", scaleUiX(12), scaleUiY(144));
+    tft.drawString("keeps retrying in the background.", scaleUiX(12), scaleUiY(160));
 
-    drawButton(BTN_FAIL_REBOOT, "Reboot", TFT_RED, TFT_WHITE);
-    drawButton(BTN_FAIL_SET, "Settings", TFT_CYAN, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_FAIL_REBOOT), "Reboot", TFT_RED, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_FAIL_SET), "Settings", TFT_CYAN, TFT_WHITE);
 
     tft.setTextFont(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("reboots by itself after 5 minutes", 160, 232);
+    tft.drawString("reboots by itself after 5 minutes", screenWidth / 2, scaleUiY(232));
 
     wifiFailShownAt = millis();
 }
@@ -588,13 +642,14 @@ void saveDisplayPrefs()
 
 void drawSettingsBrightnessLabel()
 {
-    tft.fillRect(85, 178, 150, 26, clockBackgroundColor);
+    UIButton b = settingsButton(SETTINGS_BRIGHTNESS_LABEL);
+    tft.fillRect(b.x, b.y, b.w, b.h, clockBackgroundColor);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
     int pct = brightnessPercent(backlightLevel);
-    tft.drawString("Brightness " + String(pct) + "%", 160, 191);
+    tft.drawString("Brightness " + String(pct) + "%", b.x + b.w / 2, b.y + b.h / 2);
 }
 
 void adjustBacklightFromUi(int delta)
@@ -621,7 +676,8 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_CYAN, clockBackgroundColor);
-    tft.drawString("Loading " + String(preset.name) + "...", 160, 120);
+    tft.drawString("Loading " + String(preset.name) + "...",
+                   screenWidth / 2, screenHeight / 2);
 
     worldZones[slot].name = preset.name;
     worldZones[slot].timezone = preset.tz;
@@ -693,7 +749,7 @@ void renderSettingsPage()
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SETTINGS", 8, 2);
+    tft.drawString("SETTINGS", scaleUiX(8), scaleUiY(2));
 
     // Firmware identity in the header's right gutter: the compile timestamp
     // (the "version") over the short git hash, both small so they stay clear
@@ -701,35 +757,35 @@ void renderSettingsPage()
     tft.setTextFont(1);
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString(String(__DATE__) + " " + __TIME__, 316, 4);
-    tft.drawString("git " + String(firmwareGitHash()), 316, 15);
+    tft.drawString(String(__DATE__) + " " + __TIME__, screenWidth - scaleUiX(4), scaleUiY(4));
+    tft.drawString("git " + String(firmwareGitHash()), screenWidth - scaleUiX(4), scaleUiY(15));
 
-    drawButton(BTN_SET_TZ, "Change timezones  >", TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_FACE,
+    drawButton(settingsButton(BTN_SET_TZ), "Change timezones  >", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_FACE),
                "Clock face: " + String(clockFaceName(projectConfig.clockFace)),
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_CLK,
+    drawButton(settingsButton(BTN_SET_CLK),
                SHOW_24HOUR ? "Clock format: 24 hour" : "Clock format: 12 hour (AM/PM)",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_DATE,
+    drawButton(settingsButton(BTN_SET_DATE),
                NOT_US_DATE ? "Date format: DD/MM/YY" : "Date format: MM/DD/YY",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_GRID,
+    drawButton(settingsButton(BTN_SET_GRID),
                projectConfig.showGrid ? "Grid: On" : "Grid: Off",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_WXALERT,
+    drawButton(settingsButton(BTN_SET_WXALERT),
                projectConfig.weatherAlerts ? "Wx alert: On" : "Wx alert: Off",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_DIM, "-", TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_BRI, "+", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_DIM), "-", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_BRI), "+", TFT_CYAN, TFT_WHITE);
     drawSettingsBrightnessLabel();
-    drawButton(BTN_SET_STAT, "Status", TFT_GREEN, TFT_WHITE);
-    drawButton(BTN_SET_LOGS, "Logs", TFT_GREEN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_STAT), "Status", TFT_GREEN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_LOGS), "Logs", TFT_GREEN, TFT_WHITE);
     // Enables the device's helper AP + captive-portal login relay. Amber when
     // a captive portal is blocking the internet, to draw the eye.
-    drawButton(BTN_SET_WIFI, "WiFi login",
+    drawButton(settingsButton(BTN_SET_WIFI), "WiFi login",
                captivePortalActive() ? TFT_ORANGE : TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_BACK), "Back", TFT_DARKGREY, TFT_WHITE);
 }
 
 // The live status line of the Wi-Fi login helper (row 168), repainted once a
@@ -760,12 +816,12 @@ static void renderWifiLoginStatus()
         color = clockBackgroundColor;
         break;
     }
-    tft.fillRect(0, 166, 320, 20, clockBackgroundColor);
+    tft.fillRect(0, scaleUiY(166), screenWidth, scaleUiY(20), clockBackgroundColor);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(color, clockBackgroundColor);
-    tft.drawString(text, 160, 168);
+    tft.drawString(text, screenWidth / 2, scaleUiY(168));
 }
 
 // Full-screen helper for login-required networks: brings up a phone-joinable AP
@@ -779,28 +835,28 @@ void renderWifiLoginPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("WI-FI LOGIN", 160, 2);
+    tft.drawString("WI-FI LOGIN", screenWidth / 2, scaleUiY(2));
 
     tft.setTextFont(2);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString("1. On your phone, join this Wi-Fi:", 12, 30);
+    tft.drawString("1. On your phone, join this Wi-Fi:", scaleUiX(12), scaleUiY(30));
 
     tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
-    tft.drawString(wifiRelayApSsid(), 24, 48);
+    tft.drawString(wifiRelayApSsid(), scaleUiX(24), scaleUiY(48));
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString(String("password: ") + wifiRelayApPassword(), 24, 64);
+    tft.drawString(String("password: ") + wifiRelayApPassword(), scaleUiX(24), scaleUiY(64));
 
-    tft.drawString("2. Sign in on the login page that", 12, 84);
-    tft.drawString("   opens (none? try neverssl.com).", 12, 100);
+    tft.drawString("2. Sign in on the login page that", scaleUiX(12), scaleUiY(84));
+    tft.drawString("   opens (none? try neverssl.com).", scaleUiX(12), scaleUiY(100));
     // Phones love to flee a hotspot that has "no internet" - that warning is
     // expected here and leaving the hotspot is the #1 way the login fails.
-    tft.drawString("3. Stay on that Wi-Fi - ignore any", 12, 120);
-    tft.drawString("   'no internet' warning, wait here.", 12, 136);
+    tft.drawString("3. Stay on that Wi-Fi - ignore any", scaleUiX(12), scaleUiY(120));
+    tft.drawString("   'no internet' warning, wait here.", scaleUiX(12), scaleUiY(136));
 
     renderWifiLoginStatus();
 
-    drawButton(BTN_WIFI_DONE, "Done", TFT_DARKGREY, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_WIFI_DONE), "Done", TFT_DARKGREY, TFT_WHITE);
 }
 
 void renderZonePickPage()
@@ -811,11 +867,11 @@ void renderZonePickPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("TAP A CLOCK TO CHANGE ITS TIMEZONE", 160, 10);
+    tft.drawString("TAP A CLOCK TO CHANGE ITS TIMEZONE", screenWidth / 2, scaleUiY(10));
 
     for (int i = 0; i < 4; i++)
     {
-        const UIButton &b = BTN_ZONE[i];
+        UIButton b = scaleUiButton(BTN_ZONE[i]);
         int cx = b.x + b.w / 2;
         tft.drawRoundRect(b.x, b.y, b.w, b.h, 6, TFT_CYAN);
 
@@ -823,18 +879,18 @@ void renderZonePickPage()
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-        tft.drawString(SLOT_LABELS[i], cx, b.y + 8);
+        tft.drawString(SLOT_LABELS[i], cx, b.y + scaleUiY(8));
 
         tft.setTextFont(2);
         tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
-        tft.drawString(worldZones[i].name, cx, b.y + 26);
+        tft.drawString(worldZones[i].name, cx, b.y + scaleUiY(26));
 
         tft.setTextFont(1);
         tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-        tft.drawString(worldZones[i].timezone, cx, b.y + 54);
+        tft.drawString(worldZones[i].timezone, cx, b.y + scaleUiY(54));
     }
 
-    drawButton(BTN_ZONE_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_ZONE_BACK), "Back", TFT_DARKGREY, TFT_WHITE);
 }
 
 void renderTzListPage()
@@ -849,12 +905,14 @@ void renderTzListPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString(String(SLOT_LABELS[zoneSlotBeingEdited]) + " CLOCK", 160, 8);
+    tft.drawString(String(SLOT_LABELS[zoneSlotBeingEdited]) + " CLOCK",
+                   screenWidth / 2, scaleUiY(8));
 
     tft.setTextFont(1);
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString(String(tzListPage + 1) + "/" + String(totalPages), 314, 10);
+    tft.drawString(String(tzListPage + 1) + "/" + String(totalPages),
+                   screenWidth - scaleUiX(6), scaleUiY(10));
 
     for (int row = 0; row < TZ_PER_PAGE; row++)
     {
@@ -868,9 +926,9 @@ void renderTzListPage()
                    current ? TFT_GREEN : TFT_WHITE);
     }
 
-    drawButton(BTN_TZ_PREV, "< Prev", TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_TZ_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
-    drawButton(BTN_TZ_NEXT, "Next >", TFT_CYAN, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_TZ_PREV), "< Prev", TFT_CYAN, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_TZ_BACK), "Back", TFT_DARKGREY, TFT_WHITE);
+    drawButton(scaleUiButton(BTN_TZ_NEXT), "Next >", TFT_CYAN, TFT_WHITE);
 }
 
 /*-------- System status pages ----------*/
@@ -885,6 +943,21 @@ const int STATUS_ROW_Y0 = 34;
 const int STATUS_ROW_STEP = 17;
 
 int statusPageIndex = 0; // reset to 0 when entering from the settings page
+
+static int statusValueX()
+{
+    return scaleUiX(STATUS_VALUE_X);
+}
+
+static int statusRowY(int row)
+{
+    return scaleUiY(STATUS_ROW_Y0 + row * STATUS_ROW_STEP);
+}
+
+static int statusRowH(int row)
+{
+    return max(STATUS_ROW_STEP, statusRowY(row + 1) - statusRowY(row));
+}
 
 static const char *STATUS_TITLES[STATUS_PAGE_COUNT] = {
     "SYSTEM STATUS", "NETWORK & STORAGE", "CLOCK DATA"};
@@ -1148,10 +1221,11 @@ void renderStatusValues()
 
     for (int i = 0; i < rows; i++)
     {
-        int y = STATUS_ROW_Y0 + i * STATUS_ROW_STEP;
-        tft.fillRect(STATUS_VALUE_X, y, 320 - STATUS_VALUE_X, STATUS_ROW_STEP, clockBackgroundColor);
+        int x = statusValueX();
+        int y = statusRowY(i);
+        tft.fillRect(x, y, screenWidth - x, statusRowH(i), clockBackgroundColor);
         tft.setTextColor(colors[i], clockBackgroundColor);
-        tft.drawString(values[i], STATUS_VALUE_X, y);
+        tft.drawString(values[i], x, y);
     }
 }
 
@@ -1163,7 +1237,7 @@ void renderStatusPage()
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString(STATUS_TITLES[statusPageIndex], 160, 2);
+    tft.drawString(STATUS_TITLES[statusPageIndex], screenWidth / 2, scaleUiY(2));
 
     const char *const *labels = statusLabels(statusPageIndex);
     int rows = statusRowCount(statusPageIndex);
@@ -1174,7 +1248,7 @@ void renderStatusPage()
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
     for (int i = 0; i < rows; i++)
     {
-        tft.drawString(labels[i], 8, STATUS_ROW_Y0 + i * STATUS_ROW_STEP);
+        tft.drawString(labels[i], scaleUiX(8), statusRowY(i));
     }
 
     tft.setTextFont(1);
@@ -1185,7 +1259,7 @@ void renderStatusPage()
                               String(STATUS_PAGE_COUNT) + " - tap for next"
                         : "Page " + String(STATUS_PAGE_COUNT) + "/" +
                               String(STATUS_PAGE_COUNT) + " - tap to go back";
-    tft.drawString(footer, 160, 228);
+    tft.drawString(footer, screenWidth / 2, scaleUiY(228));
 
     renderStatusValues();
 }
@@ -1196,15 +1270,33 @@ void renderStatusPage()
 
 const int LOGS_TOP = 18;       // first log line y (below the title row)
 const int LOGS_LINE_STEP = 10; // font 1 is 8px tall; +2 leading
-const int LOGS_MAX_LINES = 21;
-const int LOGS_MAX_CHARS = 52; // 320px / 6px per font-1 char, with margin
+const int LOGS_MAX_LINES = 32;
 
 uint32_t lastShownLogVersion = 0;
+
+static int logsTop()
+{
+    return scaleUiY(LOGS_TOP);
+}
+
+static int logsVisibleLines()
+{
+    return constrain((screenHeight - logsTop()) / LOGS_LINE_STEP, 1, LOGS_MAX_LINES);
+}
+
+static int logsMaxChars()
+{
+    return uiTextColsFromX(scaleUiX(4));
+}
 
 static void renderLogsLines()
 {
     // Grab a bit more than one screenful and keep the last N lines.
-    String text = logTail(2600);
+    int visibleLines = logsVisibleLines();
+    int maxChars = logsMaxChars();
+    int tailBudget = visibleLines * (maxChars + 48);
+    if (tailBudget > 4096) tailBudget = 4096;
+    String text = logTail(tailBudget);
     struct Seg
     {
         uint16_t start;
@@ -1221,26 +1313,26 @@ static void renderLogsLines()
             int len = i - lineStart;
             if (len > 0)
             {
-                if (len > LOGS_MAX_CHARS) len = LOGS_MAX_CHARS; // truncate, no wrap
+                if (len > maxChars) len = maxChars; // truncate, no wrap
                 segs[next] = {(uint16_t)lineStart, (uint16_t)len};
-                next = (next + 1) % LOGS_MAX_LINES;
-                if (count < LOGS_MAX_LINES) count++;
+                next = (next + 1) % visibleLines;
+                if (count < visibleLines) count++;
             }
             lineStart = i + 1;
         }
     }
 
-    tft.fillRect(0, LOGS_TOP, 320, 240 - LOGS_TOP, clockBackgroundColor);
+    tft.fillRect(0, logsTop(), screenWidth, screenHeight - logsTop(), clockBackgroundColor);
     tft.setTextFont(1);
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    int first = (next + LOGS_MAX_LINES - count) % LOGS_MAX_LINES;
+    int first = (next + visibleLines - count) % visibleLines;
     for (int k = 0; k < count; k++)
     {
-        const Seg &g = segs[(first + k) % LOGS_MAX_LINES];
+        const Seg &g = segs[(first + k) % visibleLines];
         tft.drawString(text.substring(g.start, g.start + g.len),
-                       4, LOGS_TOP + k * LOGS_LINE_STEP);
+                       scaleUiX(4), logsTop() + k * LOGS_LINE_STEP);
     }
     lastShownLogVersion = logVersion();
 }
@@ -1253,12 +1345,12 @@ void renderLogsPage()
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("LOGS", 4, 0);
+    tft.drawString("LOGS", scaleUiX(4), 0);
 
     tft.setTextFont(1);
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("tap anywhere to go back", 316, 4);
+    tft.drawString("tap anywhere to go back", screenWidth - scaleUiX(4), scaleUiY(4));
 
     renderLogsLines();
 }
@@ -1342,62 +1434,62 @@ void handleUiTouch()
     switch (uiScreen)
     {
     case SCREEN_SETTINGS:
-        if (buttonContains(BTN_SET_TZ, tx, ty))
+        if (buttonContains(settingsButton(BTN_SET_TZ), tx, ty))
         {
             switchToScreen(SCREEN_ZONE_PICK);
         }
-        else if (buttonContains(BTN_SET_FACE, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_FACE), tx, ty))
         {
             projectConfig.clockFace = (projectConfig.clockFace + 1) % FACE_COUNT;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_CLK, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_CLK), tx, ty))
         {
             SHOW_24HOUR = !SHOW_24HOUR;
             saveDisplayPrefs();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_DATE, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_DATE), tx, ty))
         {
             NOT_US_DATE = !NOT_US_DATE;
             saveDisplayPrefs();
             uiPageDrawn = false;
         }
-        else if (buttonContains(BTN_SET_GRID, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_GRID), tx, ty))
         {
             projectConfig.showGrid = !projectConfig.showGrid;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_WXALERT, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_WXALERT), tx, ty))
         {
             projectConfig.weatherAlerts = !projectConfig.weatherAlerts;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_DIM, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_DIM), tx, ty))
         {
             adjustBacklightFromUi(-15);
         }
-        else if (buttonContains(BTN_SET_BRI, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_BRI), tx, ty))
         {
             adjustBacklightFromUi(15);
         }
-        else if (buttonContains(BTN_SET_STAT, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_STAT), tx, ty))
         {
             statusPageIndex = 0; // always enter on the first status page
             switchToScreen(SCREEN_STATUS);
         }
-        else if (buttonContains(BTN_SET_LOGS, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_LOGS), tx, ty))
         {
             switchToScreen(SCREEN_LOGS);
         }
-        else if (buttonContains(BTN_SET_WIFI, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_WIFI), tx, ty))
         {
             openWifiLoginHelper();
         }
-        else if (buttonContains(BTN_SET_BACK, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_BACK), tx, ty))
         {
             switchToScreen(SCREEN_HOME);
         }
@@ -1406,7 +1498,7 @@ void handleUiTouch()
     case SCREEN_WIFI_LOGIN:
         // Any tap on the Done button (or, once online, anywhere) leaves the
         // helper; switchToScreen tears the relay AP + NAT back down.
-        if (buttonContains(BTN_WIFI_DONE, tx, ty) ||
+        if (buttonContains(scaleUiButton(BTN_WIFI_DONE), tx, ty) ||
             wifiRelayState() == RELAY_SUCCESS)
         {
             switchToScreen(SCREEN_SETTINGS);
@@ -1414,13 +1506,13 @@ void handleUiTouch()
         break;
 
     case SCREEN_WIFI_FAIL:
-        if (buttonContains(BTN_FAIL_REBOOT, tx, ty))
+        if (buttonContains(scaleUiButton(BTN_FAIL_REBOOT), tx, ty))
         {
             Log.println("WiFi failure page: Reboot tapped - restarting");
             delay(300); // let the log line reach the serial port
             ESP.restart();
         }
-        else if (buttonContains(BTN_FAIL_SET, tx, ty))
+        else if (buttonContains(scaleUiButton(BTN_FAIL_SET), tx, ty))
         {
             switchToScreen(SCREEN_SETTINGS);
         }
@@ -1429,7 +1521,7 @@ void handleUiTouch()
     case SCREEN_ZONE_PICK:
         for (int i = 0; i < 4; i++)
         {
-            if (buttonContains(BTN_ZONE[i], tx, ty))
+            if (buttonContains(scaleUiButton(BTN_ZONE[i]), tx, ty))
             {
                 zoneSlotBeingEdited = i;
                 // Open the list on the page containing the current selection
@@ -1446,7 +1538,7 @@ void handleUiTouch()
                 return;
             }
         }
-        if (buttonContains(BTN_ZONE_BACK, tx, ty))
+        if (buttonContains(scaleUiButton(BTN_ZONE_BACK), tx, ty))
         {
             switchToScreen(SCREEN_SETTINGS);
         }
@@ -1467,17 +1559,17 @@ void handleUiTouch()
                 return;
             }
         }
-        if (buttonContains(BTN_TZ_PREV, tx, ty))
+        if (buttonContains(scaleUiButton(BTN_TZ_PREV), tx, ty))
         {
             tzListPage = (tzListPage + totalPages - 1) % totalPages;
             uiPageDrawn = false;
         }
-        else if (buttonContains(BTN_TZ_NEXT, tx, ty))
+        else if (buttonContains(scaleUiButton(BTN_TZ_NEXT), tx, ty))
         {
             tzListPage = (tzListPage + 1) % totalPages;
             uiPageDrawn = false;
         }
-        else if (buttonContains(BTN_TZ_BACK, tx, ty))
+        else if (buttonContains(scaleUiButton(BTN_TZ_BACK), tx, ty))
         {
             switchToScreen(SCREEN_ZONE_PICK);
         }
@@ -1570,12 +1662,14 @@ void renderUiPage()
             if (connectedAtMs == 0)
             {
                 connectedAtMs = millis();
-                tft.fillRect(0, 174, 320, 17, clockBackgroundColor);
+                tft.fillRect(0, scaleUiY(174), screenWidth, scaleUiY(17),
+                             clockBackgroundColor);
                 tft.setTextFont(2);
                 tft.setTextSize(1);
                 tft.setTextDatum(TC_DATUM);
                 tft.setTextColor(TFT_GREEN, clockBackgroundColor);
-                tft.drawString("WiFi connected - resuming...", 160, 175);
+                tft.drawString("WiFi connected - resuming...",
+                               screenWidth / 2, scaleUiY(175));
                 Log.println("WiFi failure page: link came up - resuming");
             }
             else if (millis() - connectedAtMs > 6000)

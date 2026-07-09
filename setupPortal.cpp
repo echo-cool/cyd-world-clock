@@ -49,6 +49,22 @@ static unsigned long g_connectStartMs = 0;
 static unsigned long g_lastNetPollMs = 0;
 static bool g_relayUp = false;
 
+static int portalScaleX(int value)
+{
+    return (value * tft.width() + 160) / 320;
+}
+
+static int portalScaleY(int value)
+{
+    return (value * tft.height() + 120) / 240;
+}
+
+static int portalTextColsFromX(int x)
+{
+    int px = tft.width() - x - portalScaleX(4);
+    return max(1, px / 6);
+}
+
 static DNSServer g_dns;            // captive DNS during PS_SELECTING (hijack -> AP_IP)
 static WebServer g_web(80);        // config page + status API
 static WiFiUDP g_dnsFromPhone;     // :53 forwarder listener during PS_CAPTIVE
@@ -174,43 +190,49 @@ static void drawScreen()
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(TL_DATUM);
-    tft.drawCentreString("Wi-Fi setup", tft.width() / 2, 6, 2);
+    tft.drawCentreString("Wi-Fi setup", tft.width() / 2, portalScaleY(6), 2);
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawCentreString(deviceLabel(), tft.width() / 2, 24, 2);
+    tft.drawCentreString(deviceLabel(), tft.width() / 2, portalScaleY(24), 2);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.drawCentreString(deviceMacAddress(), tft.width() / 2, 42, 1);
+    tft.drawCentreString(deviceMacAddress(), tft.width() / 2, portalScaleY(42), 1);
 
     if (g_state == PS_SELECTING)
     {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.drawString("1. Join this Wi-Fi on your phone:", 5, 58, 2);
+        tft.drawString("1. Join this Wi-Fi on your phone:",
+                       portalScaleX(5), portalScaleY(58), 2);
         tft.setTextColor(TFT_CYAN, TFT_BLACK);
-        tft.drawString(g_apSsid, 20, 78, 2);
+        tft.drawString(g_apSsid, portalScaleX(20), portalScaleY(78), 2);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.drawString("   password: " + String(AP_PASSWORD), 5, 98, 2);
-        tft.drawString("2. A setup page opens; pick your", 5, 124, 2);
-        tft.drawString("   network and enter its password.", 5, 142, 2);
-        tft.drawString("(or browse to " + AP_IP.toString() + ")", 5, 174, 2);
+        tft.drawString("   password: " + String(AP_PASSWORD),
+                       portalScaleX(5), portalScaleY(98), 2);
+        tft.drawString("2. A setup page opens; pick your",
+                       portalScaleX(5), portalScaleY(124), 2);
+        tft.drawString("   network and enter its password.",
+                       portalScaleX(5), portalScaleY(142), 2);
+        tft.drawString("(or browse to " + AP_IP.toString() + ")",
+                       portalScaleX(5), portalScaleY(174), 2);
     }
     else
     {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.drawString("Network: ", 5, 64, 2);
+        tft.drawString("Network: ", portalScaleX(5), portalScaleY(64), 2);
         tft.setTextColor(TFT_CYAN, TFT_BLACK);
-        tft.drawString(g_ssid, 90, 64, 2);
+        tft.drawString(g_ssid, portalScaleX(90), portalScaleY(64), 2);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
         // Wrap the status message across two lines if needed.
         String m = g_message;
-        if (m.length() <= 34)
+        int maxChars = portalTextColsFromX(portalScaleX(5));
+        if (m.length() <= maxChars)
         {
-            tft.drawString(m, 5, 104, 2);
+            tft.drawString(m, portalScaleX(5), portalScaleY(104), 2);
         }
         else
         {
-            int sp = m.lastIndexOf(' ', 34);
-            if (sp < 0) sp = 34;
-            tft.drawString(m.substring(0, sp), 5, 104, 2);
-            tft.drawString(m.substring(sp + 1), 5, 124, 2);
+            int sp = m.lastIndexOf(' ', maxChars);
+            if (sp < 0) sp = maxChars;
+            tft.drawString(m.substring(0, sp), portalScaleX(5), portalScaleY(104), 2);
+            tft.drawString(m.substring(sp + 1), portalScaleX(5), portalScaleY(124), 2);
         }
     }
 }

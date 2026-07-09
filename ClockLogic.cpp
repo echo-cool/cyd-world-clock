@@ -797,6 +797,11 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     uint16_t labelColor = getDayNightLabelColor(zone);
     int centerX = ox + quadrantWidth / 2;
     bool largeLayout = useLargeQuadrantLayout();
+    bool bottomRow = zoneIdx >= 2;
+    int labelY = oy + (largeLayout ? (bottomRow ? 8 : 2)
+                                   : (bottomRow ? 8 : 5));
+    int timeY = oy + (largeLayout ? (bottomRow ? 34 : 29)
+                                  : (bottomRow ? 24 : 22));
 
     // Accent border marking the home quadrant - the reference all the (+1)
     // day offsets are computed against. Drawn first so the bars/text win any
@@ -815,21 +820,20 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Timezone label, top-center. Large panels can afford a stronger city
     // header; long names fall back by measured pixel width.
     if (largeLayout) {
-        drawCenteredTextFit(gfx, zone.name, centerX, oy + 2, labelColor,
+        drawCenteredTextFit(gfx, zone.name, centerX, labelY, labelColor,
                             quadrantWidth - 14, 3, 2);
     } else {
         gfx.setTextFont(1);
         gfx.setTextSize(2);
         gfx.setTextDatum(TC_DATUM);
         gfx.setTextColor(labelColor, clockBackgroundColor);
-        gfx.drawString(zone.name, centerX, oy + 5);
+        gfx.drawString(zone.name, centerX, labelY);
     }
 
     // Time (HH:MM), centered between the label and the date block
     bool pm;
     String hhmm = formatHHMM(local, pm);
-    drawQuadrantTime(gfx, hhmm, centerX, oy + (largeLayout ? 29 : 22),
-                     timeColor, largeLayout);
+    drawQuadrantTime(gfx, hhmm, centerX, timeY, timeColor, largeLayout);
 
     // In 12-hour mode, an AM/PM indicator in the top-right of the quadrant
     if (!SHOW_24HOUR) {
@@ -972,7 +976,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     StatusLine line = computeMarketStatusLine(zone);
     if (line.text.length() > 0 && (!line.flashes || flashState)) {
         if (largeLayout) {
-            drawCenteredTextFit(gfx, line.text, centerX, oy + quadrantHeight - 18,
+            drawCenteredTextFit(gfx, line.text, centerX, oy + quadrantHeight - 24,
                                 line.color, quadrantWidth - 8, 2, 2);
         } else {
             gfx.setTextFont(1);
@@ -980,7 +984,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
             gfx.setTextDatum(TC_DATUM);
             gfx.setTextColor(line.color, clockBackgroundColor);
             gfx.drawString(fitTextToWidth(gfx, line.text, quadrantWidth - 8),
-                           centerX, oy + quadrantHeight - 10);
+                           centerX, oy + quadrantHeight - 12);
         }
     }
 
