@@ -11,6 +11,11 @@
 
 TFT_eSPI tft = TFT_eSPI();
 
+static int displayScaleY(int value)
+{
+  return (value * BOARD_DISPLAY_HEIGHT + 120) / 240;
+}
+
 void CheapYellowDisplay::displaySetup()
 {
 
@@ -31,15 +36,15 @@ void CheapYellowDisplay::displaySetup()
   tft.setTextSize(1);
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("System initializing...", BOARD_DISPLAY_WIDTH / 2, 2);
+  tft.drawString("System initializing...", BOARD_DISPLAY_WIDTH / 2, displayScaleY(2));
 
   // Device identity is shown immediately so two clocks in setup mode are easy
   // to tell apart before the phone joins the setup hotspot.
   tft.setTextFont(1);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.drawString(deviceLabel(), BOARD_DISPLAY_WIDTH / 2, 18);
+  tft.drawString(deviceLabel(), BOARD_DISPLAY_WIDTH / 2, displayScaleY(18));
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.drawString(deviceMacAddress(), BOARD_DISPLAY_WIDTH / 2, 28);
+  tft.drawString(deviceMacAddress(), BOARD_DISPLAY_WIDTH / 2, displayScaleY(28));
 
-  tft.drawFastHLine(0, 38, BOARD_DISPLAY_WIDTH, TFT_DARKGREY);
+  tft.drawFastHLine(0, displayScaleY(38), BOARD_DISPLAY_WIDTH, TFT_DARKGREY);
 }
