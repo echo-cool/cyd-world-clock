@@ -176,6 +176,31 @@ bool buttonContains(const UIButton &b, int tx, int ty)
     return tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h;
 }
 
+static int scaleUiX(int value)
+{
+    return (value * screenWidth + 160) / 320;
+}
+
+static int scaleUiY(int value)
+{
+    return (value * screenHeight + 120) / 240;
+}
+
+static UIButton scaleUiButton(const UIButton &base)
+{
+    UIButton b = {
+        scaleUiX(base.x),
+        scaleUiY(base.y),
+        scaleUiX(base.w),
+        scaleUiY(base.h)
+    };
+    if (b.x + b.w > screenWidth)
+        b.w = screenWidth - b.x;
+    if (b.y + b.h > screenHeight)
+        b.h = screenHeight - b.y;
+    return b;
+}
+
 void drawButton(const UIButton &b, const String &label, uint16_t border, uint16_t textColor)
 {
     tft.drawRoundRect(b.x, b.y, b.w, b.h, 6, border);
@@ -201,6 +226,12 @@ const UIButton BTN_SET_STAT = {20, 208, 62, 26};
 const UIButton BTN_SET_LOGS = {88, 208, 46, 26};
 const UIButton BTN_SET_WIFI = {140, 208, 92, 26};
 const UIButton BTN_SET_BACK = {238, 208, 62, 26};
+const UIButton SETTINGS_BRIGHTNESS_LABEL = {85, 178, 150, 26};
+
+static UIButton settingsButton(const UIButton &base)
+{
+    return scaleUiButton(base);
+}
 
 // Wi-Fi login helper page: a single "Done" button (mirrors BTN_SET_BACK).
 const UIButton BTN_WIFI_DONE = {90, 202, 140, 32};
@@ -588,13 +619,14 @@ void saveDisplayPrefs()
 
 void drawSettingsBrightnessLabel()
 {
-    tft.fillRect(85, 178, 150, 26, clockBackgroundColor);
+    UIButton b = settingsButton(SETTINGS_BRIGHTNESS_LABEL);
+    tft.fillRect(b.x, b.y, b.w, b.h, clockBackgroundColor);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
     int pct = brightnessPercent(backlightLevel);
-    tft.drawString("Brightness " + String(pct) + "%", 160, 191);
+    tft.drawString("Brightness " + String(pct) + "%", b.x + b.w / 2, b.y + b.h / 2);
 }
 
 void adjustBacklightFromUi(int delta)
@@ -693,7 +725,7 @@ void renderSettingsPage()
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("SETTINGS", 8, 2);
+    tft.drawString("SETTINGS", scaleUiX(8), scaleUiY(2));
 
     // Firmware identity in the header's right gutter: the compile timestamp
     // (the "version") over the short git hash, both small so they stay clear
@@ -701,35 +733,35 @@ void renderSettingsPage()
     tft.setTextFont(1);
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString(String(__DATE__) + " " + __TIME__, 316, 4);
-    tft.drawString("git " + String(firmwareGitHash()), 316, 15);
+    tft.drawString(String(__DATE__) + " " + __TIME__, screenWidth - scaleUiX(4), scaleUiY(4));
+    tft.drawString("git " + String(firmwareGitHash()), screenWidth - scaleUiX(4), scaleUiY(15));
 
-    drawButton(BTN_SET_TZ, "Change timezones  >", TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_FACE,
+    drawButton(settingsButton(BTN_SET_TZ), "Change timezones  >", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_FACE),
                "Clock face: " + String(clockFaceName(projectConfig.clockFace)),
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_CLK,
+    drawButton(settingsButton(BTN_SET_CLK),
                SHOW_24HOUR ? "Clock format: 24 hour" : "Clock format: 12 hour (AM/PM)",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_DATE,
+    drawButton(settingsButton(BTN_SET_DATE),
                NOT_US_DATE ? "Date format: DD/MM/YY" : "Date format: MM/DD/YY",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_GRID,
+    drawButton(settingsButton(BTN_SET_GRID),
                projectConfig.showGrid ? "Grid: On" : "Grid: Off",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_WXALERT,
+    drawButton(settingsButton(BTN_SET_WXALERT),
                projectConfig.weatherAlerts ? "Wx alert: On" : "Wx alert: Off",
                TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_DIM, "-", TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_BRI, "+", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_DIM), "-", TFT_CYAN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_BRI), "+", TFT_CYAN, TFT_WHITE);
     drawSettingsBrightnessLabel();
-    drawButton(BTN_SET_STAT, "Status", TFT_GREEN, TFT_WHITE);
-    drawButton(BTN_SET_LOGS, "Logs", TFT_GREEN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_STAT), "Status", TFT_GREEN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_LOGS), "Logs", TFT_GREEN, TFT_WHITE);
     // Enables the device's helper AP + captive-portal login relay. Amber when
     // a captive portal is blocking the internet, to draw the eye.
-    drawButton(BTN_SET_WIFI, "WiFi login",
+    drawButton(settingsButton(BTN_SET_WIFI), "WiFi login",
                captivePortalActive() ? TFT_ORANGE : TFT_CYAN, TFT_WHITE);
-    drawButton(BTN_SET_BACK, "Back", TFT_DARKGREY, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_BACK), "Back", TFT_DARKGREY, TFT_WHITE);
 }
 
 // The live status line of the Wi-Fi login helper (row 168), repainted once a
@@ -1342,62 +1374,62 @@ void handleUiTouch()
     switch (uiScreen)
     {
     case SCREEN_SETTINGS:
-        if (buttonContains(BTN_SET_TZ, tx, ty))
+        if (buttonContains(settingsButton(BTN_SET_TZ), tx, ty))
         {
             switchToScreen(SCREEN_ZONE_PICK);
         }
-        else if (buttonContains(BTN_SET_FACE, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_FACE), tx, ty))
         {
             projectConfig.clockFace = (projectConfig.clockFace + 1) % FACE_COUNT;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_CLK, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_CLK), tx, ty))
         {
             SHOW_24HOUR = !SHOW_24HOUR;
             saveDisplayPrefs();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_DATE, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_DATE), tx, ty))
         {
             NOT_US_DATE = !NOT_US_DATE;
             saveDisplayPrefs();
             uiPageDrawn = false;
         }
-        else if (buttonContains(BTN_SET_GRID, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_GRID), tx, ty))
         {
             projectConfig.showGrid = !projectConfig.showGrid;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_WXALERT, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_WXALERT), tx, ty))
         {
             projectConfig.weatherAlerts = !projectConfig.weatherAlerts;
             projectConfig.saveConfigFile();
             uiPageDrawn = false; // redraw with the new label
         }
-        else if (buttonContains(BTN_SET_DIM, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_DIM), tx, ty))
         {
             adjustBacklightFromUi(-15);
         }
-        else if (buttonContains(BTN_SET_BRI, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_BRI), tx, ty))
         {
             adjustBacklightFromUi(15);
         }
-        else if (buttonContains(BTN_SET_STAT, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_STAT), tx, ty))
         {
             statusPageIndex = 0; // always enter on the first status page
             switchToScreen(SCREEN_STATUS);
         }
-        else if (buttonContains(BTN_SET_LOGS, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_LOGS), tx, ty))
         {
             switchToScreen(SCREEN_LOGS);
         }
-        else if (buttonContains(BTN_SET_WIFI, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_WIFI), tx, ty))
         {
             openWifiLoginHelper();
         }
-        else if (buttonContains(BTN_SET_BACK, tx, ty))
+        else if (buttonContains(settingsButton(BTN_SET_BACK), tx, ty))
         {
             switchToScreen(SCREEN_HOME);
         }
