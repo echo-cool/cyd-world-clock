@@ -795,7 +795,7 @@ static void handleApiStatus()
 {
     if (!webAuthenticate()) return;
 
-    DynamicJsonDocument doc(3072);
+    DynamicJsonDocument doc(4096);
     doc["hostname"] = projectConfig.hostname;
     doc["ip"] = WiFi.localIP().toString();
     doc["ssid"] = WiFi.SSID();
@@ -839,6 +839,7 @@ static void handleApiStatus()
                                 : -1;
     doc["ntpServer"] = currentNtpServer();
     doc["utc"] = UTC.dateTime("Y-m-d H:i:s");
+    doc["utcEpoch"] = (long)UTC.now();
     doc["build"] = String(__DATE__) + " " + __TIME__;
     doc["git"] = firmwareGitHash();
     doc["clockFace"] = clockFaceName(projectConfig.clockFace);
@@ -876,6 +877,12 @@ static void handleApiStatus()
         JsonObject z = zones.createNestedObject();
         z["name"] = worldZones[i].name;
         z["tz"] = worldZones[i].timezone;
+        time_t local = worldZones[i].tz.now();
+        z["localTime"] = worldZones[i].tz.dateTime("Y-m-d H:i:s T P");
+        z["localEpoch"] = (long)local;
+        z["utcOffsetMin"] = -worldZones[i].tz.getOffset();
+        z["olson"] = worldZones[i].tz.getOlson();
+        z["posix"] = worldZones[i].tz.getPosix();
         if (worldZones[i].lastMarketStatus.length() > 0)
         {
             z["market"] = worldZones[i].lastMarketStatus;

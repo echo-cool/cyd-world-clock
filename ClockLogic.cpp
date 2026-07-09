@@ -1314,7 +1314,9 @@ void rollingClockSetup(bool is24Hour, bool usDate)
             // zone's EEPROM cache slot, assigned by setCache above). Note: don't
             // "verify" by comparing local time against UTC - zones at UTC+0
             // (e.g. London in winter) legitimately match UTC.
-            if (worldZones[i].tz.setLocation(worldZones[i].timezone)) {
+            bool fetched = worldZones[i].tz.setLocation(worldZones[i].timezone);
+            if (fetched &&
+                worldZones[i].tz.getOlson().equalsIgnoreCase(worldZones[i].timezone)) {
                 tzSuccess = true;
 
                 time_t local = worldZones[i].tz.now();
@@ -1328,7 +1330,13 @@ void rollingClockSetup(bool is24Hour, bool usDate)
                 if (minute(local) < 10) Log.print("0");
                 Log.println(minute(local));
             } else {
-                Log.println("FAILED: timezone server gave no usable answer");
+                if (fetched) {
+                    Log.println("FAILED: timezone server returned " +
+                                worldZones[i].tz.getOlson() + " for " +
+                                worldZones[i].timezone);
+                } else {
+                    Log.println("FAILED: timezone server gave no usable answer");
+                }
                 retryCount++;
                 if (retryCount < maxRetries) {
                     Log.println("Retrying in 2 seconds...");

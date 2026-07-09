@@ -158,6 +158,11 @@ void applyConfiguredZones()
     }
 }
 
+static bool zoneRulesMatch(WorldClockZone &zone, const String &timezone)
+{
+    return zone.tz.getOlson().equalsIgnoreCase(timezone);
+}
+
 /*-------- Buttons ----------*/
 
 struct UIButton
@@ -620,14 +625,38 @@ void applyZoneSelection(int slot, const TimezonePreset &preset)
     worldZones[slot].lastDay = -1;
     worldZones[slot].initialized = false;
 
-    if (!worldZones[slot].tz.setLocation(preset.tz))
+    // Start from a clean ezTime object when a slot changes. Reusing the old
+    // object can leave the previous city's rules alive if a rapid sequence of
+    // timezone-server lookups gets a stale UDP response.
+    worldZones[slot].tz = Timezone();
+
+    bool tzReady = false;
+    if (worldZones[slot].tz.setCache(slot * EEPROM_CACHE_LEN) &&
+        zoneRulesMatch(worldZones[slot], preset.tz))
     {
-        // Timezone server unreachable - fall back to the preset's built-in
-        // POSIX rules so the quadrant still ticks with correct local time.
-        Log.println("Failed to fetch timezone " + String(preset.tz) +
-                       " - using built-in POSIX rules");
-        worldZones[slot].tz.setPosix(preset.posix);
+        tzReady = true;
     }
+
+    if (!tzReady)
+    {
+        bool fetched = worldZones[slot].tz.setLocation(preset.tz);
+        if (!(fetched && zoneRulesMatch(worldZones[slot], preset.tz)))
+        {
+            String got = fetched ? worldZones[slot].tz.getOlson() : String("");
+            if (got.length() > 0)
+            {
+                Log.println("Timezone lookup for " + String(preset.tz) +
+                            " returned " + got + " - using built-in POSIX rules");
+            }
+            else
+            {
+                Log.println("Failed to fetch timezone " + String(preset.tz) +
+                            " - using built-in POSIX rules");
+            }
+            worldZones[slot].tz.setPosix(preset.posix);
+        }
+    }
+
     if (worldZones[slot].market.hasMarket)
     {
         worldZones[slot].lastMarketStatus = getMarketStatus(worldZones[slot]);
