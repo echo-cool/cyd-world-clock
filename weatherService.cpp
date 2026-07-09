@@ -160,9 +160,9 @@ static const char *severeWeatherText(int code)
     case 67: return "FREEZING RAIN";    // freezing rain
     case 75:                            // heavy snowfall
     case 86: return "HEAVY SNOW";       // heavy snow showers
-    case 95: return "STORM";            // thunderstorm
+    case 95: return "THUNDERSTORM";            // thunderstorm
     case 96:
-    case 99: return "HAIL STORM";       // thunderstorm with hail
+    case 99: return "HAIL THUNDERSTORM";       // thunderstorm with hail
     default: return "";                 // not alert-worthy
     }
 }
@@ -198,7 +198,7 @@ static String compactLeadTime(int minutes)
     int h = minutes / 60;
     int m = minutes % 60;
     if (m == 0) return String(h) + "H";
-    return String(h) + "H" + String(m);
+    return String(h) + "H" + String(m) + "M";
 }
 
 static String precipTransitionNotice(int currentCode, JsonArray forecastCodes)
