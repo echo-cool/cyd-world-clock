@@ -377,9 +377,10 @@ settings page (the choice is saved to flash):
   server.
 
 <p align="center">
-  <img src="img/face-2.jpg" alt="Big clock face" width="32%"/>
-  <img src="img/face-cal.jpg" alt="Calendar face marking Independence Day" width="32%"/>
-  <img src="img/face-weather.jpg" alt="Weather face" width="32%"/>
+  <img src="img/face-world.jpg" alt="World clock face with weather and market status" width="24%"/>
+  <img src="img/face-2.jpg" alt="Big clock face" width="24%"/>
+  <img src="img/face-cal.jpg" alt="Calendar face marking Independence Day" width="24%"/>
+  <img src="img/face-weather.jpg" alt="Weather face" width="24%"/>
 </p>
 
 ## Settings page
@@ -546,9 +547,13 @@ to the next page, and the last tap returns to settings:
   manual-brightness hold remaining, and the configured night window.
 
 Everything on these pages is also in the `/api/status` JSON for scripting.
+The screenshots below are direct `/screenshot` captures, with example network
+values substituted where live identifiers would otherwise appear.
 
 <p align="center">
-  <img src="img/sys-status-1.jpg" alt="System status page 1 of 3" width="45%"/>
+  <img src="img/sys-status-1.jpg" alt="System status page 1 of 3" width="31%"/>
+  <img src="img/sys-status-2.jpg" alt="Network and storage status page 2 of 3" width="31%"/>
+  <img src="img/sys-status-3.jpg" alt="Clock data status page 3 of 3" width="31%"/>
 </p>
 
 ## Logs page
