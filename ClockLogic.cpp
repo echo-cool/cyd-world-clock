@@ -244,6 +244,11 @@ uint16_t getDayNightLabelColor(WorldClockZone &zone)
     }
 }
 
+bool zoneIsNight(WorldClockZone &zone)
+{
+    return zoneDayPhase(zone) != PHASE_DAY;
+}
+
 // ~12px sun (day) or crescent moon (evening/night) so the day/night state
 // doesn't ride on text color alone. Sized/positioned to clear the longest
 // centered city names (e.g. SANTA CLARA starts at quadrant x=14).
@@ -286,33 +291,62 @@ static void drawMiniCloud(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
     gfx.fillRect(cx - 7, cy + 1, 15, 5, color);
 }
 
-static void drawMiniSnowflake(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
+static void drawMiniMoon(TFT_eSPI &gfx, int cx, int cy)
 {
-    gfx.drawLine(cx - 4, cy, cx + 4, cy, color);
-    gfx.drawLine(cx, cy - 4, cx, cy + 4, color);
-    gfx.drawLine(cx - 3, cy - 3, cx + 3, cy + 3, color);
-    gfx.drawLine(cx - 3, cy + 3, cx + 3, cy - 3, color);
+    gfx.fillCircle(cx, cy, 4, EVENING_TEXT_COLOR);
+    gfx.fillCircle(cx + 3, cy - 1, 4, clockBackgroundColor); // carve the crescent
 }
 
-static void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code)
+static void drawMiniSnowflake(TFT_eSPI &gfx, int cx, int cy, uint16_t color, int r)
 {
-    if (code == 0 || code == 1) {
-        drawMiniSun(gfx, cx, cy, TFT_YELLOW);
+    gfx.drawLine(cx - r, cy, cx + r, cy, color);
+    gfx.drawLine(cx, cy - r, cx, cy + r, color);
+    gfx.drawLine(cx - r + 1, cy - r + 1, cx + r - 1, cy + r - 1, color);
+    gfx.drawLine(cx - r + 1, cy + r - 1, cx + r - 1, cy - r + 1, color);
+}
+
+// Three slanted streaks hanging from a cloud whose base sits at (cx, cy).
+static void drawMiniRain(TFT_eSPI &gfx, int cx, int cy)
+{
+    gfx.drawLine(cx - 5, cy, cx - 7, cy + 4, TFT_CYAN);
+    gfx.drawLine(cx, cy, cx - 2, cy + 5, TFT_CYAN);
+    gfx.drawLine(cx + 5, cy, cx + 3, cy + 4, TFT_CYAN);
+}
+
+// Zigzag lightning bolt with its top at (cx, cy), reaching down to cy+7.
+static void drawMiniBolt(TFT_eSPI &gfx, int cx, int cy)
+{
+    gfx.drawLine(cx, cy, cx - 3, cy + 4, TFT_ORANGE);
+    gfx.drawLine(cx - 3, cy + 4, cx + 1, cy + 3, TFT_ORANGE);
+    gfx.drawLine(cx + 1, cy + 3, cx - 2, cy + 7, TFT_ORANGE);
+}
+
+// ~14px condition glyph for a WMO weather code, one distinct shape per code
+// group (https://open-meteo.com/en/docs#weather_variable_documentation).
+// `night` swaps the sun for a crescent moon on the clear / partly-cloudy /
+// shower shapes so a clear 10 PM quadrant doesn't show a sun. Shared by the
+// quadrant weather badge and the weather face rows.
+void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code, bool night)
+{
+    if (code == 0 || code == 1) { // clear / mostly clear
+        if (night) drawMiniMoon(gfx, cx, cy);
+        else drawMiniSun(gfx, cx, cy, TFT_YELLOW);
         return;
     }
 
-    if (code == 2) {
-        drawMiniSun(gfx, cx - 4, cy - 3, TFT_YELLOW);
+    if (code == 2) { // partly cloudy: sun or moon peeking behind the cloud
+        if (night) drawMiniMoon(gfx, cx - 4, cy - 3);
+        else drawMiniSun(gfx, cx - 4, cy - 3, TFT_YELLOW);
         drawMiniCloud(gfx, cx + 2, cy + 1, TFT_LIGHTGREY);
         return;
     }
 
-    if (code == 3) {
+    if (code == 3) { // overcast
         drawMiniCloud(gfx, cx, cy, TFT_LIGHTGREY);
         return;
     }
 
-    if (code == 45 || code == 48) {
+    if (code == 45 || code == 48) { // fog: hazy bars
         uint16_t c = TFT_LIGHTGREY;
         gfx.drawFastHLine(cx - 7, cy - 3, 14, c);
         gfx.drawFastHLine(cx - 5, cy + 1, 12, c);
@@ -320,30 +354,57 @@ static void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code)
         return;
     }
 
-    if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+    if (code >= 51 && code <= 55) { // drizzle: sparse dots, lighter than rain
         drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
-        drawMiniSnowflake(gfx, cx, cy + 6, TFT_WHITE);
+        gfx.fillRect(cx - 5, cy + 4, 2, 2, TFT_CYAN);
+        gfx.fillRect(cx - 1, cy + 6, 2, 2, TFT_CYAN);
+        gfx.fillRect(cx + 3, cy + 4, 2, 2, TFT_CYAN);
         return;
     }
 
-    if (code >= 95) {
+    if (code == 56 || code == 57 || code == 66 || code == 67) {
+        // freezing drizzle/rain: a streak and a small flake side by side
+        drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
+        gfx.drawLine(cx - 3, cy + 4, cx - 5, cy + 8, TFT_CYAN);
+        drawMiniSnowflake(gfx, cx + 4, cy + 6, TFT_WHITE, 3);
+        return;
+    }
+
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) { // snow
+        drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
+        drawMiniSnowflake(gfx, cx, cy + 6, TFT_WHITE, 4);
+        return;
+    }
+
+    if (code == 96 || code == 99) { // thunderstorm with hail: bolt + stones
         drawMiniCloud(gfx, cx, cy - 2, TFT_DARKGREY);
-        gfx.drawLine(cx - 1, cy + 2, cx - 4, cy + 8, TFT_ORANGE);
-        gfx.drawLine(cx - 4, cy + 8, cx + 1, cy + 6, TFT_ORANGE);
-        gfx.drawLine(cx + 1, cy + 6, cx - 2, cy + 11, TFT_ORANGE);
+        drawMiniBolt(gfx, cx - 1, cy + 2);
+        gfx.fillRect(cx - 7, cy + 5, 2, 2, TFT_WHITE);
+        gfx.fillRect(cx + 4, cy + 4, 2, 2, TFT_WHITE);
         return;
     }
 
-    if (weatherCodeHasPrecip(code)) {
+    if (code >= 95) { // thunderstorm
+        drawMiniCloud(gfx, cx, cy - 2, TFT_DARKGREY);
+        drawMiniBolt(gfx, cx - 1, cy + 2);
+        return;
+    }
+
+    if (code >= 80 && code <= 82) { // rain showers: sun/moon behind the cloud
+        if (night) drawMiniMoon(gfx, cx - 5, cy - 5);
+        else drawMiniSun(gfx, cx - 5, cy - 5, TFT_YELLOW);
+        drawMiniCloud(gfx, cx + 1, cy - 1, TFT_LIGHTGREY);
+        drawMiniRain(gfx, cx + 1, cy + 5);
+        return;
+    }
+
+    if (weatherCodeHasPrecip(code)) { // plain rain (61/63/65)
         drawMiniCloud(gfx, cx, cy - 2, TFT_LIGHTGREY);
-        uint16_t rain = TFT_CYAN;
-        gfx.drawLine(cx - 5, cy + 4, cx - 7, cy + 8, rain);
-        gfx.drawLine(cx, cy + 4, cx - 2, cy + 9, rain);
-        gfx.drawLine(cx + 5, cy + 4, cx + 3, cy + 8, rain);
+        drawMiniRain(gfx, cx, cy + 4);
         return;
     }
 
-    gfx.drawCircle(cx, cy, 5, TFT_DARKGREY);
+    gfx.drawCircle(cx, cy, 5, TFT_DARKGREY); // unknown code
 }
 
 
@@ -930,10 +991,11 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     } else {
         // With quadrant weather enabled, large panels keep the date centered;
         // the weather badge moves to the day row so it does not pull the
-        // primary time/date stack off-center.
+        // primary time/date stack off-center. Small panels shift the date
+        // left instead, making room for the icon + reading on the same row.
         int dateX = centerX;
         if (projectConfig.quadWeather) {
-            dateX = largeLayout ? centerX - 34 : centerX - 12;
+            dateX = largeLayout ? centerX - 34 : centerX - 16;
         }
         if (largeLayout && projectConfig.quadWeather) {
             gfx.setTextDatum(TC_DATUM);
@@ -943,29 +1005,35 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         }
     }
 
-    // Current temperature on the right of the date line (the date is always
-    // 8 chars, so this slot is guaranteed free). A small condition icon sits
-    // next to the white reading; very wide readings still fit by dropping only
-    // the icon. Data comes from the background fetch task that already serves
-    // the weather face; nothing is shown until the first fetch lands (or for
-    // zones without preset coordinates).
+    // Current temperature on the right of the date line (day row on the large
+    // layout), with a condition icon next to the white reading. Font 2 keeps
+    // the small-layout reading the same height as the date beside it. The
+    // icon is dropped - never overlapped - when a rare 3-char reading (-12,
+    // 104) leaves no measured room for it. Data comes from the background
+    // fetch task that already serves the weather face; nothing is shown until
+    // the first fetch lands (or for zones without preset coordinates).
     if (projectConfig.quadWeather && !showNoticeOnDateLine(zone)) {
         ZoneWeather w = getZoneWeather(zoneIdx);
         if (w.valid) {
             String temp = String(displayTemp(w.tempC));
-            gfx.setTextFont(1);
+            gfx.setTextFont(largeLayout ? 1 : 2);
             gfx.setTextSize(largeLayout ? 2 : 1);
             gfx.setTextDatum(TR_DATUM);
             gfx.setTextColor(TFT_WHITE, clockBackgroundColor);
             int tempRight = ox + quadrantWidth - (largeLayout ? 16 : 10);
-            int tempY = largeLayout ? dayY + 1 : dateY + 4;
+            int tempY = largeLayout ? dayY + 1 : dateY;
             gfx.drawString(temp, tempRight, tempY);
             gfx.drawCircle(tempRight + (largeLayout ? 4 : 3),
-                           tempY + (largeLayout ? 4 : 1), 2, TFT_WHITE); // degree mark
-            if (temp.length() <= 3) {
-                drawWeatherIcon(gfx, tempRight - gfx.textWidth(temp) -
-                                      (largeLayout ? 17 : 10),
-                                largeLayout ? tempY + 8 : dateY + 8, w.weatherCode);
+                           tempY + (largeLayout ? 4 : 3), 2, TFT_WHITE); // degree mark
+            int iconCx = tempRight - gfx.textWidth(temp) - (largeLayout ? 17 : 9);
+            // The small-layout date is 8 fixed-width chars (96px) centered on
+            // centerX-16; the widest icons reach ~11px from their center.
+            bool iconFits = largeLayout ? temp.length() <= 3
+                                        : iconCx - 11 >= centerX + 32;
+            if (iconFits) {
+                drawWeatherIcon(gfx, iconCx,
+                                largeLayout ? tempY + 8 : dateY + 8,
+                                w.weatherCode, phase != PHASE_DAY);
             }
         }
     }
