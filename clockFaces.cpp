@@ -314,6 +314,11 @@ static void renderWeatherFace(bool full)
             tft.setTextDatum(TR_DATUM);
             tft.setTextColor(weatherCodeColor(w.weatherCode), clockBackgroundColor);
             tft.drawString(weatherCodeText(w.weatherCode), 312, ry + 22);
+
+            // Condition glyph in the open middle of the row - same
+            // night-aware icons as the quadrant badges.
+            drawWeatherIcon(tft, 186, ry + 12, w.weatherCode,
+                            zoneIsNight(worldZones[i]));
         } else {
             tft.setTextFont(2);
             tft.setTextDatum(TR_DATUM);

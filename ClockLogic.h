@@ -128,6 +128,14 @@ uint16_t getMarketStatusColor(String status);
 uint16_t getDayNightColor(WorldClockZone &zone);
 uint16_t getDayNightLabelColor(WorldClockZone &zone);
 
+// True when the sun is down in a zone (evening or night phase).
+bool zoneIsNight(WorldClockZone &zone);
+
+// ~14px weather-condition glyph for a WMO code centered on (cx, cy); `night`
+// swaps the sun shapes for a crescent moon. Shared by the quadrant weather
+// badge (ClockLogic.cpp) and the weather face rows (clockFaces.cpp).
+void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code, bool night);
+
 // "HH:MM" honoring the 24-hour user setting; pm reports AM/PM for the
 // indicator drawn next to the time in 12-hour mode. Shared by the quadrant
 // renderer and all the alternate clock faces.
