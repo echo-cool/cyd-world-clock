@@ -18,7 +18,8 @@
 // (web settings page, default 20 minutes, re-read every due-check).
 const unsigned long WEATHER_RETRY_MS = 5UL * 60UL * 1000UL; // after a failure
 const unsigned long WEATHER_TASK_TICK_MS = 2000;            // due-check cadence
-const int PRECIP_NOTICE_STEPS = 12;                         // current + 2h45m at 15-min cadence
+// The 15-minute forecast window (PRECIP_FORECAST_STEPS, weatherService.h)
+// feeds both the precip-transition notices and the big-clock rain chart.
 
 static unsigned long weatherRefreshMs()
 {
@@ -50,7 +51,11 @@ static WeatherLoc weatherLocs[4] = {};
 static uint32_t locsGeneration = 0; // bumped on snapshot; stale fetches discard
 static ZoneWeather zoneWeather[4] = {};
 static String zoneAlert[4];         // weather alert text per zone ("" = none)
+static bool zoneAlertOfficial[4] = {}; // alert came from the NWS feed
 static String zonePrecipNotice[4];  // short rain/snow start-stop text
+static float zonePrecipMm[4][PRECIP_FORECAST_STEPS] = {};    // mm per 15-min step
+static uint8_t zonePrecipCode[4][PRECIP_FORECAST_STEPS] = {}; // WMO code per step
+static int zonePrecipCount[4] = {};
 static uint32_t dataVersion = 0;
 static bool fetchForced = true; // fetch as soon as the task starts
 static bool attempted = false;
@@ -86,7 +91,7 @@ static void snapshotLocationsLocked()
 
 ZoneWeather getZoneWeather(int i)
 {
-    if (i < 0 || i > 3) return {false, 0, 0};
+    if (i < 0 || i > 3) return ZoneWeather{};
     weatherLock();
     ZoneWeather w = zoneWeather[i];
     weatherUnlock();
@@ -102,11 +107,34 @@ String getZoneAlert(int i)
     return a;
 }
 
+bool getZoneAlertOfficial(int i)
+{
+    if (i < 0 || i > 3) return false;
+    weatherLock();
+    bool o = zoneAlertOfficial[i];
+    weatherUnlock();
+    return o;
+}
+
 String getZonePrecipNotice(int i)
 {
     if (i < 0 || i > 3) return "";
     weatherLock();
     String n = zonePrecipNotice[i];
+    weatherUnlock();
+    return n;
+}
+
+int getZonePrecip15(int i, float *mm, uint8_t *codes, int maxOut)
+{
+    if (i < 0 || i > 3 || maxOut <= 0) return 0;
+    weatherLock();
+    int n = min(zonePrecipCount[i], maxOut);
+    for (int k = 0; k < n; k++)
+    {
+        mm[k] = zonePrecipMm[i][k];
+        codes[k] = zonePrecipCode[i][k];
+    }
     weatherUnlock();
     return n;
 }
@@ -137,7 +165,9 @@ void weatherInvalidate()
     {
         zoneWeather[i].valid = false;
         zoneAlert[i] = "";
+        zoneAlertOfficial[i] = false;
         zonePrecipNotice[i] = "";
+        zonePrecipCount[i] = 0;
     }
     attempted = false;
     succeeded = false;
@@ -336,6 +366,49 @@ static String fetchUsAlert(float lat, float lon)
     return best ? normalizeAlertText(String(best)) : "";
 }
 
+// Extract one location's block of an Open-Meteo response into a ZoneWeather
+// plus its precipitation-transition notice and the 15-minute precipitation
+// series for the rain chart. Shared by the single-location (plain object)
+// and multi-location (array element) response shapes.
+static void parseLocationWeather(JsonVariant loc, ZoneWeather &w, String &notice,
+                                 float *precipMm, uint8_t *precipCode,
+                                 int &precipCount)
+{
+    JsonObject cur = loc["current"];
+    w.tempC = cur["temperature_2m"].as<float>();
+    w.weatherCode = cur["weather_code"].as<int>();
+    w.humidity = cur["relative_humidity_2m"].isNull()
+                     ? -1
+                     : cur["relative_humidity_2m"].as<int>();
+    w.valid = !cur.isNull();
+
+    JsonObject daily = loc["daily"];
+    w.hasMinMax = !daily["temperature_2m_max"][0].isNull() &&
+                  !daily["temperature_2m_min"][0].isNull();
+    if (w.hasMinMax)
+    {
+        w.tempMaxC = daily["temperature_2m_max"][0].as<float>();
+        w.tempMinC = daily["temperature_2m_min"][0].as<float>();
+    }
+
+    JsonArray codes = loc["minutely_15"]["weather_code"].as<JsonArray>();
+    notice = precipTransitionNotice(w.weatherCode, codes);
+
+    // 15-minute precipitation amounts + codes for the rain chart. Both
+    // arrays come from the same forecast, so their indices line up.
+    JsonArray amounts = loc["minutely_15"]["precipitation"].as<JsonArray>();
+    precipCount = 0;
+    if (!amounts.isNull())
+    {
+        for (int k = 0; k < (int)amounts.size() && k < PRECIP_FORECAST_STEPS; k++)
+        {
+            precipMm[k] = amounts[k].as<float>();
+            precipCode[k] = (uint8_t)(k < (int)codes.size() ? codes[k].as<int>() : 0);
+            precipCount = k + 1;
+        }
+    }
+}
+
 // One fetch attempt, run on the task core. The blocking network work happens
 // on a local copy of the coordinates; results are committed under the mutex
 // at the end (and discarded if the zones changed mid-fetch).
@@ -375,12 +448,19 @@ static bool performFetch()
     // drop TLS entirely rather than fight the memory.
     ZoneWeather fresh[4] = {};
     String freshPrecipNotice[4];
+    float freshPrecipMm[4][PRECIP_FORECAST_STEPS] = {};
+    uint8_t freshPrecipCode[4][PRECIP_FORECAST_STEPS] = {};
+    int freshPrecipCount[4] = {};
     {
+        // timezone=auto makes the one-day daily high/low aggregate over each
+        // location's own calendar day instead of the GMT day.
         String url = "http://api.open-meteo.com/v1/forecast?latitude=" + lats +
                      "&longitude=" + lons +
-                     "&current=temperature_2m,weather_code"
-                     "&minutely_15=weather_code"
-                     "&forecast_minutely_15=" + String(PRECIP_NOTICE_STEPS);
+                     "&current=temperature_2m,relative_humidity_2m,weather_code"
+                     "&daily=temperature_2m_max,temperature_2m_min"
+                     "&forecast_days=1&timezone=auto"
+                     "&minutely_15=weather_code,precipitation"
+                     "&forecast_minutely_15=" + String(PRECIP_FORECAST_STEPS);
         Log.println("Fetching weather: " + url);
 
         WiFiClient client;
@@ -406,21 +486,29 @@ static bool performFetch()
         // stays small no matter how much boilerplate open-meteo wraps around it.
         // Keep the document scoped to this block so its heap is released before
         // the later NWS HTTPS handshakes.
-        StaticJsonDocument<384> filter;
+        StaticJsonDocument<512> filter;
         if (n == 1)
         {
             filter["current"]["temperature_2m"] = true;
+            filter["current"]["relative_humidity_2m"] = true;
             filter["current"]["weather_code"] = true;
+            filter["daily"]["temperature_2m_max"] = true;
+            filter["daily"]["temperature_2m_min"] = true;
             filter["minutely_15"]["weather_code"] = true;
+            filter["minutely_15"]["precipitation"] = true;
         }
         else
         {
             filter[0]["current"]["temperature_2m"] = true;
+            filter[0]["current"]["relative_humidity_2m"] = true;
             filter[0]["current"]["weather_code"] = true;
+            filter[0]["daily"]["temperature_2m_max"] = true;
+            filter[0]["daily"]["temperature_2m_min"] = true;
             filter[0]["minutely_15"]["weather_code"] = true;
+            filter[0]["minutely_15"]["precipitation"] = true;
         }
 
-        DynamicJsonDocument doc(4096);
+        DynamicJsonDocument doc(8192);
         DeserializationError err =
             deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
         http.end();
@@ -437,26 +525,18 @@ static bool performFetch()
             JsonArray arr = doc.as<JsonArray>();
             for (int k = 0; k < n && k < (int)arr.size(); k++)
             {
-                JsonObject cur = arr[k]["current"];
                 int zi = zoneForSlot[k];
-                fresh[zi].tempC = cur["temperature_2m"].as<float>();
-                fresh[zi].weatherCode = cur["weather_code"].as<int>();
-                fresh[zi].valid = !cur.isNull();
-                freshPrecipNotice[zi] =
-                    precipTransitionNotice(fresh[zi].weatherCode,
-                                           arr[k]["minutely_15"]["weather_code"].as<JsonArray>());
+                parseLocationWeather(arr[k], fresh[zi], freshPrecipNotice[zi],
+                                     freshPrecipMm[zi], freshPrecipCode[zi],
+                                     freshPrecipCount[zi]);
             }
         }
         else
         {
-            JsonObject cur = doc["current"];
             int zi = zoneForSlot[0];
-            fresh[zi].tempC = cur["temperature_2m"].as<float>();
-            fresh[zi].weatherCode = cur["weather_code"].as<int>();
-            fresh[zi].valid = !cur.isNull();
-            freshPrecipNotice[zi] =
-                precipTransitionNotice(fresh[zi].weatherCode,
-                                       doc["minutely_15"]["weather_code"].as<JsonArray>());
+            parseLocationWeather(doc.as<JsonVariant>(), fresh[zi],
+                                 freshPrecipNotice[zi], freshPrecipMm[zi],
+                                 freshPrecipCode[zi], freshPrecipCount[zi]);
         }
     }
 
@@ -464,15 +544,21 @@ static bool performFetch()
     // others derive a severe-condition alert from the code just fetched. Done
     // outside the lock (NWS calls are slow) and committed with the weather.
     String freshAlert[4];
+    bool freshAlertOfficial[4] = {};
     if (projectConfig.weatherAlerts)
     {
         for (int k = 0; k < n; k++)
         {
             int zi = zoneForSlot[k];
             if (locs[zi].isUS)
+            {
                 freshAlert[zi] = fetchUsAlert(locs[zi].lat, locs[zi].lon);
+                freshAlertOfficial[zi] = freshAlert[zi].length() > 0;
+            }
             else if (fresh[zi].valid)
+            {
                 freshAlert[zi] = String(severeWeatherText(fresh[zi].weatherCode));
+            }
         }
     }
 
@@ -488,7 +574,11 @@ static bool performFetch()
     {
         zoneWeather[i] = fresh[i];
         zoneAlert[i] = freshAlert[i];
+        zoneAlertOfficial[i] = freshAlertOfficial[i];
         zonePrecipNotice[i] = freshPrecipNotice[i];
+        memcpy(zonePrecipMm[i], freshPrecipMm[i], sizeof(zonePrecipMm[i]));
+        memcpy(zonePrecipCode[i], freshPrecipCode[i], sizeof(zonePrecipCode[i]));
+        zonePrecipCount[i] = freshPrecipCount[i];
     }
     dataVersion++;
     weatherUnlock();
