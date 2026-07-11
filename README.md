@@ -4,6 +4,7 @@
   <img src="img/new-home.png" alt="New home screenshot" width="48%"/>
   <img src="img/demo.jpg" alt="Demo screenshot" width="48%"/>
 </p>
+
 # Hardware
 
 - ESP32 with 2.8" 320x240 ILI9341 LCD display
