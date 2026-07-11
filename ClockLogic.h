@@ -131,6 +131,32 @@ uint16_t getDayNightLabelColor(WorldClockZone &zone);
 // True when the sun is down in a zone (evening or night phase).
 bool zoneIsNight(WorldClockZone &zone);
 
+// ~12px sun or crescent moon showing the zone's current day/night phase,
+// centered on (cx, cy). Same glyph as the quadrant corner icons.
+void drawZoneDayNightIcon(TFT_eSPI &gfx, int cx, int cy, WorldClockZone &zone);
+
+// Today's local sunrise/sunset for a zone as minutes-of-day (e.g. 358 =
+// 05:58). False when the zone has no preset coordinates or the sun never
+// crosses the horizon today (polar day/night).
+bool zoneSunTimes(WorldClockZone &zone, int &riseMin, int &setMin);
+
+// 3px daylight gradient bar: the zone's local day mapped left to right,
+// colored by real solar elevation, with a white tick at the current time.
+// No-op for zones without preset coordinates.
+void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone);
+
+// Fraction (0..1) of the exchange's regular trading day already elapsed;
+// false outside regular hours (weekend, holiday, before open / after close).
+bool marketDayProgress(WorldClockZone &zone, float &frac);
+
+// Trim text with a "..." suffix until it fits maxWidth in the current font.
+String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth);
+
+// Display color for the weather-alert line and for a precipitation notice
+// ("SNOW..." white, "STORM..." orange, rain cyan) - shared with the faces.
+extern const uint16_t WX_ALERT_COLOR;
+uint16_t weatherNoticeColor(const String &notice);
+
 // ~14px weather-condition glyph for a WMO code centered on (cx, cy); `night`
 // swaps the sun shapes for a crescent moon. Shared by the quadrant weather
 // badge (ClockLogic.cpp) and the weather face rows (clockFaces.cpp).

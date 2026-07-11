@@ -270,6 +270,40 @@ static void drawDayNightIcon(TFT_eSPI &gfx, int cx, int cy, DayPhase phase)
     }
 }
 
+// Public wrapper for the alternate faces: the same sun/moon glyph keyed by
+// the zone's current phase, without exporting the DayPhase enum.
+void drawZoneDayNightIcon(TFT_eSPI &gfx, int cx, int cy, WorldClockZone &zone)
+{
+    drawDayNightIcon(gfx, cx, cy, zoneDayPhase(zone));
+}
+
+// Today's local sunrise/sunset for a zone as minutes-of-day, found by
+// scanning the sun's elevation across the local day in 2-minute steps (the
+// same -0.833 degree horizon the day/night colors use). False when the zone
+// has no preset coordinates or the sun never crosses the horizon today
+// (polar day/night). Cheap enough for once-a-day repaints, not per frame.
+bool zoneSunTimes(WorldClockZone &zone, int &riseMin, int &setMin)
+{
+    float lat, lon;
+    if (!getCityCoords(zone.timezone, lat, lon)) return false;
+
+    time_t local = zone.tz.now();
+    time_t utcNow = UTC.now();
+    long secOfDay = (long)hour(local) * 3600 + (long)minute(local) * 60 + second(local);
+
+    riseMin = -1;
+    setMin = -1;
+    bool prevUp = solarElevationDeg(lat, lon, utcNow - secOfDay) > -0.833f;
+    for (int m = 2; m <= 1440; m += 2) {
+        time_t colUtc = utcNow + ((long)m * 60 - secOfDay);
+        bool up = solarElevationDeg(lat, lon, colUtc) > -0.833f;
+        if (up && !prevUp && riseMin < 0) riseMin = m;
+        if (!up && prevUp && setMin < 0) setMin = m;
+        prevUp = up;
+    }
+    return riseMin >= 0 && setMin >= 0;
+}
+
 static void drawMiniSun(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
 {
     gfx.fillCircle(cx, cy, 3, color);
@@ -319,6 +353,17 @@ static void drawMiniBolt(TFT_eSPI &gfx, int cx, int cy)
     gfx.drawLine(cx, cy, cx - 3, cy + 4, TFT_ORANGE);
     gfx.drawLine(cx - 3, cy + 4, cx + 1, cy + 3, TFT_ORANGE);
     gfx.drawLine(cx + 1, cy + 3, cx - 2, cy + 7, TFT_ORANGE);
+}
+
+// 13x11 warning triangle with an exclamation mark carved in the background
+// color, centered on (cx, cy). Sits ahead of the weather-alert text on the
+// quadrant day line so the orange text reads as an alert, not a status.
+static void drawMiniAlertIcon(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
+{
+    int top = cy - 5, bot = cy + 5;
+    gfx.fillTriangle(cx, top, cx - 6, bot, cx + 6, bot, color);
+    gfx.drawFastVLine(cx, top + 3, 4, clockBackgroundColor); // exclamation stem
+    gfx.drawPixel(cx, bot - 2, clockBackgroundColor);        // exclamation dot
 }
 
 // ~14px condition glyph for a WMO weather code, one distinct shape per code
@@ -660,8 +705,9 @@ static uint16_t daylightBarColor(float elevDeg)
 // right, each column colored by the sun's real elevation at that moment
 // today (same solar math as the day/night colors), with a white tick at the
 // current time. Shows at a glance how deep into day or night each city is.
-// Skipped for zones without preset coordinates.
-static void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone)
+// Skipped for zones without preset coordinates. Shared with the big-clock
+// face (clockFaces.cpp).
+void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone)
 {
     float lat, lon;
     if (!getCityCoords(zone.timezone, lat, lon)) return;
@@ -688,8 +734,9 @@ static void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone
 // false when the exchange is outside it (weekend, holiday, before open /
 // after close). The span runs from the first REGULAR open to the last
 // REGULAR close - the SSE lunch break stays inside the span - and half-day
-// early closes truncate it, matching getMarketStatus.
-static bool marketDayProgress(WorldClockZone &zone, float &frac)
+// early closes truncate it, matching getMarketStatus. Shared with the
+// markets face (clockFaces.cpp).
+bool marketDayProgress(WorldClockZone &zone, float &frac)
 {
     if (!zone.market.hasMarket) return false;
 
@@ -753,14 +800,14 @@ static bool showNoticeOnDateLine(WorldClockZone &zone)
     return projectConfig.quadWeather && wxAlertShowingAlert && zone.weatherNotice.length() > 0;
 }
 
-static uint16_t weatherNoticeColor(const String &notice)
+uint16_t weatherNoticeColor(const String &notice)
 {
     if (notice.startsWith("SNOW")) return TFT_WHITE;
     if (notice.startsWith("STORM")) return TFT_ORANGE;
     return TFT_CYAN;
 }
 
-static String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth)
+String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth)
 {
     if (gfx.textWidth(text) <= maxWidth) return text;
 
@@ -963,7 +1010,17 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
         gfx.setTextFont(2);
         gfx.setTextSize(1);
         gfx.setTextColor(WX_ALERT_COLOR, clockBackgroundColor);
-        gfx.drawString(fitTextToWidth(gfx, zone.weatherAlert, quadrantWidth - 8), centerX, dayY);
+        // Warning triangles flanking the text mark the line as an active
+        // alert at a glance. Both icons' widths are reserved before the
+        // text is measured so the trio always fits the quadrant, and the
+        // text stays centered with an icon mirrored on each side.
+        const int alertIconW = 13, alertIconGap = 3;
+        String alertText = fitTextToWidth(gfx, zone.weatherAlert,
+                                          quadrantWidth - 8 - 2 * (alertIconW + alertIconGap));
+        int iconOffset = gfx.textWidth(alertText) / 2 + alertIconGap + alertIconW / 2;
+        drawMiniAlertIcon(gfx, centerX - iconOffset, dayY + 7, WX_ALERT_COLOR);
+        drawMiniAlertIcon(gfx, centerX + iconOffset, dayY + 7, WX_ALERT_COLOR);
+        gfx.drawString(alertText, centerX, dayY);
     } else if (isHoliday) {
         gfx.setTextColor(TFT_GOLD, clockBackgroundColor);
         String dayLine = dayText + " - " + holidayName;
@@ -979,15 +1036,27 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     gfx.setTextSize(2);
     if (showNoticeOnDateLine(zone)) {
         // The date/weather line alternates with near-term precipitation
-        // changes. Large quadrants use the full-width GLCD x2 row; measured
-        // clipping keeps unusual strings inside either column size.
+        // changes. Each layout tries its regular row font first and steps
+        // down one font when the whole string is too wide: the lead time
+        // sits at the tail, so ellipsis-trimming would hide exactly the
+        // part that matters ("STORM STOPS IN 2H4...").
+        int noticeMax = quadrantWidth - (largeLayout ? 16 : 8);
+        int noticeY = dateY + (largeLayout ? 0 : 1);
         gfx.setTextFont(largeLayout ? 1 : 2);
         gfx.setTextSize(largeLayout ? 2 : 1);
+        if (gfx.textWidth(zone.weatherNotice) > noticeMax) {
+            if (largeLayout) {
+                gfx.setTextFont(2); // same 16px row height, narrower glyphs
+            } else {
+                gfx.setTextFont(1); // 6x8 GLCD, centered in the font-2 slot
+                noticeY = dateY + 5;
+            }
+            gfx.setTextSize(1);
+        }
         gfx.setTextDatum(TC_DATUM);
         gfx.setTextColor(weatherNoticeColor(zone.weatherNotice), clockBackgroundColor);
-        gfx.drawString(fitTextToWidth(gfx, zone.weatherNotice,
-                                      quadrantWidth - (largeLayout ? 16 : 8)),
-                       centerX, dateY + (largeLayout ? 0 : 1));
+        gfx.drawString(fitTextToWidth(gfx, zone.weatherNotice, noticeMax),
+                       centerX, noticeY);
     } else {
         // With quadrant weather enabled, large panels keep the date centered;
         // the weather badge moves to the day row so it does not pull the

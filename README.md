@@ -1,9 +1,9 @@
 # ESP32 World Clock
 
-<p align="center">
-  <img src="img/demo.jpg" alt="Four-quadrant world clock face" width="65%"/>
+<p align="center" style="display: flex; justify-content: center; gap: 16px;">
+  <img src="img/new-home.png" alt="New home screenshot" width="48%"/>
+  <img src="img/demo.jpg" alt="Demo screenshot" width="48%"/>
 </p>
-
 # Hardware
 
 - ESP32 with 2.8" 320x240 ILI9341 LCD display
@@ -351,36 +351,53 @@ settings page (the choice is saved to flash):
     The weekday/holiday line alternates slowly between its normal text (shown
     longer) and the alert, so you still see both without either flickering.
     Refreshed every 20
-    minutes with the weather. (Shown on the four-quadrant face; the big-clock
-    face's single market line is unchanged.)
-- **Big clock** — the home zone (top-left quadrant) in 75px digits with date
-  and market status, plus a mini strip of the other three zones' times along
-  the bottom.
+    minutes with the weather. (The big-clock and weather faces show the
+    active alert too, on their status/condition lines.)
+- **Big clock** — the home zone (top-left quadrant) in 75px digits, with the
+  same at-a-glance extras as the quadrant view: a sun/moon icon in the
+  header, the current temperature + condition icon in the opposite corner, a
+  daylight gradient bar under the date (always on — this face has a dedicated
+  slot for it), a gold day line naming today's public holiday, and a status
+  line showing a weather alert, the home market's status — or, when rain or
+  snow is in the next four hours, a precipitation chart: one bar per
+  15-minute Open-Meteo forecast step (cyan rain, white snow, orange
+  thunderstorm), scaled to the wettest step, with NOW/+1H/+2H/+3H labels.
+  The mini strip along the bottom lists the other three zones with their day
+  offset vs. home (`+1`/`-1`) and current temperature.
 - **Calendar** — a month calendar for the home zone with today highlighted,
-  and the current time in the header. The week starts on Sunday (or Monday —
-  web settings page). Public holidays are marked in gold (today's highlight
-  box also turns gold on a holiday), and a footer line names today's holiday
-  — or the next upcoming one (`NEXT: 25 DEC - CHRISTMAS DAY`).
-- **Weather** — current temperature and conditions for all four configured
-  cities (with each city's local time), from the free
-  [Open-Meteo](https://open-meteo.com) API — no API key needed. A background
-  task fetches every 20 minutes (configurable on the web settings page, in
-  °C or °F) regardless of which face is showing, so the data is ready the
-  moment the face opens and the clock never pauses. Weather is only available
-  for cities picked from the preset timezone list, since it needs their
-  coordinates.
+  and the current time and home weather in the header. The week starts on
+  Sunday (or Monday — web settings page); the leading/trailing cells show the
+  adjacent months' days dimmed, so every week row reads complete. Public
+  holidays are marked in gold (today's highlight box also turns gold on a
+  holiday), and a footer line names today's holiday — or the next upcoming
+  one (`NEXT: 25 DEC - CHRISTMAS DAY`) — flanked by the home zone's sunrise
+  and sunset times (computed from the sun's real position, no network
+  needed).
+- **Weather** — current conditions for all four configured cities (with each
+  city's local time), from the free [Open-Meteo](https://open-meteo.com) API
+  — no API key needed. Each row shows the temperature, relative humidity,
+  today's forecast high/low under the condition icon, and the condition text
+  — replaced by the zone's weather alert or a `RAIN IN 30M`-style
+  precipitation notice when one is active. A background task fetches every
+  20 minutes (configurable on the web settings page, in °C or °F) regardless
+  of which face is showing, so the data is ready the moment the face opens
+  and the clock never pauses. Weather is only available for cities picked
+  from the preset timezone list, since it needs their coordinates.
 - **Markets** — every exchange the clock knows about (NYSE, LSE, SSE, TSE,
   HKEX) at a glance, independent of which cities occupy the quadrants: one
-  row per exchange with its local time and the same colored
-  open/closed/countdown status as the quadrant view. These rows tick on
+  row per exchange with a status-colored dot, its local time and weekday (so
+  weekend closures explain themselves), the same colored
+  open/closed/countdown status as the quadrant view, and a green trading-day
+  progress bar while the exchange is inside regular hours. These rows tick on
   built-in timezone rules, so the face works even without the timezone
   server.
 
 <p align="center">
-  <img src="img/face-world.jpg" alt="World clock face with weather and market status" width="24%"/>
-  <img src="img/face-2.jpg" alt="Big clock face" width="24%"/>
-  <img src="img/face-cal.jpg" alt="Calendar face marking Independence Day" width="24%"/>
-  <img src="img/face-weather.jpg" alt="Weather face" width="24%"/>
+  <img src="img/face-world.jpg" alt="World clock face with weather and market status" width="19%"/>
+  <img src="img/face-2.jpg" alt="Big clock face with daylight bar and weather" width="19%"/>
+  <img src="img/face-cal.jpg" alt="Calendar face with sunrise/sunset and header weather" width="19%"/>
+  <img src="img/face-weather.jpg" alt="Weather face with humidity and daily high/low" width="19%"/>
+  <img src="img/face-markets.jpg" alt="Markets face with status dots and weekdays" width="19%"/>
 </p>
 
 ## Settings page

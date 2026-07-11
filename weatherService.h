@@ -16,7 +16,11 @@ struct ZoneWeather
 {
     bool valid;
     float tempC;
-    int weatherCode; // WMO weather interpretation code from Open-Meteo
+    int weatherCode;   // WMO weather interpretation code from Open-Meteo
+    bool hasMinMax;    // today's forecast high/low parsed OK
+    float tempMaxC;    // today's forecast high (local day, timezone=auto)
+    float tempMinC;    // today's forecast low
+    int humidity;      // current relative humidity %, -1 when missing
 };
 
 // Start the background fetch task. Call once from setup, after the zones have
@@ -36,10 +40,24 @@ ZoneWeather getZoneWeather(int i);
 // weatherAlerts setting is off. Uppercased and length-capped for the display.
 String getZoneAlert(int i);
 
+// True when zone i's current alert came from the official NWS feed rather
+// than being derived from the weather code. The big-clock face lets only
+// official alerts outrank its precipitation chart - a derived STORM alert
+// repeats what the chart's orange bars already show.
+bool getZoneAlertOfficial(int i);
+
 // Short near-term precipitation transition for the quadrant date/weather line,
 // e.g. "RAIN IN 30M" or "RAIN STOPS IN 2H". Derived from Open-Meteo's
 // 15-minute weather-code forecast for the next few hours.
 String getZonePrecipNotice(int i);
+
+// 15-minute precipitation forecast for zone i, starting at the current
+// 15-minute block: amounts in mm per step into mm[], the matching WMO
+// weather codes into codes[] (for coloring rain/snow/storm bars). Returns
+// the number of steps copied (up to maxOut / PRECIP_FORECAST_STEPS), 0
+// until a fetch has succeeded. Feeds the big-clock face's rain chart.
+const int PRECIP_FORECAST_STEPS = 16; // current + 3h45m at 15-min cadence
+int getZonePrecip15(int i, float *mm, uint8_t *codes, int maxOut);
 
 // Age of the current data in minutes, or -1 if no successful fetch yet.
 long weatherAgeMinutes();
