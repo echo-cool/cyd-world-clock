@@ -65,10 +65,17 @@ static int portalTextColsFromX(int x)
     return max(1, px / 6);
 }
 
-static DNSServer g_dns;            // captive DNS during PS_SELECTING (hijack -> AP_IP)
+// Heap-allocated on purpose: DNSServer::stop() only *disconnects* its
+// AsyncUDP pcb - the pcb stays bound to port 53 until the object is
+// destructed - so handing :53 over to the forwarder below requires actually
+// destroying the hijack server, not just stopping it.
+static DNSServer *g_dns = nullptr; // captive DNS during PS_SELECTING (hijack -> AP_IP)
 static WebServer g_web(80);        // config page + status API
 static WiFiUDP g_dnsFromPhone;     // :53 forwarder listener during PS_CAPTIVE
 static WiFiUDP g_dnsToUpstream;    // its query socket
+static bool g_dnsListenUp = false; // g_dnsFromPhone has a bound socket
+static unsigned long g_dnsListenRetryMs = 0;
+static const unsigned long DNS_LISTEN_RETRY_MS = 5000;
 
 // ---------------------------------------------------------------------------
 // NAT + DNS plumbing (mirrors wifiRelay.cpp - NAPT must go through esp_netif,
@@ -111,8 +118,19 @@ static void startRelay()
 
     // Stop hijacking DNS; a phone that still points DNS at us (didn't renew)
     // gets its queries forwarded upstream by serviceDnsForward() instead.
-    g_dns.stop();
-    g_dnsFromPhone.begin(53);
+    // The hijack server must be destroyed to release :53 (see g_dns above);
+    // otherwise the begin(53) below fails with EADDRINUSE, the forwarder
+    // ends up without a socket, and polling it floods the log with
+    // "parsePacket(): could not check for data in buffer length: 9" (EBADF)
+    // for the whole captive-login phase.
+    delete g_dns;
+    g_dns = nullptr;
+    g_dnsListenUp = (g_dnsFromPhone.begin(53) != 0);
+    g_dnsListenRetryMs = millis();
+    if (!g_dnsListenUp)
+        Log.println("Setup portal: phone-DNS forwarder could not bind :53 - "
+                    "will keep retrying (phones that renew their DHCP lease "
+                    "use the upstream DNS directly)");
     offerUpstreamDnsToClients();
 
     esp_netif_t *ap = apNetif();
@@ -130,8 +148,11 @@ static void stopRelayAndAp()
 {
     esp_netif_t *ap = apNetif();
     if (ap) esp_netif_napt_disable(ap);
-    g_dns.stop();
+    delete g_dns;
+    g_dns = nullptr;
     g_dnsFromPhone.stop();
+    g_dnsToUpstream.stop();
+    g_dnsListenUp = false;
     WiFi.softAPdisconnect(true);
 }
 
@@ -140,6 +161,18 @@ static void stopRelayAndAp()
 // normally allowed through a captive portal even before login.
 static void serviceDnsForward()
 {
+    if (!g_dnsListenUp)
+    {
+        // No socket - polling parsePacket() on an unbound WiFiUDP makes the
+        // ESP32 core log an EBADF error per call, i.e. one line per portal
+        // loop. Retry the bind on a slow cadence instead.
+        if (millis() - g_dnsListenRetryMs < DNS_LISTEN_RETRY_MS) return;
+        g_dnsListenRetryMs = millis();
+        g_dnsListenUp = (g_dnsFromPhone.begin(53) != 0);
+        if (!g_dnsListenUp) return;
+        Log.println("Setup portal: phone-DNS forwarder now listening on :53");
+    }
+
     int len = g_dnsFromPhone.parsePacket();
     if (len <= 0) return;
 
@@ -152,9 +185,12 @@ static void serviceDnsForward()
 
     IPAddress up = WiFi.dnsIP();
     if ((uint32_t)up == 0) up = IPAddress(8, 8, 8, 8);
-    g_dnsToUpstream.beginPacket(up, 53);
+    // A query that never went out (no socket / no memory) is not worth the
+    // 500ms reply wait below - and parsePacket() on a socketless WiFiUDP
+    // would log an error every 2ms iteration of it.
+    if (!g_dnsToUpstream.beginPacket(up, 53)) return;
     g_dnsToUpstream.write(buf, n);
-    g_dnsToUpstream.endPacket();
+    if (!g_dnsToUpstream.endPacket()) return;
 
     unsigned long t0 = millis();
     while (millis() - t0 < 500)
@@ -444,8 +480,9 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
     WiFi.softAP(g_apSsid.c_str(), AP_PASSWORD);
     delay(100);
 
-    g_dns.setErrorReplyCode(DNSReplyCode::NoError);
-    g_dns.start(53, "*", AP_IP); // hijack every lookup to us -> captive popup
+    if (!g_dns) g_dns = new DNSServer();
+    g_dns->setErrorReplyCode(DNSReplyCode::NoError);
+    g_dns->start(53, "*", AP_IP); // hijack every lookup to us -> captive popup
 
     g_web.on("/", handleRoot);
     g_web.on("/scan", handleScan);
@@ -459,6 +496,7 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
     g_state = PS_SELECTING;
     g_message = "";
     g_relayUp = false;
+    g_dnsListenUp = false;
     g_beginPending = false;
     unsigned long startedMs = millis();
     g_lastNetPollMs = 0;
@@ -468,7 +506,7 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
 
     while (g_state != PS_ONLINE)
     {
-        if (!g_relayUp) g_dns.processNextRequest(); // hijack only before the relay owns :53
+        if (!g_relayUp && g_dns) g_dns->processNextRequest(); // hijack only before the relay owns :53
         g_web.handleClient();
         if (g_relayUp) serviceDnsForward();
         drawScreen();

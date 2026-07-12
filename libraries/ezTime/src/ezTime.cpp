@@ -439,11 +439,22 @@ namespace ezt {
 #else
 		udp.flush();
 #endif
-			udp.begin(NTP_LOCAL_PORT);
+			// Check every socket step (stock ezTime ignores all of them): if the
+			// local socket cannot be opened (e.g. out of lwIP sockets) or the
+			// request cannot be sent (DNS failure - routine behind a captive
+			// portal), the parsePacket() wait below would poll a socketless
+			// WiFiUDP for the whole NTP_TIMEOUT, and on ESP32 core 3.x every
+			// such poll logs an EBADF error line - a serial log flood. Fail
+			// fast instead; ezTime retries in NTP_RETRY seconds anyway.
+			if (!udp.begin(NTP_LOCAL_PORT)) { triggerError(CONNECT_FAILED); return false; }
 			unsigned long started = millis();
-			udp.beginPacket(server.c_str(), 123); //NTP requests are to port 123
-			udp.write(buffer, NTP_PACKET_SIZE);
-			udp.endPacket();
+			if (!udp.beginPacket(server.c_str(), 123) ||	// NTP requests are to port 123
+			    udp.write(buffer, NTP_PACKET_SIZE) != NTP_PACKET_SIZE ||
+			    !udp.endPacket()) {
+				udp.stop();
+				triggerError(CONNECT_FAILED);
+				return false;
+			}
 
 			// Wait for packet or return false with timed out
 			while (!udp.parsePacket()) {
@@ -812,11 +823,20 @@ String Timezone::getPosix() { return _posix; }
 #else
 		udp.flush();
 #endif
-		udp.begin(TIMEZONED_LOCAL_PORT);
+		// Same fail-fast socket checks as queryNTP(): without them a failed
+		// begin()/beginPacket() (no free socket, DNS blocked by a captive
+		// portal) leaves the parsePacket() wait below polling a socketless
+		// WiFiUDP for the whole TIMEZONED_TIMEOUT, logging an EBADF error
+		// line per iteration on ESP32 core 3.x.
+		if (!udp.begin(TIMEZONED_LOCAL_PORT)) { triggerError(CONNECT_FAILED); return false; }
 		unsigned long started = millis();
-		udp.beginPacket(TIMEZONED_REMOTE_HOST, TIMEZONED_REMOTE_PORT);
-		udp.write((const uint8_t*)location.c_str(), location.length());
-		udp.endPacket();
+		if (!udp.beginPacket(TIMEZONED_REMOTE_HOST, TIMEZONED_REMOTE_PORT) ||
+		    udp.write((const uint8_t*)location.c_str(), location.length()) != location.length() ||
+		    !udp.endPacket()) {
+			udp.stop();
+			triggerError(CONNECT_FAILED);
+			return false;
+		}
 		
 		// Wait for packet or return false with timed out
 		while (!udp.parsePacket()) {
