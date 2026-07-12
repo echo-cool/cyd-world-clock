@@ -321,6 +321,30 @@ void test_timer_formatting()
     TEST_ASSERT_EQUAL_STRING("99:59:59", buf);
 }
 
+void test_hidden_seconds_display()
+{
+    // Focus mode shows whole minutes: elapsed floors, remaining ceils.
+    char buf[16];
+    formatHM(0, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("00:00", buf);
+    formatHM(30, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("00:30", buf);
+    formatHM(125ULL * 60 + 4, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("125:04", buf); // hours never wrap here either
+
+    // Elapsed floors: 00:00 through the whole first minute
+    TEST_ASSERT_EQUAL_UINT64(0, displayMinutesElapsed(0));
+    TEST_ASSERT_EQUAL_UINT64(0, displayMinutesElapsed(59999));
+    TEST_ASSERT_EQUAL_UINT64(1, displayMinutesElapsed(60000));
+
+    // Remaining ceils: full duration at start, never 00:00 while time is left
+    TEST_ASSERT_EQUAL_UINT64(30, displayMinutesRemaining(30 * MIN_MS));
+    TEST_ASSERT_EQUAL_UINT64(30, displayMinutesRemaining(29 * MIN_MS + 1));
+    TEST_ASSERT_EQUAL_UINT64(29, displayMinutesRemaining(29 * MIN_MS));
+    TEST_ASSERT_EQUAL_UINT64(1, displayMinutesRemaining(1));
+    TEST_ASSERT_EQUAL_UINT64(0, displayMinutesRemaining(0)); // finished only
+}
+
 void test_64bit_timestamps_long_running()
 {
     // Timestamps far beyond the 32-bit millis() wrap (49.7 days): a base of
@@ -369,6 +393,7 @@ int main(int, char **)
     RUN_TEST(test_countdown_non_multiple_duration);
     RUN_TEST(test_invalid_interval_disables_milestones);
     RUN_TEST(test_timer_formatting);
+    RUN_TEST(test_hidden_seconds_display);
     RUN_TEST(test_64bit_timestamps_long_running);
     return UNITY_END();
 }

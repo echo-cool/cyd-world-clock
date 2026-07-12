@@ -56,6 +56,7 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_WEATHER_REFRESH_MIN] = c.weatherRefreshMin;
   json[PROJECT_TIMER_REMINDER_MIN] = c.timerReminderMin;
   json[PROJECT_COUNTDOWN_DEFAULT_MIN] = c.countdownDefaultMin;
+  json[PROJECT_TIMER_HIDE_SECONDS] = c.timerHideSeconds;
 
   // Written only once a real calibration exists, so a missing key keeps
   // meaning "never calibrated" across config backup/restore.
@@ -176,6 +177,7 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
       {PROJECT_USE_FAHRENHEIT, &c.useFahrenheit},
       {PROJECT_FLIP_DISPLAY, &c.flipDisplay},
       {PROJECT_WEEK_START_MONDAY, &c.weekStartMonday},
+      {PROJECT_TIMER_HIDE_SECONDS, &c.timerHideSeconds},
   };
   for (auto &toggle : toggles)
   {

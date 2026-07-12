@@ -67,11 +67,14 @@ static const int64_t ADJ_DELTA_MS[4] = {-30LL * 60000LL, -5LL * 60000LL,
 static const TimerBtn BTN_PRIMARY = {24, 152, 148, 36};
 static const TimerBtn BTN_RESET = {200, 152, 96, 36};
 
-// Bottom row: previous face / settings / next face - the global actions the
-// other faces put on invisible corner and center zones.
-static const TimerBtn BTN_PREV = {6, 198, 54, 38};
-static const TimerBtn BTN_SET = {78, 198, 164, 38};
-static const TimerBtn BTN_NEXT = {260, 198, 54, 38};
+// Bottom row: previous face / settings / focus toggle / next face. The first
+// three are the global actions the other faces put on invisible corner and
+// center zones; HIDE SEC / SHOW SEC switches the big timer to a calm HH:MM
+// that only changes once a minute (persisted: projectConfig.timerHideSeconds).
+static const TimerBtn BTN_PREV = {6, 198, 42, 38};
+static const TimerBtn BTN_SET = {54, 198, 104, 38};
+static const TimerBtn BTN_FOCUS = {164, 198, 104, 38};
+static const TimerBtn BTN_NEXT = {274, 198, 40, 38};
 
 static bool timerBtnHit(const TimerBtn &b, int tx, int ty)
 {
@@ -460,6 +463,12 @@ static void renderTimerFace(bool full, bool isCountdown)
         drawTimerBtn(BTN_RESET, "RESET", TFT_RED, TFT_WHITE);
         drawTimerBtn(BTN_PREV, "<", TFT_CYAN, TFT_WHITE);
         drawTimerBtn(BTN_SET, "SETTINGS", TFT_CYAN, TFT_WHITE);
+        // Green border while focus mode is on, so the calmer display is
+        // recognizably a mode and not a stalled clock.
+        drawTimerBtn(BTN_FOCUS,
+                     projectConfig.timerHideSeconds ? "SHOW SEC" : "HIDE SEC",
+                     projectConfig.timerHideSeconds ? TFT_GREEN : TFT_CYAN,
+                     TFT_WHITE);
         drawTimerBtn(BTN_NEXT, ">", TFT_CYAN, TFT_WHITE);
         if (!isCountdown && timerlogic::reminderIntervalValid(projectConfig.timerReminderMin)) {
             // The stopwatch has no duration row; use the slot for a reminder
@@ -483,18 +492,35 @@ static void renderTimerFace(bool full, bool isCountdown)
         if (isCountdown) drawDurationRow(phase);
     }
 
+    // Focus mode (timerHideSeconds): HH:MM only, so the big display changes
+    // just once a minute instead of ticking every second - nothing on the
+    // face keeps moving to pull the eye away from work.
+    bool hideSec = projectConfig.timerHideSeconds;
     char buf[16];
     uint16_t color;
     if (isCountdown) {
         uint64_t rem = countdown.remainingMs(now);
-        // Ceil to whole seconds: shows the full duration at start and reaches
-        // exactly 00:00:00 only when the countdown really is over.
-        timerlogic::formatHMS((rem + 999ULL) / 1000ULL, buf, sizeof(buf));
+        if (hideSec) {
+            // Ceil to whole minutes: full duration at start, and never 00:00
+            // while any time is actually left.
+            timerlogic::formatHM(timerlogic::displayMinutesRemaining(rem), buf,
+                                 sizeof(buf));
+        } else {
+            // Ceil to whole seconds: shows the full duration at start and
+            // reaches exactly 00:00:00 only when the countdown really is over.
+            timerlogic::formatHMS((rem + 999ULL) / 1000ULL, buf, sizeof(buf));
+        }
         color = (phase == timerlogic::TIMER_FINISHED)                 ? TFT_RED
                 : (phase == timerlogic::TIMER_RUNNING && rem < 60000ULL) ? TFT_ORANGE
                                                                          : TFT_WHITE;
     } else {
-        timerlogic::formatHMS(stopwatch.elapsedMs(now) / 1000ULL, buf, sizeof(buf));
+        uint64_t elapsed = stopwatch.elapsedMs(now);
+        if (hideSec) {
+            timerlogic::formatHM(timerlogic::displayMinutesElapsed(elapsed), buf,
+                                 sizeof(buf));
+        } else {
+            timerlogic::formatHMS(elapsed / 1000ULL, buf, sizeof(buf));
+        }
         color = TFT_WHITE;
     }
     if (full || color != cachedBigColor || strcmp(buf, cachedBig) != 0) {
@@ -552,6 +578,18 @@ void timerFaceHandleTouch(int x, int y)
     }
     if (timerBtnHit(BTN_NEXT, x, y)) {
         switchFaceBy(1);
+        return;
+    }
+    if (timerBtnHit(BTN_FOCUS, x, y)) {
+        // Toggle the calm HH:MM display. Persisted (a deliberate, discrete
+        // tap - fine for flash), applied to both timer faces at once.
+        projectConfig.timerHideSeconds = !projectConfig.timerHideSeconds;
+        projectConfig.saveConfigFile();
+        Log.println(projectConfig.timerHideSeconds
+                        ? "Timer faces: seconds hidden (focus mode)"
+                        : "Timer faces: seconds shown");
+        firstDraw = true; // repaint the face with the new display + button label
+        touchSuppressedUntilRelease = true;
         return;
     }
 

@@ -13,7 +13,7 @@ exercised fast and offline instead of only on-device.
 | `test_timeformat` | `timeFormat.cpp` | 12/24-hour `HH:MM` rendering, midnight/noon → 12, AM/PM flag, out-of-range safety. |
 | `test_textsanitize` | `textSanitize.cpp` | Hostname sanitising (filter/lowercase/trim/cap/default) and MAC parse/normalise. |
 | `test_marketsession` | `marketSession.cpp` | Trading-session membership and minutes-to-open/close, including midnight-spanning (overnight) sessions. |
-| `test_timerlogic` | `timerLogic.cpp` | Stopwatch/countdown state machines for the timer faces: start/pause/resume/reset, >24h elapsed, exact-zero completion, never-negative remaining, duration clamping, milestone-reminder boundaries (late/multiple crossings, no duplicates, invalid intervals), `HH:MM:SS` formatting and 64-bit long-run timestamps. |
+| `test_timerlogic` | `timerLogic.cpp` | Stopwatch/countdown state machines for the timer faces: start/pause/resume/reset, >24h elapsed, exact-zero completion, never-negative remaining, duration clamping, milestone-reminder boundaries (late/multiple crossings, no duplicates, invalid intervals), `HH:MM:SS` formatting, the seconds-hidden `HH:MM` minute display (floor/ceil) and 64-bit long-run timestamps. |
 
 ## Running
 

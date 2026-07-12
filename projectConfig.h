@@ -33,6 +33,7 @@
 #define PROJECT_TOUCH_CAL "touchCal"
 #define PROJECT_TIMER_REMINDER_MIN "timerReminderMin"
 #define PROJECT_COUNTDOWN_DEFAULT_MIN "countdownDefaultMin"
+#define PROJECT_TIMER_HIDE_SECONDS "timerHideSeconds"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -137,8 +138,13 @@ public:
   //  - countdownDefaultMin: default countdown duration in minutes (1-5999,
   //    i.e. up to 99:59). The on-device +/- buttons adjust the session only;
   //    this saved default changes from the web settings page.
+  //  - timerHideSeconds: focus mode - the big timer shows HH:MM only and the
+  //    display changes just once per minute, so nothing on the screen keeps
+  //    moving while working/studying. Toggled by the HIDE SEC / SHOW SEC
+  //    button on the timer faces (and from the web settings page).
   int timerReminderMin = 30;
   int countdownDefaultMin = 30;
+  bool timerHideSeconds = false;
 
   // Touch panel calibration for boards on TFT_eSPI's shared-SPI touch path
   // (Hosyond 4.0"). The five parameters come from the on-device calibration

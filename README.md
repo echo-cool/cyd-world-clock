@@ -304,11 +304,11 @@ next clock face.
 
 The stopwatch and countdown faces are the exception: they draw **visible
 buttons** instead of invisible zones — `<` / `>` buttons in the bottom
-corners switch faces, a `SETTINGS` button between them opens settings, and
-the timer controls sit above (see *Stopwatch* and *Countdown* below).
-Brightness is adjusted from the settings page (or the web UI) while a timer
-face is showing, so a stray tap can never dim the screen or reset a running
-timer.
+corners switch faces, `SETTINGS` opens settings, `HIDE SEC` toggles the calm
+seconds-free display (see below), and the timer controls sit above (see
+*Stopwatch* and *Countdown* below). Brightness is adjusted from the settings
+page (or the web UI) while a timer face is showing, so a stray tap can never
+dim the screen or reset a running timer.
 
 <p align="center">
   <img src="img/homepage-brightness-adjust.jpg" alt="Brightness bar overlay while adjusting" width="45%"/>
@@ -428,6 +428,15 @@ screen (the choice is saved to flash):
   the UI then always returns to the countdown face in its `FINISHED` state,
   where `RESTART` runs the same duration again and `RESET` re-arms it.
 
+Both timer faces have a **HIDE SEC / SHOW SEC** button (focus mode, saved as
+a preference): the big timer drops to a calm `HH:MM` and the whole face then
+changes only once per minute — nothing keeps ticking to pull your eye away
+while working or studying. The stopwatch floors to whole minutes; the
+countdown rounds up, so it shows the full duration at the start and never
+reads `00:00` while any time is actually left. Pair it with the milestone
+reminders below for a glance-free work session: the screen stays still, and
+the banner (and the final alarm) still announce the moments that matter.
+
 Both timer faces also show a **milestone reminder**: a short orange banner
 (`30 MINUTES ELAPSED` on the stopwatch, `30 MINUTES REMAINING` on the
 countdown) flashes across the top of whatever screen is showing for about
@@ -544,11 +553,12 @@ into categories:
   per-quadrant weather), the weather refresh interval (default: every 20
   minutes) and whether the calendar face's week starts on Sunday or Monday.
 - **Timers** — the milestone reminder interval for the stopwatch/countdown
-  faces (default 30 minutes, 1–1440) and the default countdown duration
-  (default 30 minutes, 1–5999 i.e. up to 99:59). The default is what the
-  countdown face starts and resets with; the on-device `-30/-5/+5/+30 MIN`
-  buttons adjust the current session only. Both settings are included in
-  the config backup.
+  faces (default 30 minutes, 1–1440), the default countdown duration
+  (default 30 minutes, 1–5999 i.e. up to 99:59) and the *Hide seconds*
+  focus-mode toggle (same as the `HIDE SEC` button on the faces). The
+  default duration is what the countdown face starts and resets with; the
+  on-device `-30/-5/+5/+30 MIN` buttons adjust the current session only.
+  All three settings are included in the config backup.
 - **Network** — the mDNS hostname the device advertises (`<hostname>.local`,
   default `esp32worldclock`; change it when running two clocks on one
   network, applied on the next reboot) and the custom MAC for login-required

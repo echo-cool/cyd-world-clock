@@ -12,10 +12,12 @@
 // the home screen's invisible touch zones:
 //   [-30][-5][+5][+30]  duration row (countdown, only while stopped)
 //   [START/PAUSE/RESUME/RESTART]  [RESET]
-//   [<]      [SETTINGS]      [>]
+//   [<]  [SETTINGS]  [HIDE SEC]  [>]
 // Face cycling ([<] / [>]) and Settings stay available; brightness is
 // adjusted from the settings page (or the web UI) while a timer face is
-// showing.
+// showing. HIDE SEC / SHOW SEC toggles focus mode (timerHideSeconds): the
+// big timer drops to HH:MM and the whole face changes only once per minute,
+// so nothing keeps ticking to distract from work or study.
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>

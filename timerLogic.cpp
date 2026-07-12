@@ -185,4 +185,21 @@ void formatHMS(uint64_t totalSeconds, char *buf, size_t bufLen)
     snprintf(buf, bufLen, "%02llu:%02u:%02u", h, m, s);
 }
 
+void formatHM(uint64_t totalMinutes, char *buf, size_t bufLen)
+{
+    unsigned long long h = totalMinutes / 60ULL;
+    unsigned m = (unsigned)(totalMinutes % 60ULL);
+    snprintf(buf, bufLen, "%02llu:%02u", h, m);
+}
+
+uint64_t displayMinutesElapsed(uint64_t elapsedMs)
+{
+    return elapsedMs / 60000ULL;
+}
+
+uint64_t displayMinutesRemaining(uint64_t remainingMs)
+{
+    return (remainingMs + 59999ULL) / 60000ULL;
+}
+
 } // namespace timerlogic

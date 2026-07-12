@@ -533,11 +533,14 @@ static void handleSettingsPage()
     page += "<label>Default countdown (1-5999 min)"
             "<input type=\"number\" name=\"cddef\" min=\"1\" max=\"5999\" value=\"" +
             String(projectConfig.countdownDefaultMin) + "\"></label></div>";
+    appendToggle(page, "Hide seconds on the timer faces (calm HH:MM display)",
+                 "thsec", projectConfig.timerHideSeconds);
     page += "<p>The stopwatch and countdown faces flash a short banner at "
             "every reminder-interval boundary (elapsed / remaining). The "
             "default duration is what the countdown face starts and resets "
             "with; the on-device -30/-5/+5/+30 buttons adjust the current "
-            "session only.</p>";
+            "session only. With seconds hidden the big timer changes just "
+            "once a minute (same as the HIDE SEC button on the faces).</p>";
     page += "</fieldset>";
 
     // --- Network ---
@@ -688,6 +691,15 @@ static void handleSettingsPost()
             projectConfig.countdownDefaultMin = v;
             // Update the live session too, unless a countdown is running
             timersApplyConfigDefaults();
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("thsec"))
+    {
+        bool v = webServer.arg("thsec") == "1";
+        if (v != projectConfig.timerHideSeconds)
+        {
+            projectConfig.timerHideSeconds = v;
             cfgDirty = true;
         }
     }
@@ -914,6 +926,7 @@ static void handleApiStatus()
 
     // Timer faces (sessions are in-RAM only; they reset on reboot)
     doc["timerReminderMin"] = projectConfig.timerReminderMin;
+    doc["timerHideSeconds"] = projectConfig.timerHideSeconds;
     JsonObject swj = doc.createNestedObject("stopwatch");
     swj["state"] = stopwatchStateName();
     swj["elapsedSec"] = stopwatchElapsedSec();

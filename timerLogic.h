@@ -112,6 +112,16 @@ struct Countdown
 // ("125:04:09"). buf should hold at least 16 bytes.
 void formatHMS(uint64_t totalSeconds, char *buf, size_t bufLen);
 
+// "HH:MM" from whole minutes, same no-wrap hour behavior ("125:04"). Used by
+// the seconds-hidden (focus) display on the timer faces.
+void formatHM(uint64_t totalMinutes, char *buf, size_t bufLen);
+
+// Whole-minute values for the seconds-hidden display: elapsed floors (shows
+// 00:00 through the first minute), remaining ceils (shows the full duration
+// at start and never reads 00:00 while any time is actually left).
+uint64_t displayMinutesElapsed(uint64_t elapsedMs);
+uint64_t displayMinutesRemaining(uint64_t remainingMs);
+
 } // namespace timerlogic
 
 #endif // TIMER_LOGIC_H
