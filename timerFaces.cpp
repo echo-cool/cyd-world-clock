@@ -113,6 +113,13 @@ static bool alarmPhase = false; // false = red/white, true = white/red
 static unsigned long alarmLastFlipMs = 0;
 static bool alarmDrawn = false;
 
+static void ensureTimersInited()
+{
+    if (timersInited) return;
+    timersInited = true;
+    countdown.setDurationMs((int64_t)projectConfig.countdownDefaultMin * 60000LL);
+}
+
 static void queueMilestoneBanner(uint32_t minutes, const char *suffix)
 {
     char span[20];
@@ -136,12 +143,9 @@ static void queueMilestoneBanner(uint32_t minutes, const char *suffix)
 
 void timersService()
 {
-    if (!timersInited) {
-        timersInited = true;
-        // Session countdown duration starts from the saved default; on-device
-        // +/- adjustments then stay session-only (never written to flash).
-        countdown.setDurationMs((int64_t)projectConfig.countdownDefaultMin * 60000LL);
-    }
+    // Session countdown duration starts from the saved default; on-device and
+    // web adjustments then stay session-only (never written to flash).
+    ensureTimersInited();
 
     uint64_t now = monoMs();
     int interval = projectConfig.timerReminderMin;
@@ -176,6 +180,54 @@ void timersApplyConfigDefaults()
         return; // never yank a live countdown; applies after its reset
     }
     countdown.setDurationMs((int64_t)projectConfig.countdownDefaultMin * 60000LL);
+}
+
+/*-------- Authenticated web controls ----------*/
+
+bool countdownWebStart(uint32_t durationSec)
+{
+    ensureTimersInited();
+    if (durationSec < 60 || durationSec > 359999) return false;
+    if (countdown.phase == timerlogic::TIMER_RUNNING ||
+        countdown.phase == timerlogic::TIMER_PAUSED) return false;
+
+    alarmActive = false;
+    countdown.setDurationMs((int64_t)durationSec * 1000LL);
+    bool started = countdown.start(monoMs());
+    if (started) {
+        char buf[16];
+        timerlogic::formatHMS(durationSec, buf, sizeof(buf));
+        Log.println("Countdown started from web (" + String(buf) + ")");
+        firstDraw = true;
+    }
+    return started;
+}
+
+bool countdownWebPause()
+{
+    ensureTimersInited();
+    bool changed = countdown.pause(monoMs());
+    if (changed) Log.println("Countdown paused from web");
+    return changed;
+}
+
+bool countdownWebResume()
+{
+    ensureTimersInited();
+    bool changed = countdown.resume(monoMs());
+    if (changed) Log.println("Countdown resumed from web");
+    return changed;
+}
+
+void countdownWebReset()
+{
+    ensureTimersInited();
+    alarmActive = false;
+    overlayUntilMs = 0;
+    overlayShown = false;
+    countdown.reset();
+    firstDraw = true;
+    Log.println("Countdown reset from web");
 }
 
 /*-------- Final alarm (flash until acknowledged) ----------*/
@@ -682,15 +734,18 @@ uint32_t stopwatchElapsedSec()
 
 const char *countdownStateName()
 {
+    ensureTimersInited();
     return timerlogic::timerPhaseName(countdown.phase);
 }
 
 uint32_t countdownConfiguredSec()
 {
+    ensureTimersInited();
     return (uint32_t)(countdown.durationMs / 1000ULL);
 }
 
 uint32_t countdownRemainingSec()
 {
+    ensureTimersInited();
     return (uint32_t)((countdown.remainingMs(monoMs()) + 999ULL) / 1000ULL);
 }

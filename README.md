@@ -533,11 +533,14 @@ each zone currently has.
 
 ## Web settings page
 
-Everything on the settings page can also be changed from a browser: go to
-`http://esp32worldclock.local/` (or the device IP shown on the System status
-page) to pick the four timezones, clock face, quadrant grid, clock/date
-format and brightness without touching the device. The page is organized
-into categories:
+Everything on the settings page can also be changed from the responsive web
+control center at `http://esp32worldclock.local/` (or the device IP shown on
+the System status page). Its live countdown card can set a session duration,
+start, pause, resume and reset the countdown without touching the device; the
+remaining time and state update in the browser once per second. Quick presets
+cover 5, 15, 30 and 60 minutes. Starting a web countdown uses the same timer,
+milestone reminders and final alarm as the on-device controls, and the chosen
+duration remains session-only. The rest of the page is grouped into categories:
 
 - **Clocks & time** — the four timezones and the clock/date formats.
 - **Display** — the clock face, plus *Flip display 180°* for clocks mounted
@@ -582,7 +585,11 @@ into categories:
 The page also links to the firmware updater (`/update`), the log viewer
 (`/logs`), a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
 RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status,
-stopwatch/countdown state...) and
+stopwatch/countdown state...) and the smaller live countdown endpoint
+(`/api/countdown`). Countdown commands are scriptable with form-encoded POSTs;
+for example, post `action=start&durationSec=1500` to that endpoint. The
+`pause`, `resume`, and `reset` commands use the same endpoint with only the
+`action` field. The page also provides
 a live screenshot of the panel (`/screenshot`, a board-resolution BMP read
 back from the display controller — see exactly what a remote clock is showing:
 `curl http://esp32worldclock.local/screenshot -o clock.bmp`; the clock UI

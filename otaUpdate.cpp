@@ -318,23 +318,24 @@ static void handleUpdateResult()
 // it can safely reuse the touch UI's apply/persist functions.
 
 static const char SETTINGS_PAGE_HEAD[] PROGMEM = R"rawliteral(<!DOCTYPE html>
-<html><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>World Clock settings</title>
 <style>
-body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;justify-content:center;padding:2rem}
-.card{max-width:26rem;width:100%;background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:1.5rem}
-h1{font-size:1.2rem;margin:0 0 .3rem}
-p{color:#aaa;font-size:.85rem;margin:.4rem 0}
-a{color:#0a84ff}
-label{display:block;color:#ccc;font-size:.85rem;margin:.8rem 0 0}
-select,input[type=range],input[type=text],input[type=number]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
-.row{display:flex;gap:.6rem}.row label{flex:1;margin-top:.8rem}
-fieldset{border:1px solid #333;border-radius:8px;margin:1.1rem 0 0;padding:.1rem .9rem .9rem}
-legend{color:#0a84ff;font-size:.75rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:0 .4rem}
-button{width:100%;margin-top:1.2rem;padding:.6rem;border:0;border-radius:6px;background:#0a84ff;color:#fff;font-size:1rem;cursor:pointer}
+:root{color-scheme:dark;--bg:#07111f;--panel:#0f1c2e;--panel2:#14243a;--line:#263a55;--text:#f4f7fb;--muted:#91a4bd;--blue:#55a7ff;--green:#40d89a;--amber:#ffbe55;--red:#ff6577;--shadow:0 20px 55px #02071180}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;padding:24px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:radial-gradient(circle at 12% 0,#12345a 0,transparent 34rem),var(--bg);color:var(--text)}
+.card{width:min(1180px,100%);margin:auto;background:#0a1626dd;border:1px solid var(--line);border-radius:24px;padding:clamp(18px,3vw,36px);box-shadow:var(--shadow)}
+.hero{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:18px}.eyebrow{color:var(--blue);font-size:.72rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;margin:0 0 7px}h1{font-size:clamp(1.65rem,4vw,2.5rem);letter-spacing:-.04em;margin:0}h2{font-size:1.05rem;margin:0 0 5px}p{color:var(--muted);font-size:.86rem;line-height:1.55;margin:.4rem 0}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+.device-pill{flex:none;padding:9px 13px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:.8rem;color:var(--muted)}.device-pill b{color:var(--green)}
+.nav{position:sticky;top:10px;z-index:5;display:flex;gap:6px;overflow:auto;margin:0 0 22px;padding:7px;background:#081423ee;border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(14px)}.nav a{flex:none;padding:8px 11px;border-radius:9px;color:#bac8da;font-size:.78rem;font-weight:700}.nav a:hover{background:var(--panel2);color:#fff;text-decoration:none}
+.timer-card{display:grid;grid-template-columns:minmax(190px,.8fr) 1.2fr;gap:24px;align-items:center;padding:clamp(18px,3vw,28px);margin-bottom:22px;border:1px solid #275982;border-radius:20px;background:linear-gradient(135deg,#102b49,#101d30)}.timer-kicker{display:flex;gap:8px;align-items:center;color:#a9bdd4;font-size:.75rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase}.status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}.status-dot.running{background:var(--green);box-shadow:0 0 12px var(--green)}.status-dot.paused{background:var(--amber)}.status-dot.finished{background:var(--red)}.timer-time{font:700 clamp(2.6rem,8vw,5rem)/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:-.07em;margin:12px 0 5px;font-variant-numeric:tabular-nums}.timer-side{display:grid;gap:13px}.duration{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.duration label{text-align:center;margin:0}.duration input{text-align:center;font:700 1.25rem ui-monospace,monospace}.quick{display:flex;gap:7px;flex-wrap:wrap}.quick button{width:auto;margin:0;padding:7px 11px;background:#1b3858;border:1px solid #31587d;font-size:.78rem}.actions{display:flex;gap:9px}.actions button{margin:0}.actions .secondary{background:#263a51}.actions .danger{background:#592939;color:#ffdce2}.timer-msg{min-height:1.2em;color:var(--muted);font-size:.8rem}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.settings-grid>fieldset{margin:0}.settings-grid>.wide{grid-column:1/-1}
+label{display:block;color:#c4d0df;font-size:.8rem;font-weight:650;margin:.85rem 0 0}select,input[type=range],input[type=text],input[type=number],input[type=file]{width:100%;margin:.32rem 0 0;padding:.62rem .7rem;background:#0a1626;color:var(--text);border:1px solid #314761;border-radius:9px;font:inherit}input:focus,select:focus{outline:2px solid #55a7ff77;border-color:var(--blue)}input[type=range]{padding:.35rem}.row{display:flex;gap:12px}.row label{flex:1}
+fieldset{min-width:0;border:1px solid var(--line);border-radius:16px;padding:8px 18px 18px;background:var(--panel)}legend{color:var(--blue);font-size:.74rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;padding:0 7px}
+button{width:100%;margin-top:1.2rem;padding:.72rem 1rem;border:0;border-radius:9px;background:#2588f5;color:#fff;font-size:.9rem;font-weight:750;cursor:pointer}button:hover{filter:brightness(1.08)}button:disabled{opacity:.45;cursor:not-allowed}.savebar{position:sticky;bottom:10px;grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:10px 12px;background:#081423ee;border:1px solid var(--line);border-radius:13px;backdrop-filter:blur(12px)}.savebar button{margin:0}.savebar span{color:var(--muted);font-size:.78rem;white-space:nowrap}
+.tools{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}.tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.tool-link{display:block;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);font-size:.84rem;font-weight:700}.tool-link small{display:block;color:var(--muted);font-weight:400;margin-top:4px}.danger-zone{margin-top:16px;padding:16px;border:1px solid #633345;border-radius:14px;background:#291522}.danger-zone button{background:#cf3851;margin:8px 0 0}
+@media(max-width:760px){body{padding:10px}.card{border-radius:18px;padding:16px}.hero{align-items:flex-start;flex-direction:column}.timer-card{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}.settings-grid>.wide{grid-column:auto}.row{flex-direction:column;gap:0}.tool-grid{grid-template-columns:1fr}.savebar span{display:none}.nav{top:4px}.timer-time{font-size:clamp(2.6rem,16vw,4.5rem)}}
 </style></head><body><div class="card">
-<h1>ESP32 World Clock</h1>
 )rawliteral";
 
 // One preset-city <select> for a quadrant slot, current selection marked.
@@ -382,29 +383,46 @@ static void handleSettingsPage()
     if (!webAuthenticate()) return;
 
     String page;
-    page.reserve(14336);
+    page.reserve(24576);
     page += FPSTR(SETTINGS_PAGE_HEAD);
-    page += "<p>Device: " + deviceLabel() + " &middot; MAC " + deviceMacAddress() + "</p>";
-    page += "<p>Running build: " + String(__DATE__) + " " + __TIME__ +
-            " &middot; git " + String(firmwareGitHash()) +
-            " &middot; <a href=\"/update\">Firmware update</a>"
-            " &middot; <a href=\"/logs\">Logs</a>"
-            " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
-            " &middot; <a href=\"/api/status\">Status JSON</a>"
-            " &middot; <a href=\"/screenshot\">Screenshot</a>"
-            " &middot; <a href=\"/api/screen?name=caltouch\">Calibrate touch"
-            " (on device)</a>"
-            "</p>";
+    page += "<header class=\"hero\"><div><p class=\"eyebrow\">Control center</p>"
+            "<h1>World Clock</h1><p>Timers, clocks, display and device settings in one place.</p></div>"
+            "<div class=\"device-pill\"><b>&#9679; Online</b> &nbsp;" + deviceLabel() +
+            "<br>" + deviceMacAddress() + "</div></header>";
+    page += "<nav class=\"nav\" aria-label=\"Settings sections\">"
+            "<a href=\"#countdown\">Countdown</a><a href=\"#clocks\">Clocks</a>"
+            "<a href=\"#display\">Display</a><a href=\"#services\">Services</a>"
+            "<a href=\"#timers\">Timers</a><a href=\"#network\">Network</a>"
+            "<a href=\"#maintenance\">Maintenance</a></nav>";
     if (captivePortalActive())
     {
         page += "<p style=\"color:#ff9f0a\">This network needs a browser login "
                 "&mdash; the clock is on Wi-Fi but has no internet. "
                 "<a href=\"/wifi-login\">Fix it</a>.</p>";
     }
-    page += "<form method=\"POST\" action=\"/settings\">";
+
+    uint32_t cdSec = countdownConfiguredSec();
+    page += "<section class=\"timer-card\" id=\"countdown\"><div>"
+            "<div class=\"timer-kicker\"><span class=\"status-dot\" id=\"cdDot\"></span>"
+            "Countdown <span id=\"cdState\">" + String(countdownStateName()) + "</span></div>"
+            "<div class=\"timer-time\" id=\"cdTime\">--:--:--</div>"
+            "<p>Set a duration and start it here. The clock keeps counting even when another face is shown.</p>"
+            "</div><div class=\"timer-side\"><div class=\"duration\">"
+            "<label>Hours<input id=\"cdH\" type=\"number\" min=\"0\" max=\"99\" value=\"" + String(cdSec / 3600) + "\"></label>"
+            "<label>Minutes<input id=\"cdM\" type=\"number\" min=\"0\" max=\"59\" value=\"" + String((cdSec / 60) % 60) + "\"></label>"
+            "<label>Seconds<input id=\"cdS\" type=\"number\" min=\"0\" max=\"59\" value=\"" + String(cdSec % 60) + "\"></label>"
+            "</div><div class=\"quick\"><button type=\"button\" data-min=\"5\">5 min</button>"
+            "<button type=\"button\" data-min=\"15\">15 min</button>"
+            "<button type=\"button\" data-min=\"30\">30 min</button>"
+            "<button type=\"button\" data-min=\"60\">1 hour</button></div>"
+            "<div class=\"actions\"><button type=\"button\" id=\"cdPrimary\">Start countdown</button>"
+            "<button type=\"button\" class=\"danger\" id=\"cdReset\">Reset</button></div>"
+            "<div class=\"timer-msg\" id=\"cdMsg\" role=\"status\"></div></div></section>";
+
+    page += "<form class=\"settings-grid\" method=\"POST\" action=\"/settings\">";
 
     // --- Clocks & time ---
-    page += "<fieldset><legend>Clocks &amp; time</legend>";
+    page += "<fieldset id=\"clocks\"><legend>Clocks &amp; time</legend>";
     static const char *slotLabels[4] = {"Top-left clock (home)", "Top-right clock",
                                         "Bottom-left clock", "Bottom-right clock"};
     for (int i = 0; i < 4; i++)
@@ -423,7 +441,7 @@ static void handleSettingsPage()
     page += "</fieldset>";
 
     // --- Display ---
-    page += "<fieldset><legend>Display</legend>";
+    page += "<fieldset id=\"display\"><legend>Display</legend>";
     page += "<label>Clock face<select name=\"face\">";
     for (int f = 0; f < FACE_COUNT; f++)
     {
@@ -491,7 +509,7 @@ static void handleSettingsPage()
     page += "</fieldset>";
 
     // --- Weather & calendar ---
-    page += "<fieldset><legend>Weather &amp; calendar</legend>";
+    page += "<fieldset id=\"services\"><legend>Weather &amp; calendar</legend>";
     page += "<div class=\"row\"><label>Temperature unit<select name=\"tunit\">";
     page += String("<option value=\"c\"") + (!projectConfig.useFahrenheit ? " selected" : "") + ">&deg;C</option>";
     page += String("<option value=\"f\"") + (projectConfig.useFahrenheit ? " selected" : "") + ">&deg;F</option>";
@@ -524,7 +542,7 @@ static void handleSettingsPage()
     // interval drives the milestone banner on both timers; the default
     // duration is what the countdown resets to (on-device +/- adjustments
     // are session-only).
-    page += "<fieldset><legend>Timers</legend>";
+    page += "<fieldset id=\"timers\"><legend>Timer preferences</legend>";
     page += "<div class=\"row\"><label>Reminder interval (1-1440 min)"
             "<input type=\"number\" name=\"tmri\" min=\"1\" max=\"1440\" value=\"" +
             String(projectConfig.timerReminderMin) + "\"></label>";
@@ -542,7 +560,7 @@ static void handleSettingsPage()
     page += "</fieldset>";
 
     // --- Network ---
-    page += "<fieldset><legend>Network</legend>";
+    page += "<fieldset id=\"network\"><legend>Network</legend>";
     page += "<label>Hostname (mDNS \"&lt;name&gt;.local\", applied after reboot)"
             "<input type=\"text\" name=\"host\" maxlength=\"32\" value=\"" +
             projectConfig.hostname + "\"></label>";
@@ -556,13 +574,22 @@ static void handleSettingsPage()
             projectConfig.staMacOverride + "\"></label>";
     page += "</fieldset>";
 
-    page += "<button type=\"submit\">Save</button></form>";
+    page += "<div class=\"savebar\"><button type=\"submit\">Save all settings</button>"
+            "<span>Changes apply to the clock immediately</span></div></form>";
 
     // Config backup/restore (/api/config). Restore expects a previously
     // downloaded backup; the device saves it and reboots to apply.
-    page += "<p><a href=\"/api/config\" download=\"worldclock-config.json\">Backup config"
-            "</a> &middot; restore: <input type=\"file\" id=\"cfg\" accept=\".json\" "
-            "style=\"width:auto;color:#ccc\"></p>"
+    page += "<section class=\"tools\" id=\"maintenance\"><p class=\"eyebrow\">Maintenance</p>"
+            "<h2>Device tools</h2><p>Build " + String(__DATE__) + " " + __TIME__ +
+            " &middot; git " + String(firmwareGitHash()) + "</p><div class=\"tool-grid\">"
+            "<a class=\"tool-link\" href=\"/update\">Firmware update<small>Install a compiled firmware image</small></a>"
+            "<a class=\"tool-link\" href=\"/logs\">Live logs<small>Inspect recent device activity</small></a>"
+            "<a class=\"tool-link\" href=\"/wifi-login\">Wi-Fi login<small>Connect through captive portals</small></a>"
+            "<a class=\"tool-link\" href=\"/api/status\">Status JSON<small>View diagnostics and timer state</small></a>"
+            "<a class=\"tool-link\" href=\"/screenshot\">Screenshot<small>Capture the device display</small></a>"
+            "<a class=\"tool-link\" href=\"/api/screen?name=caltouch\">Calibrate touch<small>Open calibration on the clock</small></a>"
+            "</div><p><a href=\"/api/config\" download=\"worldclock-config.json\">Download configuration backup"
+            "</a></p><label>Restore a configuration backup<input type=\"file\" id=\"cfg\" accept=\".json\"></label>"
             "<script>document.getElementById('cfg').addEventListener('change',"
             "async function(){if(!this.files[0])return;"
             "var r=await fetch('/api/config',{method:'POST',body:await this.files[0].text()});"
@@ -570,13 +597,39 @@ static void handleSettingsPage()
 
     // Factory reset (/api/factory-reset). Danger action: wipes settings AND
     // WiFi credentials, then reboots. Confirm before firing.
-    page += "<p style=\"margin-top:1.5em\"><button type=\"button\" "
-            "style=\"background:#d11;border-color:#d11;color:#fff\" "
+    page += "<div class=\"danger-zone\"><h2>Factory reset</h2>"
+            "<p>Erase all settings and Wi-Fi credentials, then return to first-time setup.</p>"
+            "<button type=\"button\" "
             "onclick=\"if(confirm('Erase ALL settings and WiFi credentials and "
             "reboot to a clean, first-boot state?')){"
             "fetch('/api/factory-reset',{method:'POST'})"
             ".then(async r=>alert(await r.text()));}\">"
-            "Factory reset</button></p>";
+            "Erase device and reset</button></div></section>";
+
+    page += R"rawliteral(<script>
+const cd={state:'READY',configuredSec:0,remainingSec:0};
+const $=id=>document.getElementById(id);
+function hms(sec){sec=Math.max(0,Number(sec)||0);let h=Math.floor(sec/3600),m=Math.floor(sec/60)%60,s=Math.floor(sec)%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
+function renderCd(){
+  $('cdState').textContent=cd.state;$('cdTime').textContent=hms(cd.remainingSec);
+  $('cdDot').className='status-dot '+cd.state.toLowerCase();
+  let active=cd.state==='RUNNING'||cd.state==='PAUSED';
+  ['cdH','cdM','cdS'].forEach(id=>$(id).disabled=active);
+  document.querySelectorAll('[data-min]').forEach(b=>b.disabled=active);
+  $('cdPrimary').textContent=cd.state==='RUNNING'?'Pause':cd.state==='PAUSED'?'Resume':cd.state==='FINISHED'?'Start again':'Start countdown';
+}
+async function status(){try{let r=await fetch('/api/countdown',{cache:'no-store'});if(!r.ok)return;let j=await r.json();Object.assign(cd,j.countdown);renderCd()}catch(e){}}
+async function command(action){
+  let body='action='+encodeURIComponent(action);
+  if(action==='start'){let sec=(+$('cdH').value||0)*3600+(+$('cdM').value||0)*60+(+$('cdS').value||0);body+='&durationSec='+sec}
+  $('cdMsg').textContent='Sending command...';
+  try{let r=await fetch('/api/countdown',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});let j=await r.json();if(!r.ok)throw Error(j.error||'Command failed');Object.assign(cd,j.countdown);$('cdMsg').textContent=j.message||'Done';renderCd()}catch(e){$('cdMsg').textContent=e.message}
+}
+$('cdPrimary').onclick=()=>command(cd.state==='RUNNING'?'pause':cd.state==='PAUSED'?'resume':'start');
+$('cdReset').onclick=()=>command('reset');
+document.querySelectorAll('[data-min]').forEach(b=>b.onclick=()=>{$('cdH').value=Math.floor(+b.dataset.min/60);$('cdM').value=+b.dataset.min%60;$('cdS').value=0});
+status();setInterval(status,1000);
+</script>)rawliteral";
 
     page += "</div></body></html>";
     webServer.send(200, "text/html", page);
@@ -859,6 +912,88 @@ static void handleApiFactoryReset()
                    "OK - erasing all settings and WiFi credentials, rebooting");
     delay(750); // let the response reach the client before the radio drops
     factoryReset();
+}
+
+// POST /api/countdown with action=start|pause|resume|reset. Start also takes
+// durationSec (60..359999). Commands run on the main loop, the same context as
+// physical touch controls, so there is no cross-core timer mutation.
+static void sendCountdownResult(int status, const char *message, const char *error = nullptr)
+{
+    DynamicJsonDocument doc(384);
+    doc["ok"] = status < 400;
+    if (message) doc["message"] = message;
+    if (error) doc["error"] = error;
+    JsonObject timer = doc.createNestedObject("countdown");
+    timer["state"] = countdownStateName();
+    timer["configuredSec"] = countdownConfiguredSec();
+    timer["remainingSec"] = countdownRemainingSec();
+    String out;
+    serializeJson(doc, out);
+    webServer.send(status, "application/json", out);
+}
+
+static void handleApiCountdown()
+{
+    if (!webAuthenticate()) return;
+    String action = webServer.arg("action");
+    action.toLowerCase();
+
+    if (action == "start")
+    {
+        if (!webServer.hasArg("durationSec"))
+        {
+            sendCountdownResult(400, nullptr, "durationSec is required");
+            return;
+        }
+        long durationSec = webServer.arg("durationSec").toInt();
+        if (durationSec < 60 || durationSec > 359999)
+        {
+            sendCountdownResult(400, nullptr,
+                                "duration must be between 00:01:00 and 99:59:59");
+            return;
+        }
+        if (!countdownWebStart((uint32_t)durationSec))
+        {
+            sendCountdownResult(409, nullptr,
+                                "reset the active countdown before starting a new one");
+            return;
+        }
+        sendCountdownResult(200, "Countdown started");
+        return;
+    }
+    if (action == "pause")
+    {
+        if (!countdownWebPause())
+        {
+            sendCountdownResult(409, nullptr, "countdown is not running");
+            return;
+        }
+        sendCountdownResult(200, "Countdown paused");
+        return;
+    }
+    if (action == "resume")
+    {
+        if (!countdownWebResume())
+        {
+            sendCountdownResult(409, nullptr, "countdown is not paused");
+            return;
+        }
+        sendCountdownResult(200, "Countdown resumed");
+        return;
+    }
+    if (action == "reset")
+    {
+        countdownWebReset();
+        sendCountdownResult(200, "Countdown reset");
+        return;
+    }
+    sendCountdownResult(400, nullptr, "action must be start, pause, resume, or reset");
+}
+
+static void handleApiCountdownStatus()
+{
+    if (!webAuthenticate()) return;
+    sendCountdownResult(200, nullptr);
 }
 
 // Diagnostics as JSON - the System status page, but scriptable.
@@ -1295,6 +1430,8 @@ static void setupWebUpdater()
     webServer.on("/wifi-login", HTTP_GET, handleWifiLoginPage);
     webServer.on("/wifi-login/start", HTTP_POST, handleWifiLoginStart);
     webServer.on("/api/status", HTTP_GET, handleApiStatus);
+    webServer.on("/api/countdown", HTTP_GET, handleApiCountdownStatus);
+    webServer.on("/api/countdown", HTTP_POST, handleApiCountdown);
     webServer.on("/api/config", HTTP_GET, handleApiConfigGet);
     webServer.on("/api/config", HTTP_POST, handleApiConfigPost);
     webServer.on("/api/factory-reset", HTTP_POST, handleApiFactoryReset);

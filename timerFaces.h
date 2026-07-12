@@ -56,6 +56,14 @@ void timerFaceHandleTouch(int x, int y);
 // is not running (web settings changed the default).
 void timersApplyConfigDefaults();
 
+// Authenticated web controls. Duration is session-only, like the +/- buttons
+// on the device, and must be between 60 and 359999 seconds. Commands return
+// false when they are not valid for the countdown's current state.
+bool countdownWebStart(uint32_t durationSec);
+bool countdownWebPause();
+bool countdownWebResume();
+void countdownWebReset();
+
 // Timer state for /api/status.
 const char *stopwatchStateName();
 uint32_t stopwatchElapsedSec();

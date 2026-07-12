@@ -11,6 +11,7 @@
 //   /update      - firmware updater (upload a compiled .bin)
 //   /logs        - recent log lines (auto-refreshing viewer)
 //   /api/status  - diagnostics as JSON
+//   /api/countdown - start, pause, resume or reset the countdown (POST)
 //   /api/config  - settings backup as JSON (GET) / restore (POST the same
 //                  JSON back; the device saves it and reboots to apply)
 //   /api/logs    - the log tail as plain text
