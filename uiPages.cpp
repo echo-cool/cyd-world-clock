@@ -227,11 +227,12 @@ const UIButton BTN_SET_GRID = {20, 148, 135, 26};
 const UIButton BTN_SET_WXALERT = {165, 148, 135, 26};
 const UIButton BTN_SET_DIM = {20, 178, 60, 26};
 const UIButton BTN_SET_BRI = {240, 178, 60, 26};
-// Bottom row: four buttons across (Status / Logs / WiFi login helper / Back).
-const UIButton BTN_SET_STAT = {20, 208, 62, 26};
-const UIButton BTN_SET_LOGS = {88, 208, 46, 26};
-const UIButton BTN_SET_WIFI = {140, 208, 92, 26};
-const UIButton BTN_SET_BACK = {238, 208, 62, 26};
+// Bottom row: status / logs / touch calibration / WiFi helper / back.
+const UIButton BTN_SET_STAT = {8, 208, 54, 26};
+const UIButton BTN_SET_LOGS = {66, 208, 42, 26};
+const UIButton BTN_SET_TOUCH = {112, 208, 50, 26};
+const UIButton BTN_SET_WIFI = {166, 208, 82, 26};
+const UIButton BTN_SET_BACK = {252, 208, 60, 26};
 const UIButton SETTINGS_BRIGHTNESS_LABEL = {85, 178, 150, 26};
 
 static UIButton settingsButton(const UIButton &base)
@@ -338,16 +339,22 @@ void openWifiLoginHelper()
 }
 
 /*-------- Touch calibration screen ----------*/
-// Boards on TFT_eSPI's shared-SPI touch path (Hosyond 4.0") need a stored
-// calibration before tft.getTouch() maps raw panel readings onto pixels;
-// until then the library falls back to example values and touches land
-// off-target. The library's own tft.calibrateTouch() blocks the loop (and
-// with it the web server, running on the same core) until every corner is
-// tapped, so this is the same corner sampling and mapping math re-implemented
-// as a normal non-blocking UI screen: tap the four corner arrows, the result
-// is applied with tft.setTouch() and persisted in projectConfig.touchCal.
+// Both supported boards use an XPT2046 but through different drivers. This
+// non-blocking wizard samples raw readings on either path, keeping the web
+// server responsive while the user taps the four corner arrows.
 
-#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+// Distinguishes CYD xMin/xMax/yMin/yMax data from TFT_eSPI's fifth flags word.
+static const uint16_t TOUCH_CAL_BITBANG_MARKER = 0x8001;
+
+bool touchCalibrationAvailable()
+{
+    if (!projectConfig.touchCalSet) return false;
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_BITBANG
+    return projectConfig.touchCal[4] == TOUCH_CAL_BITBANG_MARKER;
+#else
+    return projectConfig.touchCal[4] <= 7; // rotate/invert flags only
+#endif
+}
 
 static const int TCAL_ARROW = 24;                       // corner arrow size
 static const int TCAL_SAMPLES = 8;                      // raw samples per corner
@@ -433,6 +440,7 @@ static void closeTouchCalibration()
 static void finishTouchCalibration()
 {
     const int32_t *v = touchCalRaw;
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     int32_t x0, x1, y0, y1;
     bool rotate = abs(v[0] - v[2]) > abs(v[1] - v[3]);
     if (rotate)
@@ -471,9 +479,34 @@ static void finishTouchCalibration()
     projectConfig.touchCal[2] = (uint16_t)y0;
     projectConfig.touchCal[3] = (uint16_t)y1;
     projectConfig.touchCal[4] = (uint16_t)(rotate | (invertX << 1) | (invertY << 2));
+#else
+    // The bitbang driver maps the raw axes directly. Preserve reversed ranges
+    // (Arduino map supports them) so panel variants with an inverted axis do
+    // not need separate orientation flags.
+    int32_t left = (v[0] + v[2]) / 2;
+    int32_t right = (v[4] + v[6]) / 2;
+    int32_t top = (v[1] + v[5]) / 2;
+    int32_t bottom = (v[3] + v[7]) / 2;
+    if (abs(left - right) < 100 || abs(top - bottom) < 100)
+    {
+        Log.println("Touch calibration rejected - corner readings are too close");
+        closeTouchCalibration();
+        return;
+    }
+    projectConfig.touchCal[0] = (uint16_t)left;
+    projectConfig.touchCal[1] = (uint16_t)right;
+    projectConfig.touchCal[2] = (uint16_t)top;
+    projectConfig.touchCal[3] = (uint16_t)bottom;
+    projectConfig.touchCal[4] = TOUCH_CAL_BITBANG_MARKER;
+#endif
     projectConfig.touchCalSet = true;
     projectConfig.saveConfigFile();
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     tft.setTouch(projectConfig.touchCal);
+#else
+    touchscreen.setCalibration(projectConfig.touchCal[0], projectConfig.touchCal[1],
+                               projectConfig.touchCal[2], projectConfig.touchCal[3]);
+#endif
 
     Log.print("Touch calibration saved: ");
     for (int i = 0; i < 5; i++)
@@ -494,7 +527,14 @@ static void serviceTouchCalScreen()
         return;
     }
 
-    if (tft.getTouchRawZ() < TCAL_Z_MIN)
+    uint16_t xa, ya, xb, yb;
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+    uint16_t za = tft.getTouchRawZ();
+#else
+    TouchPoint first = touchscreen.getTouch();
+    uint16_t za = first.zRaw;
+#endif
+    if (za < TCAL_Z_MIN)
     {
         touchCalWaitRelease = false;
         return;
@@ -504,12 +544,22 @@ static void serviceTouchCalScreen()
 
     // Two reads a moment apart must agree (the library's validTouch
     // deadband) so a finger sliding onto the corner doesn't skew the average.
-    uint16_t xa, ya, xb, yb;
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     tft.getTouchRaw(&xa, &ya);
     delay(2);
     if (tft.getTouchRawZ() < TCAL_Z_MIN)
         return;
     tft.getTouchRaw(&xb, &yb);
+#else
+    xa = first.xRaw;
+    ya = first.yRaw;
+    delay(2);
+    TouchPoint second = touchscreen.getTouch();
+    if (second.zRaw < TCAL_Z_MIN)
+        return;
+    xb = second.xRaw;
+    yb = second.yRaw;
+#endif
     if (abs((int)xa - (int)xb) > TCAL_RAW_ERR ||
         abs((int)ya - (int)yb) > TCAL_RAW_ERR)
         return;
@@ -552,15 +602,6 @@ void openTouchCalibration()
     touchCalCornerStart = millis();
     switchToScreen(SCREEN_TOUCH_CAL);
 }
-
-#else // bitbang touch drivers map raw readings to pixels themselves
-
-void openTouchCalibration()
-{
-    Log.println("Touch calibration is not used on this board");
-}
-
-#endif // BOARD_TOUCH_DRIVER
 
 /*-------- Boot-time settings button + boot console ----------*/
 // See uiPages.h: a Settings button on the "System initializing..." screen so
@@ -1030,6 +1071,7 @@ void renderSettingsPage()
     drawSettingsBrightnessLabel();
     drawButton(settingsButton(BTN_SET_STAT), "Status", TFT_GREEN, TFT_WHITE);
     drawButton(settingsButton(BTN_SET_LOGS), "Logs", TFT_GREEN, TFT_WHITE);
+    drawButton(settingsButton(BTN_SET_TOUCH), "Touch", TFT_CYAN, TFT_WHITE);
     // Enables the device's helper AP + captive-portal login relay. Amber when
     // a captive portal is blocking the internet, to draw the eye.
     drawButton(settingsButton(BTN_SET_WIFI), "WiFi login",
@@ -1759,6 +1801,11 @@ void handleUiTouch()
         {
             switchToScreen(SCREEN_LOGS);
         }
+        else if (buttonContains(settingsButton(BTN_SET_TOUCH), tx, ty))
+        {
+            Log.println("Settings - opening touch calibration");
+            openTouchCalibration();
+        }
         else if (buttonContains(settingsButton(BTN_SET_WIFI), tx, ty))
         {
             openWifiLoginHelper();
@@ -1905,11 +1952,9 @@ void renderUiPage()
             renderWifiFailPage();
             lastStatusRefresh = millis();
             break;
-#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
         case SCREEN_TOUCH_CAL:
             renderTouchCalPage();
             break;
-#endif
         default:
             break;
         }
@@ -2006,12 +2051,10 @@ void renderUiPage()
             successAtMs = 0;
         }
     }
-#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     else if (uiScreen == SCREEN_TOUCH_CAL)
     {
         // Poll the raw panel every loop: collect corner samples, advance the
         // arrows and finish or time out the calibration.
         serviceTouchCalScreen();
     }
-#endif
 }

@@ -392,10 +392,8 @@ static void handleSettingsPage()
             " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
             " &middot; <a href=\"/api/status\">Status JSON</a>"
             " &middot; <a href=\"/screenshot\">Screenshot</a>"
-#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
             " &middot; <a href=\"/api/screen?name=caltouch\">Calibrate touch"
             " (on device)</a>"
-#endif
             "</p>";
     if (captivePortalActive())
     {

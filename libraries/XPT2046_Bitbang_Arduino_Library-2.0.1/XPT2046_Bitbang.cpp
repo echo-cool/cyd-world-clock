@@ -63,20 +63,13 @@ TouchPoint XPT2046_Bitbang::getTouch() {
     uint16_t yRaw = readSPI(CMD_READ_Y & ~((byte)1));
     digitalWrite(_csPin, HIGH);
     // Rotate and map
-    uint16_t x = map(xRaw, cal.xMin, cal.xMax, 0, _screenWidth);
-    uint16_t y = map(yRaw, cal.yMin, cal.yMax, 0, _screenHeight);
+    // Keep the mapped values signed until after clamping. Casting a slightly
+    // negative edge reading straight to uint16_t wraps it to 65535 and makes
+    // a touch near one edge jump to the opposite edge.
+    long x = map(xRaw, cal.xMin, cal.xMax, 0, _screenWidth - 1);
+    long y = map(yRaw, cal.yMin, cal.yMax, 0, _screenHeight - 1);
 
-    if (x > _screenWidth){
-        x = _screenWidth;
-    }
-    if (x < 0) {
-        x = 0;
-    }
-    if (y > _screenHeight) {
-        y = _screenHeight;
-    }
-    if (y < 0) {
-        y = 0;
-    }
-    return TouchPoint{x, y, xRaw, yRaw, z};
+    x = constrain(x, 0L, (long)_screenWidth - 1);
+    y = constrain(y, 0L, (long)_screenHeight - 1);
+    return TouchPoint{(uint16_t)x, (uint16_t)y, xRaw, yRaw, z};
 }

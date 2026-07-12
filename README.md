@@ -302,17 +302,25 @@ clock face):
 Tapping the lower-left / lower-right **corner** switches to the previous /
 next clock face.
 
-The stopwatch and countdown faces are the exception: they draw **visible
-buttons** instead of invisible zones — `<` / `>` buttons in the bottom
-corners switch faces, `SETTINGS` opens settings, `HIDE SEC` toggles the calm
-seconds-free display (see below), and the timer controls sit above (see
-*Stopwatch* and *Countdown* below). Brightness is adjusted from the settings
-page (or the web UI) while a timer face is showing, so a stray tap can never
-dim the screen or reset a running timer.
+The stopwatch and countdown faces draw **visible buttons** for their actions:
+`<` / `>` switch faces, `SETTINGS` opens settings, `HIDE SEC` toggles the calm
+seconds-free display, and the timer controls sit above. Areas not occupied by
+a button still use the normal brightness gesture: press the left third to dim
+or the right third to brighten. The same percentage overlay appears, and all
+timer buttons take priority so brightness gestures cannot reset a timer.
 
 <p align="center">
   <img src="img/homepage-brightness-adjust.jpg" alt="Brightness bar overlay while adjusting" width="45%"/>
 </p>
+
+## Touch calibration
+
+On the first boot without a saved calibration, the clock opens a guided
+four-corner calibration screen. Tap the tip of each green arrow; the mapping
+is saved and restored on later boots. To recalibrate at any time, open
+**Settings** and tap **Touch**. The same wizard is also available with the
+`CALTOUCH` serial command or the web link on the settings page. If it is left
+untouched for a minute, it exits without replacing the previous mapping.
 
 # Clock faces
 

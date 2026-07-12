@@ -7,7 +7,8 @@
 // Navigation:
 //   Home screen: tap the CENTER of the screen  -> settings page
 //                tap the LEFT / RIGHT third    -> brightness down / up (existing)
-//   Settings:    change timezones, clock/date format, brightness, view status
+//   Settings:    change timezones, clock/date format, brightness, calibrate
+//                touch, view status
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>
@@ -87,15 +88,18 @@ const char *resetReasonText();
 // "start" trigger (via the main loop). MAIN core only.
 void openWifiLoginHelper();
 
+// True when the stored calibration belongs to this board's touch driver.
+// Calibration backups can be moved between board profiles, so callers must
+// not rely on touchCalSet alone.
+bool touchCalibrationAvailable();
+
 // Open the on-device touch calibration screen (SCREEN_TOUCH_CAL): tap the
-// four corner arrows, the resulting tft.setTouch() parameters are applied and
+// four corner arrows and the resulting raw-to-screen mapping is applied and
 // persisted in projectConfig. Offered automatically once per boot while no
-// calibration is stored, and reachable any time via the serial command
-// CALTOUCH or /api/screen?name=caltouch. Only works on boards using
-// TFT_eSPI's shared-SPI touch path (returns without switching elsewhere);
-// the CYD's bitbang driver maps raw readings to pixels itself. The screen
-// times out back to the clock after 60 seconds without a complete
-// calibration. MAIN core only.
+// usable calibration is stored, and reachable any time from Settings, the
+// serial command CALTOUCH, or /api/screen?name=caltouch. The screen times out
+// back to the clock after 60 seconds without a complete calibration.
+// MAIN core only.
 void openTouchCalibration();
 
 // Boot-time UI on the "System initializing..." screen. The blocking boot

@@ -113,6 +113,10 @@ extern unsigned long manualBrightnessUntil;
 extern unsigned long brightnessBarShownTime;
 extern bool brightnessBarVisible;
 
+// Paint the temporary percentage overlay used by home-screen brightness
+// gestures (including the timer faces).
+void showBrightnessBar(int brightness);
+
 // Current market status line for a zone, e.g. "NYSE OPEN" (heavy String work -
 // callers outside ClockLogic.cpp should prefer zone.lastMarketStatus, which is
 // refreshed once per minute).

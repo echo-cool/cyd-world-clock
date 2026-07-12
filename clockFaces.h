@@ -11,8 +11,9 @@
 // The passive faces share the home-screen touch zones (center = settings,
 // lower-left/lower-right corners = previous/next face, rest of the left/right
 // thirds = brightness). The stopwatch/countdown faces draw visible buttons
-// instead ([<] / [SETTINGS] / [>] plus the timer controls - see timerFaces.h);
-// brightness is adjusted from the settings page while they are showing.
+// instead ([<] / [SETTINGS] / [>] plus the timer controls - see timerFaces.h),
+// while unused areas in their left/right thirds retain the same brightness
+// gesture as every other clock face.
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>

@@ -1635,9 +1635,18 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     // Initialize touch screen. Hosyond's touch shares the LCD SPI pins, so that
     // profile uses TFT_eSPI's SPI-transaction touch path instead.
     touchscreen.begin();
-    Log.println("Touch screen initialized (bitbang)");
+    if (touchCalibrationAvailable())
+    {
+        touchscreen.setCalibration(projectConfig.touchCal[0], projectConfig.touchCal[1],
+                                   projectConfig.touchCal[2], projectConfig.touchCal[3]);
+        Log.println("Touch screen initialized (bitbang, saved calibration)");
+    }
+    else
+    {
+        Log.println("Touch screen initialized (bitbang, NOT calibrated)");
+    }
 #else
-    if (projectConfig.touchCalSet)
+    if (touchCalibrationAvailable())
     {
         tft.setTouch(projectConfig.touchCal);
         Log.println("Touch screen initialized (TFT_eSPI shared SPI, saved calibration)");
@@ -1820,6 +1829,13 @@ TouchPoint readTouchPoint()
 #else
     TouchPoint t = touchscreen.getTouch();
 #endif
+    // Some drivers map the far ADC endpoint to width/height (one pixel past
+    // the panel). Clamp before optional mirroring so flipped displays cannot
+    // underflow an unsigned coordinate at the calibrated edge.
+    if (t.zRaw > 0) {
+        if (t.x >= screenWidth) t.x = screenWidth - 1;
+        if (t.y >= screenHeight) t.y = screenHeight - 1;
+    }
     if (projectConfig.flipDisplay) {
         // The flipped board rotation mirrors both axes relative to the touch
         // panel's fixed orientation.
@@ -1844,97 +1860,99 @@ void handleTouch()
     {
         unsigned long currentTime = millis();
 
-        // The timer faces draw visible buttons instead of the invisible
-        // zones below; route their taps to the button layout (timerFaces.cpp).
+        // The timer faces draw visible buttons and retain brightness gestures
+        // in otherwise-unused left/right areas. Route their taps there, then
+        // continue to the shared brightness-overlay timeout below.
         if (projectConfig.clockFace == FACE_STOPWATCH ||
             projectConfig.clockFace == FACE_COUNTDOWN)
         {
             timerFaceHandleTouch(touch.x, touch.y);
-            return;
         }
-
-        // getTouch() already maps touch.x/y into screen pixels, so the screen
-        // splits into touch zones:
-        //   center third = settings
-        //   lower-left / lower-right corner = previous / next clock face
-        //   rest of the left/right thirds = dimmer / brighter
-        int leftThird = screenWidth / 3;
-        int rightThird = (screenWidth * 2) / 3;
-        if (touch.x >= leftThird && touch.x <= rightThird)
+        else
         {
-            // Center tap opens the settings page. switchToScreen suppresses
-            // further touch input until the finger is lifted.
-            Log.println("CENTER touch - opening settings page");
-            switchToScreen(SCREEN_SETTINGS);
-            brightnessBarVisible = false;
-            return;
-        }
-
-        if (touch.y >= (screenHeight * 2) / 3)
-        {
-            // Corner tap cycles the clock face; one step per tap (input stays
-            // suppressed until the finger is lifted, like a screen switch).
-            int step = (touch.x < leftThird) ? FACE_COUNT - 1 : 1;
-            projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
-            // A brightness adjustment may still be pending its bar-timeout
-            // save; fold it into this write instead of dropping it.
-            projectConfig.brightness = backlightLevel;
-            projectConfig.saveConfigFile();
-            Log.print(touch.x < leftThird ? "LOWER-LEFT" : "LOWER-RIGHT");
-            Log.print(" touch - clock face: ");
-            Log.println(clockFaceName(projectConfig.clockFace));
-
-            // Full repaint, same as returning home from a settings page
-            tft.fillScreen(clockBackgroundColor);
-            firstDraw = true;
-            for (int i = 0; i < 4; i++)
+            // getTouch() already maps touch.x/y into screen pixels, so the screen
+            // splits into touch zones:
+            //   center third = settings
+            //   lower-left / lower-right corner = previous / next clock face
+            //   rest of the left/right thirds = dimmer / brighter
+            int leftThird = screenWidth / 3;
+            int rightThird = (screenWidth * 2) / 3;
+            if (touch.x >= leftThird && touch.x <= rightThird)
             {
-                worldZones[i].initialized = false;
+                // Center tap opens the settings page. switchToScreen suppresses
+                // further touch input until the finger is lifted.
+                Log.println("CENTER touch - opening settings page");
+                switchToScreen(SCREEN_SETTINGS);
+                brightnessBarVisible = false;
+                return;
             }
-            brightnessBarVisible = false;
-            touchSuppressedUntilRelease = true;
-            return;
-        }
 
-        // Debounce - only allow one touch every 10ms for brightness control
-        if (currentTime - lastTouchTime > 10)
-        {
-            if (touch.x < leftThird) // Left third - make dimmer
+            if (touch.y >= (screenHeight * 2) / 3)
             {
-                backlightLevel = clampBrightness(backlightLevel - 1);
+                // Corner tap cycles the clock face; one step per tap (input stays
+                // suppressed until the finger is lifted, like a screen switch).
+                int step = (touch.x < leftThird) ? FACE_COUNT - 1 : 1;
+                projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
+                // A brightness adjustment may still be pending its bar-timeout
+                // save; fold it into this write instead of dropping it.
+                projectConfig.brightness = backlightLevel;
+                projectConfig.saveConfigFile();
+                Log.print(touch.x < leftThird ? "LOWER-LEFT" : "LOWER-RIGHT");
+                Log.print(" touch - clock face: ");
+                Log.println(clockFaceName(projectConfig.clockFace));
 
-                Log.print("LEFT touch - Dimmer: ");
+                // Full repaint, same as returning home from a settings page
+                tft.fillScreen(clockBackgroundColor);
+                firstDraw = true;
+                for (int i = 0; i < 4; i++)
+                {
+                    worldZones[i].initialized = false;
+                }
+                brightnessBarVisible = false;
+                touchSuppressedUntilRelease = true;
+                return;
+            }
+
+            // Debounce - only allow one touch every 10ms for brightness control
+            if (currentTime - lastTouchTime > 10)
+            {
+                if (touch.x < leftThird) // Left third - make dimmer
+                {
+                    backlightLevel = clampBrightness(backlightLevel - 1);
+
+                    Log.print("LEFT touch - Dimmer: ");
+                    Log.println(backlightLevel);
+                }
+                else // Right third - make brighter
+                {
+                    backlightLevel = clampBrightness(backlightLevel + 1);
+
+                    Log.print("RIGHT touch - Brighter: ");
+                    Log.println(backlightLevel);
+                }
+
+                // Apply PWM to backlight pin
+                analogWrite(BACKLIGHT_PIN, backlightLevel);
+
+                // Hold this manual setting before auto-brightness resumes
+                manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
+
+                // Show brightness bar
+                showBrightnessBar(backlightLevel);
+                brightnessBarVisible = true;
+                brightnessBarShownTime = currentTime;
+
+                lastTouchTime = currentTime;
+
+                Log.print("Touch at X: ");
+                Log.print(touch.x);
+                Log.print(", Y: ");
+                Log.print(touch.y);
+                Log.print(", Pressure: ");
+                Log.print(touch.zRaw);
+                Log.print(", Brightness: ");
                 Log.println(backlightLevel);
             }
-            else // Right third - make brighter
-            {
-                backlightLevel = clampBrightness(backlightLevel + 1);
-
-                Log.print("RIGHT touch - Brighter: ");
-                Log.println(backlightLevel);
-            }
-
-            // Apply PWM to backlight pin
-            analogWrite(BACKLIGHT_PIN, backlightLevel);
-
-            // Hold this manual setting before auto-brightness resumes
-            manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
-
-            // Show brightness bar
-            showBrightnessBar(backlightLevel);
-            brightnessBarVisible = true;
-            brightnessBarShownTime = currentTime;
-
-            lastTouchTime = currentTime;
-
-            Log.print("Touch at X: ");
-            Log.print(touch.x);
-            Log.print(", Y: ");
-            Log.print(touch.y);
-            Log.print(", Pressure: ");
-            Log.print(touch.zRaw);
-            Log.print(", Brightness: ");
-            Log.println(backlightLevel);
         }
     }
 
@@ -2067,21 +2085,19 @@ void drawRollingClock()
         return;
     }
 
-#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     // Without a stored calibration, touches land off-target (the library's
-    // example mapping); offer the calibration screen once per boot. It times
+    // default mapping); offer the calibration screen once per boot. It times
     // out back to the clock after a minute if nobody is around, and stays
     // reachable later via the CALTOUCH serial command or
     // /api/screen?name=caltouch.
     static bool touchCalOffered = false;
-    if (!touchCalOffered && !projectConfig.touchCalSet)
+    if (!touchCalOffered && !touchCalibrationAvailable())
     {
         touchCalOffered = true;
         openTouchCalibration();
         resetFlashChangeFlag();
         return;
     }
-#endif
 
     // Handle touch input for backlight control and opening the settings page
     handleTouch();

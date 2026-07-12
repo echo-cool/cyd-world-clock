@@ -2,8 +2,10 @@
 
 #include <esp_timer.h> // 64-bit monotonic clock - immune to NTP steps
 
+#include "brightness.h"
 #include "ClockLogic.h" // tft, worldZones, readTouchPoint, formatHHMM
 #include "clockFaces.h" // ClockFace enum, clockFaceName
+#include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "otaUpdate.h"  // otaInProgress - defer the banner during updates
 #include "projectConfig.h"
 #include "timerLogic.h"
@@ -642,8 +644,28 @@ void timerFaceHandleTouch(int x, int y)
         }
     }
 
-    // Anywhere else: deliberately inert - the timer faces have no invisible
-    // touch zones, so a stray tap cannot dim the screen or switch pages.
+    // Match the other home faces: unused space in the left/right thirds dims
+    // or brightens the backlight. Visible timer buttons above take priority.
+    // A held finger repeats in small steps; handleTouch() owns overlay timeout
+    // and the single flash write after the gesture ends.
+    int leftThird = screenWidth / 3;
+    int rightThird = (screenWidth * 2) / 3;
+    if (x < leftThird || x > rightThird) {
+        static unsigned long lastBrightnessTouch = 0;
+        unsigned long currentTime = millis();
+        if (currentTime - lastBrightnessTouch > 10) {
+            backlightLevel = clampBrightness(backlightLevel + (x < leftThird ? -1 : 1));
+            analogWrite(BACKLIGHT_PIN, backlightLevel);
+            manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
+            showBrightnessBar(backlightLevel);
+            brightnessBarVisible = true;
+            brightnessBarShownTime = currentTime;
+            lastBrightnessTouch = currentTime;
+            Log.println(String(x < leftThird ? "Timer face - Dimmer: "
+                                             : "Timer face - Brighter: ") +
+                        String(backlightLevel));
+        }
+    }
 }
 
 /*-------- Status (/api/status) ----------*/

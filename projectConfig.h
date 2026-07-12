@@ -146,13 +146,11 @@ public:
   int countdownDefaultMin = 30;
   bool timerHideSeconds = false;
 
-  // Touch panel calibration for boards on TFT_eSPI's shared-SPI touch path
-  // (Hosyond 4.0"). The five parameters come from the on-device calibration
-  // screen (uiPages.cpp) in tft.setTouch() format and are applied on boot.
-  // While touchCalSet is false the library's example calibration is in effect
-  // (touch lands in roughly the right area but not under the finger) and the
-  // calibration screen offers itself once after boot. Unused on boards whose
-  // touch driver maps to screen pixels itself (CYD bitbang XPT2046).
+  // Touch panel calibration from the on-device four-corner wizard. On the
+  // Hosyond profile these are the five tft.setTouch() parameters. On the CYD
+  // profile the first four are xMin/xMax/yMin/yMax for the bitbang XPT2046
+  // driver and the fifth is a driver marker. A missing or foreign marker makes
+  // the calibration screen offer itself once after boot.
   bool touchCalSet = false;
   uint16_t touchCal[5] = {0, 0, 0, 0, 0};
 
