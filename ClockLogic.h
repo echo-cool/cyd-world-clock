@@ -180,6 +180,13 @@ String formatHHMM(time_t local, bool &pm);
 // zones always line up with what's drawn.
 TouchPoint readTouchPoint();
 
+// Synthetic touch for the /api/touch debug endpoint: readTouchPoint() reports
+// a press at (x, y) - final screen pixels, matching what /screenshot shows -
+// for holdMs, then a release. Downstream code (edge triggers, buttons, touch
+// suppression, the alarm dismissal) sees it exactly like a finger. MAIN core
+// only (the web handlers run there).
+void injectTouchPoint(int x, int y, unsigned long holdMs);
+
 // Dump the ambient-light sensor state to Serial (the LDR serial command).
 void printLdrStatus();
 

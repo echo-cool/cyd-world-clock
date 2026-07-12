@@ -290,8 +290,8 @@ router outage therefore rejoins on its own once the router is back.
 
 # Touch Screen Controls
 
-The home screen is split into three touch zones (the same on every clock
-face):
+The home screen is split into three touch zones (the same on every passive
+clock face):
 
 | Zone | Action |
 | --- | --- |
@@ -299,14 +299,26 @@ face):
 | Center third | Open the **Settings** page |
 | Right third | Increase backlight brightness |
 
+Tapping the lower-left / lower-right **corner** switches to the previous /
+next clock face.
+
+The stopwatch and countdown faces are the exception: they draw **visible
+buttons** instead of invisible zones — `<` / `>` buttons in the bottom
+corners switch faces, a `SETTINGS` button between them opens settings, and
+the timer controls sit above (see *Stopwatch* and *Countdown* below).
+Brightness is adjusted from the settings page (or the web UI) while a timer
+face is showing, so a stray tap can never dim the screen or reset a running
+timer.
+
 <p align="center">
   <img src="img/homepage-brightness-adjust.jpg" alt="Brightness bar overlay while adjusting" width="45%"/>
 </p>
 
 # Clock faces
 
-The home screen has five faces, cycled with the **Clock face** button on the
-settings page (the choice is saved to flash):
+The home screen has seven faces, cycled with the **Clock face** button on the
+settings page or by tapping the lower-left / lower-right corners of the home
+screen (the choice is saved to flash):
 
 - **World clock** — the classic four-quadrant view: one timezone per quadrant
   with date, day-offset vs. home and stock market status. On a public
@@ -392,6 +404,42 @@ settings page (the choice is saved to flash):
   progress bar while the exchange is inside regular hours. These rows tick on
   built-in timezone rules, so the face works even without the timezone
   server.
+- **Stopwatch** — a count-up timer with the home-zone clock, weekday and date
+  in the header. Large 7-segment `HH:MM:SS` digits count past 24 hours
+  without wrapping (`125:04:09`), and the state (`READY` / `RUNNING` /
+  `PAUSED`) is shown above them. Visible buttons: `START` / `PAUSE` /
+  `RESUME` (one primary button that changes with the state) and a clearly
+  separated red `RESET` — reset while running stops the stopwatch and
+  returns it to `00:00:00`. The stopwatch keeps counting while you browse
+  other faces or the settings/status pages; it runs on the ESP32's 64-bit
+  monotonic clock, so NTP corrections never make it jump.
+- **Countdown** — a countdown timer with the same header and button layout.
+  While stopped, `-30 / -5 / +5 / +30 MIN` buttons set the duration (default
+  30 minutes, configurable on the web settings page; adjustable from 1
+  minute up to 99:59:59 — on-device adjustments are session-only and are
+  not written to flash). `START` begins the countdown, `PAUSE`/`RESUME`
+  work as expected, and `RESET` restores the configured duration. While
+  running, the row shows the configured total instead of the buttons, and
+  the remaining time turns orange in the final minute. At `00:00:00` the
+  whole display flashes red/white (`TIME'S UP — TAP TO DISMISS`) about
+  twice a second until any tap acknowledges it — even if you are on another
+  face, the settings page, status or logs at that moment. The
+  acknowledging tap is consumed (it can't press anything underneath), and
+  the UI then always returns to the countdown face in its `FINISHED` state,
+  where `RESTART` runs the same duration again and `RESET` re-arms it.
+
+Both timer faces also show a **milestone reminder**: a short orange banner
+(`30 MINUTES ELAPSED` on the stopwatch, `30 MINUTES REMAINING` on the
+countdown) flashes across the top of whatever screen is showing for about
+1.5 seconds at every multiple of the configured reminder interval (default
+30 minutes, 1–1440 on the web settings page). Each boundary fires exactly
+once; the countdown fires at the positive multiples below the starting
+duration (a 100-minute countdown with a 30-minute interval reminds at 90,
+60 and 30 minutes remaining), and zero is left to the final alarm. The
+reminders are non-blocking — networking, touch and the timers themselves
+keep running. Active stopwatch/countdown sessions live in RAM only: they do
+**not** survive a reboot (only the reminder interval and the default
+countdown duration are persisted).
 
 <p align="center">
   <img src="img/face-world.jpg" alt="World clock face with weather and market status" width="19%"/>
@@ -439,7 +487,7 @@ installed without opening the status pages.
   inspect the active calendars or force a refetch, and set
   `MARKET_HOLIDAYS_URL` in `secrets.h` to point a forked device at your own
   copy of the file.
-- **Clock face** — cycle between the four home-screen faces (see above).
+- **Clock face** — cycle between the seven home-screen faces (see above).
 - **Clock format** — toggle between 24-hour and 12-hour (AM/PM) display.
 - **Date format** — toggle between `DD/MM/YY` and `MM/DD/YY`.
 - **Quadrant grid** — toggle divider lines between the four quadrants of the
@@ -495,6 +543,12 @@ into categories:
 - **Weather & calendar** — temperatures in °C or °F (weather face and
   per-quadrant weather), the weather refresh interval (default: every 20
   minutes) and whether the calendar face's week starts on Sunday or Monday.
+- **Timers** — the milestone reminder interval for the stopwatch/countdown
+  faces (default 30 minutes, 1–1440) and the default countdown duration
+  (default 30 minutes, 1–5999 i.e. up to 99:59). The default is what the
+  countdown face starts and resets with; the on-device `-30/-5/+5/+30 MIN`
+  buttons adjust the current session only. Both settings are included in
+  the config backup.
 - **Network** — the mDNS hostname the device advertises (`<hostname>.local`,
   default `esp32worldclock`; change it when running two clocks on one
   network, applied on the next reboot) and the custom MAC for login-required
@@ -509,16 +563,22 @@ into categories:
 
 The page also links to the firmware updater (`/update`), the log viewer
 (`/logs`), a scriptable diagnostics endpoint (`/api/status`, JSON: IP,
-RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status...) and
+RSSI, chip/CPU, flash, heap, uptime, NTP syncs, zones, market status,
+stopwatch/countdown state...) and
 a live screenshot of the panel (`/screenshot`, a board-resolution BMP read
 back from the display controller — see exactly what a remote clock is showing:
 `curl http://esp32worldclock.local/screenshot -o clock.bmp`; the clock UI
 pauses for the 1–2 s read). `/api/screen?name=<page>` switches the on-device
 UI to any page remotely (`home`, `settings`, `zones`, `tzlist`, `status`,
 `logs`, `wifilogin`, `wififail`, plus `&page=`/`&slot=` for the status/timezone pages;
-without `?name` it reports the current page) — together with `/screenshot`
-this drives and captures the whole touch UI for debugging without touching
-the device. If `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic
+without `?name` it reports the current page), and `/api/touch?x=<px>&y=<px>`
+simulates a finger tap at the given screen pixels (`&ms=` sets the hold time,
+default 100 ms) — it flows through the exact same code paths as a physical
+touch, so it presses whatever button is drawn there (home-screen zones, the
+timer faces' buttons, settings pages, even the countdown alarm's
+tap-to-dismiss). Together with `/screenshot` this drives and captures the
+whole touch UI for debugging without touching the device: look, tap what you
+see, look again. If `OTA_PASSWORD` is set in `secrets.h`, the same HTTP Basic
 credentials (username `admin`) protect these pages.
 
 <p align="center">

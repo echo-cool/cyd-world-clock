@@ -20,6 +20,7 @@
 #include "holidayService.h"     // holidayZonesLoaded - /api/status
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - /api/status
 #include "netCheck.h"           // captive state, MAC parse - /wifi-login + settings
+#include "timerFaces.h"         // timer state for /api/status + settings apply
 #include "wifiRelay.h"          // login-relay helper trigger + state
 #include "uiPages.h"            // TZ_PRESETS, applyZoneSelection, resetReasonText
 #include "weatherService.h"     // weatherAgeMinutes
@@ -327,7 +328,7 @@ h1{font-size:1.2rem;margin:0 0 .3rem}
 p{color:#aaa;font-size:.85rem;margin:.4rem 0}
 a{color:#0a84ff}
 label{display:block;color:#ccc;font-size:.85rem;margin:.8rem 0 0}
-select,input[type=range],input[type=text]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
+select,input[type=range],input[type=text],input[type=number]{width:100%;margin:.3rem 0 0;padding:.4rem;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
 .row{display:flex;gap:.6rem}.row label{flex:1;margin-top:.8rem}
 fieldset{border:1px solid #333;border-radius:8px;margin:1.1rem 0 0;padding:.1rem .9rem .9rem}
 legend{color:#0a84ff;font-size:.75rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:0 .4rem}
@@ -520,6 +521,25 @@ static void handleSettingsPage()
     page += "</select></label>";
     page += "</fieldset>";
 
+    // --- Timers ---
+    // The stopwatch/countdown clock faces (timerFaces.cpp). The reminder
+    // interval drives the milestone banner on both timers; the default
+    // duration is what the countdown resets to (on-device +/- adjustments
+    // are session-only).
+    page += "<fieldset><legend>Timers</legend>";
+    page += "<div class=\"row\"><label>Reminder interval (1-1440 min)"
+            "<input type=\"number\" name=\"tmri\" min=\"1\" max=\"1440\" value=\"" +
+            String(projectConfig.timerReminderMin) + "\"></label>";
+    page += "<label>Default countdown (1-5999 min)"
+            "<input type=\"number\" name=\"cddef\" min=\"1\" max=\"5999\" value=\"" +
+            String(projectConfig.countdownDefaultMin) + "\"></label></div>";
+    page += "<p>The stopwatch and countdown faces flash a short banner at "
+            "every reminder-interval boundary (elapsed / remaining). The "
+            "default duration is what the countdown face starts and resets "
+            "with; the on-device -30/-5/+5/+30 buttons adjust the current "
+            "session only.</p>";
+    page += "</fieldset>";
+
     // --- Network ---
     page += "<fieldset><legend>Network</legend>";
     page += "<label>Hostname (mDNS \"&lt;name&gt;.local\", applied after reboot)"
@@ -648,6 +668,26 @@ static void handleSettingsPost()
         if (v != projectConfig.weatherRefreshMin)
         {
             projectConfig.weatherRefreshMin = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("tmri"))
+    {
+        int v = constrain(webServer.arg("tmri").toInt(), 1, 1440);
+        if (v != projectConfig.timerReminderMin)
+        {
+            projectConfig.timerReminderMin = v;
+            cfgDirty = true;
+        }
+    }
+    if (webServer.hasArg("cddef"))
+    {
+        int v = constrain(webServer.arg("cddef").toInt(), 1, 5999);
+        if (v != projectConfig.countdownDefaultMin)
+        {
+            projectConfig.countdownDefaultMin = v;
+            // Update the live session too, unless a countdown is running
+            timersApplyConfigDefaults();
             cfgDirty = true;
         }
     }
@@ -872,6 +912,16 @@ static void handleApiStatus()
     doc["brightness"] = backlightLevel;
     doc["weatherAgeMin"] = weatherAgeMinutes();
 
+    // Timer faces (sessions are in-RAM only; they reset on reboot)
+    doc["timerReminderMin"] = projectConfig.timerReminderMin;
+    JsonObject swj = doc.createNestedObject("stopwatch");
+    swj["state"] = stopwatchStateName();
+    swj["elapsedSec"] = stopwatchElapsedSec();
+    JsonObject cdj = doc.createNestedObject("countdown");
+    cdj["state"] = countdownStateName();
+    cdj["configuredSec"] = countdownConfiguredSec();
+    cdj["remainingSec"] = countdownRemainingSec();
+
     long calAgeDays = -1;
     doc["marketHolidaySource"] = marketHolidaysFetchedInfo(calAgeDays) ? "fetched" : "compiled";
     if (calAgeDays >= 0)
@@ -1088,6 +1138,52 @@ static void handleApiScreen()
                    String("{\"screen\":\"") + uiScreenName() + "\"}");
 }
 
+/*-------- Remote touch injection (debug) ----------*/
+// GET/POST /api/touch?x=<px>&y=<px>[&ms=<hold>] simulates a finger tap at the
+// given screen pixels: readTouchPoint() reports the press for the hold time
+// (default 100ms, 20-2000), then a release. It flows through the exact same
+// paths as a physical touch - home-screen zones, the timer faces' buttons,
+// UI page buttons, touch suppression, alarm dismissal - so together with
+// /screenshot the whole touch UI can be exercised remotely: look, tap what
+// you see, look again. Coordinates match the screenshot (the 180-degree
+// display flip is already accounted for).
+
+static void handleApiTouch()
+{
+    if (!webAuthenticate()) return;
+    if (otaInProgress)
+    {
+        webServer.send(503, "text/plain", "update in progress");
+        return;
+    }
+    if (!webServer.hasArg("x") || !webServer.hasArg("y"))
+    {
+        webServer.send(400, "text/plain",
+                       "usage: /api/touch?x=<px>&y=<px>[&ms=<hold, 20-2000>]");
+        return;
+    }
+
+    int x = webServer.arg("x").toInt();
+    int y = webServer.arg("y").toInt();
+    if (x < 0 || x >= tft.width() || y < 0 || y >= tft.height())
+    {
+        webServer.send(400, "text/plain",
+                       "coordinates outside the display (" + String(tft.width()) +
+                           "x" + String(tft.height()) + ")");
+        return;
+    }
+    long holdMs = webServer.hasArg("ms") ? webServer.arg("ms").toInt() : 100;
+    holdMs = constrain(holdMs, 20, 2000);
+
+    injectTouchPoint(x, y, (unsigned long)holdMs);
+    Log.println("Synthetic touch via /api/touch at " + String(x) + "," +
+                String(y) + " (" + String(holdMs) + "ms)");
+    webServer.send(200, "application/json",
+                   "{\"ok\":true,\"x\":" + String(x) + ",\"y\":" + String(y) +
+                       ",\"ms\":" + String(holdMs) + ",\"screen\":\"" +
+                       uiScreenName() + "\"}");
+}
+
 /*-------- Wi-Fi login helper page ----------*/
 // Guidance for login-required (captive-portal) networks: shows the clock's
 // current MAC and internet status, and the two ways to get online, since portal
@@ -1195,6 +1291,7 @@ static void setupWebUpdater()
     webServer.on("/api/logs", HTTP_GET, handleApiLogs);
     webServer.on("/screenshot", HTTP_GET, handleScreenshot);
     webServer.on("/api/screen", handleApiScreen);
+    webServer.on("/api/touch", handleApiTouch);
     webServer.on("/update", HTTP_GET, handleUpdatePage);
     webServer.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
     webServer.onNotFound([]() {

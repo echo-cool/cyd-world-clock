@@ -31,6 +31,8 @@
 #define PROJECT_WEEK_START_MONDAY "weekStartMonday"
 #define PROJECT_WEATHER_REFRESH_MIN "weatherRefreshMin"
 #define PROJECT_TOUCH_CAL "touchCal"
+#define PROJECT_TIMER_REMINDER_MIN "timerReminderMin"
+#define PROJECT_COUNTDOWN_DEFAULT_MIN "countdownDefaultMin"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -58,7 +60,8 @@ public:
   int brightness = 95;
 
   // Home-screen face (ClockFace enum in clockFaces.h): 0 = quad world clock,
-  // 1 = big clock, 2 = calendar, 3 = weather, 4 = markets.
+  // 1 = big clock, 2 = calendar, 3 = weather, 4 = markets, 5 = stopwatch,
+  // 6 = countdown.
   int clockFace = 0;
 
   // Divider grid between the four quadrants of the world-clock face.
@@ -127,6 +130,15 @@ public:
   // Minutes between weather fetches (5-120). Failures retry sooner
   // regardless (weatherService.cpp).
   int weatherRefreshMin = 20;
+
+  // Timer faces (stopwatch / countdown, timerFaces.cpp):
+  //  - timerReminderMin: milestone reminder interval in minutes (1-1440).
+  //    Both timers flash a short banner at each elapsed/remaining multiple.
+  //  - countdownDefaultMin: default countdown duration in minutes (1-5999,
+  //    i.e. up to 99:59). The on-device +/- buttons adjust the session only;
+  //    this saved default changes from the web settings page.
+  int timerReminderMin = 30;
+  int countdownDefaultMin = 30;
 
   // Touch panel calibration for boards on TFT_eSPI's shared-SPI touch path
   // (Hosyond 4.0"). The five parameters come from the on-device calibration

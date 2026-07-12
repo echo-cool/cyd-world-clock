@@ -54,6 +54,8 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_FLIP_DISPLAY] = c.flipDisplay;
   json[PROJECT_WEEK_START_MONDAY] = c.weekStartMonday;
   json[PROJECT_WEATHER_REFRESH_MIN] = c.weatherRefreshMin;
+  json[PROJECT_TIMER_REMINDER_MIN] = c.timerReminderMin;
+  json[PROJECT_COUNTDOWN_DEFAULT_MIN] = c.countdownDefaultMin;
 
   // Written only once a real calibration exists, so a missing key keeps
   // meaning "never calibrated" across config backup/restore.
@@ -187,6 +189,19 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
   if (json.containsKey(PROJECT_WEATHER_REFRESH_MIN))
   {
     c.weatherRefreshMin = constrain(json[PROJECT_WEATHER_REFRESH_MIN].as<int>(), 5, 120);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_TIMER_REMINDER_MIN))
+  {
+    c.timerReminderMin = constrain(json[PROJECT_TIMER_REMINDER_MIN].as<int>(), 1, 1440);
+    any = true;
+  }
+
+  if (json.containsKey(PROJECT_COUNTDOWN_DEFAULT_MIN))
+  {
+    // 5999 min = 99:59, matching the countdown's 99:59:59 ceiling
+    c.countdownDefaultMin = constrain(json[PROJECT_COUNTDOWN_DEFAULT_MIN].as<int>(), 1, 5999);
     any = true;
   }
 

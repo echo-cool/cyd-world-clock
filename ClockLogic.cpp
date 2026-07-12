@@ -12,6 +12,7 @@
 #include "fontTimeDigits.h" // anti-aliased VLW digits for the quadrant times
 #include "projectConfig.h"  // home-screen extras toggles
 #include "serialCommands.h"
+#include "timerFaces.h"     // stopwatch/countdown engines, alarm + reminders
 #include "uiPages.h"
 #include "weatherService.h" // weatherBegin
 #include "logShipper.h"     // logShipperBegin - remote log push
@@ -1784,8 +1785,33 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     showStartupCommands();
 }
 
+// Synthetic touch injection (/api/touch, otaUpdate.cpp). Coordinates are
+// final screen pixels, so the flip mirroring below must NOT be applied to
+// them - a caller working from a /screenshot always hits what they see.
+static int injectedTouchX = 0;
+static int injectedTouchY = 0;
+static unsigned long injectedTouchUntil = 0; // millis deadline; 0 = idle
+
+void injectTouchPoint(int x, int y, unsigned long holdMs)
+{
+    injectedTouchX = x;
+    injectedTouchY = y;
+    injectedTouchUntil = millis() + holdMs;
+}
+
 TouchPoint readTouchPoint()
 {
+    if (injectedTouchUntil != 0)
+    {
+        if ((long)(millis() - injectedTouchUntil) < 0)
+        {
+            return TouchPoint{(uint16_t)injectedTouchX, (uint16_t)injectedTouchY,
+                              (uint16_t)injectedTouchX, (uint16_t)injectedTouchY,
+                              2000};
+        }
+        injectedTouchUntil = 0; // hold expired -> the "finger" lifts
+    }
+
 #if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
     uint16_t x = 0;
     uint16_t y = 0;
@@ -1817,6 +1843,15 @@ void handleTouch()
     else if (!touchSuppressedUntilRelease)
     {
         unsigned long currentTime = millis();
+
+        // The timer faces draw visible buttons instead of the invisible
+        // zones below; route their taps to the button layout (timerFaces.cpp).
+        if (projectConfig.clockFace == FACE_STOPWATCH ||
+            projectConfig.clockFace == FACE_COUNTDOWN)
+        {
+            timerFaceHandleTouch(touch.x, touch.y);
+            return;
+        }
 
         // getTouch() already maps touch.x/y into screen pixels, so the screen
         // splits into touch zones:
@@ -1936,6 +1971,17 @@ static void serviceWifiIndicator()
     static unsigned long lastDrawMs = 0;
     static const char *shownLabel = nullptr;
 
+    // The timer faces' bottom button row occupies the indicator's slot; they
+    // skip the label (face switches repaint the whole screen, so nothing
+    // stale is left behind).
+    if (projectConfig.clockFace == FACE_STOPWATCH ||
+        projectConfig.clockFace == FACE_COUNTDOWN)
+    {
+        drawn = false;
+        shownLabel = nullptr;
+        return;
+    }
+
     bool captive = captivePortalActive();
     bool offline = wifiOfflineDurationMs() >= WIFI_INDICATOR_AFTER_MS;
     // The captive label doubles as a signpost to the fix: tapping the center
@@ -1988,6 +2034,21 @@ void drawRollingClock()
     // weekday/weather-alert alternation on the quadrant day line.
     updateFlashState();
     updateWeatherAlertPhase();
+
+    // Advance the stopwatch/countdown engines every loop, whatever page is
+    // showing - the timers keep counting while settings/status are open.
+    timersService();
+
+    // Final countdown alarm: flashes over any screen until acknowledged; the
+    // acknowledging tap is consumed and the UI returns to the countdown face.
+    if (timerAlarmService())
+    {
+        resetFlashChangeFlag();
+        return;
+    }
+
+    // Milestone reminder banner (non-blocking, ~1.6s) on the current screen.
+    timerOverlayService();
 
     // The web /wifi-login page can ask (from any screen) to open the on-device
     // captive-portal login helper; honour it here on the main core.

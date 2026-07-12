@@ -3,7 +3,8 @@
 #include "ClockLogic.h"
 #include "holidayService.h" // holiday markers on the calendar face
 #include "projectConfig.h"
-#include "uiPages.h" // getMarketInfoForTimezone, getPosixFallback
+#include "timerFaces.h" // stopwatch / countdown face renderers
+#include "uiPages.h"    // getMarketInfoForTimezone, getPosixFallback
 #include "weatherService.h"
 
 static const char *DAY_NAMES[8] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
@@ -17,6 +18,8 @@ const char *clockFaceName(int face)
     case FACE_CALENDAR: return "Calendar";
     case FACE_WEATHER: return "Weather";
     case FACE_MARKETS: return "Markets";
+    case FACE_STOPWATCH: return "Stopwatch";
+    case FACE_COUNTDOWN: return "Countdown";
     default: return "World clock";
     }
 }
@@ -837,6 +840,23 @@ void drawAlternateFace()
     bool full = firstDraw || projectConfig.clockFace != lastFace;
     bool dayChanged = full || day(homeLocal) != lastDay;
     bool minuteTick = full || dayChanged || minute(homeLocal) != lastMinute;
+
+    // The timer faces need sub-second updates, so they bypass the
+    // once-per-minute gating below; their renderers repaint only the regions
+    // whose content changed (timerFaces.cpp), so the per-loop call is cheap.
+    if (projectConfig.clockFace == FACE_STOPWATCH ||
+        projectConfig.clockFace == FACE_COUNTDOWN) {
+        if (projectConfig.clockFace == FACE_STOPWATCH) {
+            renderStopwatchFace(full);
+        } else {
+            renderCountdownFace(full);
+        }
+        lastFace = projectConfig.clockFace;
+        lastMinute = minute(homeLocal);
+        lastDay = day(homeLocal);
+        firstDraw = false;
+        return;
+    }
 
     // Fresh data from the background weather task repaints the faces that
     // show weather (weather, big clock, calendar header) right away instead
