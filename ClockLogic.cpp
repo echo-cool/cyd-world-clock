@@ -940,7 +940,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     bool bottomRow = zoneIdx >= 2;
     int labelY = oy + (largeLayout ? (bottomRow ? 8 : 2)
                                    : (bottomRow ? 8 : 5));
-    int timeY = oy + (largeLayout ? (bottomRow ? 34 : 29)
+    int timeY = oy + (largeLayout ? (bottomRow ? 32 : 29)
                                   : (bottomRow ? 24 : 22));
 
     // Accent border marking the home quadrant - the reference all the (+1)
@@ -987,9 +987,13 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Daylight gradient bar under the time. It needs a few extra rows, so the
     // day/date lines shift down slightly while it is enabled; with it off the
     // layout is exactly the classic one.
-    int dayY = oy + quadrantHeight - (largeLayout ? 68 : 50);     // day name
-    int holidayY = oy + quadrantHeight - (largeLayout ? 63 : 46); // holiday day line
-    int dateY = oy + quadrantHeight - (largeLayout ? 43 : 30);    // date/weather
+    // The large-layout rows sit 4px lower than they used to (and match the
+    // daylight-bar variant's date slot below): size-3 time digits reach
+    // ~56px below timeY, so the day row needs the extra clearance not to
+    // brush against them.
+    int dayY = oy + quadrantHeight - (largeLayout ? 64 : 50);     // day name
+    int holidayY = oy + quadrantHeight - (largeLayout ? 60 : 46); // holiday day line
+    int dateY = oy + quadrantHeight - (largeLayout ? 41 : 30);    // date/weather
     if (projectConfig.daylightBar) {
         int barWidth = largeLayout ? min(180, quadrantWidth - 40) : 120;
         int barY = largeLayout ? oy + 92 : oy + 69;
@@ -1113,7 +1117,12 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // 104) leaves no measured room for it. Data comes from the background
     // fetch task that already serves the weather face; nothing is shown until
     // the first fetch lands (or for zones without preset coordinates).
-    if (projectConfig.quadWeather && !showNoticeOnDateLine(zone)) {
+    // On the large layout the badge shares the day row with the alternating
+    // weekday/weather-alert text; it sits out the alert phase so a centered
+    // alert never runs into the icon and reading (the row swaps back within
+    // seconds).
+    if (projectConfig.quadWeather && !showNoticeOnDateLine(zone) &&
+        !(largeLayout && showAlertOnDayLine(zone))) {
         ZoneWeather w = getZoneWeather(zoneIdx);
         if (w.valid) {
             String temp = String(displayTemp(w.tempC));
@@ -1121,15 +1130,17 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
             gfx.setTextSize(largeLayout ? 2 : 1);
             gfx.setTextDatum(TR_DATUM);
             gfx.setTextColor(TFT_WHITE, clockBackgroundColor);
-            int tempRight = ox + quadrantWidth - (largeLayout ? 16 : 10);
+            int tempRight = ox + quadrantWidth - 10;
             int tempY = largeLayout ? dayY + 1 : dateY;
             gfx.drawString(temp, tempRight, tempY);
             gfx.drawCircle(tempRight + (largeLayout ? 4 : 3),
                            tempY + (largeLayout ? 4 : 3), 2, TFT_WHITE); // degree mark
             int iconCx = tempRight - gfx.textWidth(temp) - (largeLayout ? 17 : 9);
-            // The small-layout date is 8 fixed-width chars (96px) centered on
-            // centerX-16; the widest icons reach ~11px from their center.
-            bool iconFits = largeLayout ? temp.length() <= 3
+            // The day text is at most 8 fixed-width chars (96px at size 2)
+            // centered on centerX (small layout: the date, centered on
+            // centerX-16); the widest icons reach ~11px from their center.
+            // The icon is dropped rather than drawn into that text.
+            bool iconFits = largeLayout ? iconCx - 11 >= centerX + 52
                                         : iconCx - 11 >= centerX + 32;
             if (iconFits) {
                 drawWeatherIcon(gfx, iconCx,
@@ -1145,8 +1156,22 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     StatusLine line = computeMarketStatusLine(zone);
     if (line.text.length() > 0 && (!line.flashes || flashState)) {
         if (largeLayout) {
-            drawCenteredTextFit(gfx, line.text, centerX, oy + quadrantHeight - 24,
-                                line.color, quadrantWidth - 8, 2, 2);
+            // Font 1 at size 2 is the regular look; countdown texts that are
+            // too wide for it ("HKEX OPENS IN 21H 41M") switch to Font 2 -
+            // same 16px row height, narrower glyphs - instead of losing the
+            // countdown tail to an ellipsis.
+            gfx.setTextDatum(TC_DATUM);
+            gfx.setTextColor(line.color, clockBackgroundColor);
+            gfx.setTextFont(1);
+            gfx.setTextSize(2);
+            if (gfx.textWidth(line.text) > quadrantWidth - 8) {
+                gfx.setTextFont(2);
+                gfx.setTextSize(1);
+            }
+            // -21 (not -24): breathing room below the 16px date row, which
+            // ends at -25 in both date-slot variants.
+            gfx.drawString(fitTextToWidth(gfx, line.text, quadrantWidth - 8),
+                           centerX, oy + quadrantHeight - 21);
         } else {
             gfx.setTextFont(1);
             gfx.setTextSize(1);
@@ -1611,7 +1636,18 @@ void rollingClockSetup(bool is24Hour, bool usDate)
     touchscreen.begin();
     Log.println("Touch screen initialized (bitbang)");
 #else
-    Log.println("Touch screen initialized (TFT_eSPI shared SPI)");
+    if (projectConfig.touchCalSet)
+    {
+        tft.setTouch(projectConfig.touchCal);
+        Log.println("Touch screen initialized (TFT_eSPI shared SPI, saved calibration)");
+    }
+    else
+    {
+        // tft.getTouch() runs on the library's example calibration until the
+        // calibration screen has been completed once (it offers itself on the
+        // first home-screen loop; see drawRollingClock).
+        Log.println("Touch screen initialized (TFT_eSPI shared SPI, NOT calibrated)");
+    }
 #endif
 
 #if USE_LDR_AUTOBRIGHTNESS
@@ -1782,9 +1818,11 @@ void handleTouch()
     {
         unsigned long currentTime = millis();
 
-        // getTouch() already maps touch.x into screen pixels, so the screen
-        // splits into three touch zones:
-        //   left third  = dimmer, center third = settings, right third = brighter
+        // getTouch() already maps touch.x/y into screen pixels, so the screen
+        // splits into touch zones:
+        //   center third = settings
+        //   lower-left / lower-right corner = previous / next clock face
+        //   rest of the left/right thirds = dimmer / brighter
         int leftThird = screenWidth / 3;
         int rightThird = (screenWidth * 2) / 3;
         if (touch.x >= leftThird && touch.x <= rightThird)
@@ -1794,6 +1832,32 @@ void handleTouch()
             Log.println("CENTER touch - opening settings page");
             switchToScreen(SCREEN_SETTINGS);
             brightnessBarVisible = false;
+            return;
+        }
+
+        if (touch.y >= (screenHeight * 2) / 3)
+        {
+            // Corner tap cycles the clock face; one step per tap (input stays
+            // suppressed until the finger is lifted, like a screen switch).
+            int step = (touch.x < leftThird) ? FACE_COUNT - 1 : 1;
+            projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
+            // A brightness adjustment may still be pending its bar-timeout
+            // save; fold it into this write instead of dropping it.
+            projectConfig.brightness = backlightLevel;
+            projectConfig.saveConfigFile();
+            Log.print(touch.x < leftThird ? "LOWER-LEFT" : "LOWER-RIGHT");
+            Log.print(" touch - clock face: ");
+            Log.println(clockFaceName(projectConfig.clockFace));
+
+            // Full repaint, same as returning home from a settings page
+            tft.fillScreen(clockBackgroundColor);
+            firstDraw = true;
+            for (int i = 0; i < 4; i++)
+            {
+                worldZones[i].initialized = false;
+            }
+            brightnessBarVisible = false;
+            touchSuppressedUntilRelease = true;
             return;
         }
 
@@ -1941,6 +2005,22 @@ void drawRollingClock()
         resetFlashChangeFlag();
         return;
     }
+
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+    // Without a stored calibration, touches land off-target (the library's
+    // example mapping); offer the calibration screen once per boot. It times
+    // out back to the clock after a minute if nobody is around, and stays
+    // reachable later via the CALTOUCH serial command or
+    // /api/screen?name=caltouch.
+    static bool touchCalOffered = false;
+    if (!touchCalOffered && !projectConfig.touchCalSet)
+    {
+        touchCalOffered = true;
+        openTouchCalibration();
+        resetFlashChangeFlag();
+        return;
+    }
+#endif
 
     // Handle touch input for backlight control and opening the settings page
     handleTouch();

@@ -43,6 +43,13 @@ static bool webUpdateOk = false;
 static String webUpdateError;
 
 /*-------- Shared TFT progress screen ----------*/
+// Laid out from screenWidth/screenHeight so the message, bar and percentage
+// sit centered on any panel size (320x240 CYD, 480x320 Hosyond alike).
+
+static int otaBarInnerW() { return (screenWidth * 5) / 8; } // 200px on the CYD
+static int otaBarH() { return screenHeight / 13 + 4; }      // 22px on the CYD
+static int otaBarX() { return (screenWidth - otaBarInnerW() - 4) / 2; }
+static int otaBarY() { return screenHeight / 2; }
 
 static void drawOtaScreen(const String &line, uint16_t color)
 {
@@ -51,13 +58,13 @@ static void drawOtaScreen(const String &line, uint16_t color)
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(color, TFT_BLACK);
-    tft.drawString(line, 160, 100);
+    tft.drawString(line, screenWidth / 2, (screenHeight * 5) / 12);
 }
 
 static void drawOtaProgressFrame()
 {
     otaLastPct = -1;
-    tft.drawRect(58, 120, 204, 18, TFT_WHITE);
+    tft.drawRect(otaBarX(), otaBarY(), otaBarInnerW() + 4, otaBarH(), TFT_WHITE);
 }
 
 static void drawOtaProgressPct(int pct)
@@ -66,12 +73,14 @@ static void drawOtaProgressPct(int pct)
     if (pct > 100) pct = 100;
     if (pct == otaLastPct) return;
     otaLastPct = pct;
-    tft.fillRect(60, 122, pct * 2, 14, TFT_GREEN);
+    tft.fillRect(otaBarX() + 2, otaBarY() + 2, (otaBarInnerW() * pct) / 100,
+                 otaBarH() - 4, TFT_GREEN);
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawString(String(pct) + " %  ", 160, 146);
+    tft.drawString(String(pct) + " %  ", screenWidth / 2,
+                   otaBarY() + otaBarH() + 8);
 }
 
 // Failure exit shared by both update paths: show the error, then hand the
@@ -381,7 +390,12 @@ static void handleSettingsPage()
             " &middot; <a href=\"/logs\">Logs</a>"
             " &middot; <a href=\"/wifi-login\">Wi-Fi login</a>"
             " &middot; <a href=\"/api/status\">Status JSON</a>"
-            " &middot; <a href=\"/screenshot\">Screenshot</a></p>";
+            " &middot; <a href=\"/screenshot\">Screenshot</a>"
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+            " &middot; <a href=\"/api/screen?name=caltouch\">Calibrate touch"
+            " (on device)</a>"
+#endif
+            "</p>";
     if (captivePortalActive())
     {
         page += "<p style=\"color:#ff9f0a\">This network needs a browser login "
@@ -1064,7 +1078,8 @@ static void handleApiScreen()
         {
             webServer.send(400, "text/plain",
                            "unknown page - use one of: home, settings, zones, "
-                           "tzlist, status, logs, wifilogin, wififail");
+                           "tzlist, status, logs, wifilogin, wififail, caltouch "
+                           "(caltouch only on boards with TFT_eSPI touch)");
             return;
         }
         Log.println("UI page \"" + name + "\" opened via /api/screen");

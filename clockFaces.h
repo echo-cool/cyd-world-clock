@@ -4,10 +4,12 @@
 // ---------------------------------------------------------------------------
 // Alternate home-screen faces. FACE_QUAD is the classic four-quadrant world
 // clock rendered by ClockLogic.cpp; the other faces are rendered here. The
-// active face is projectConfig.clockFace, cycled from the settings page.
+// active face is projectConfig.clockFace, cycled from the settings page or by
+// tapping the lower-left / lower-right corners of the home screen.
 //
-// All faces share the home-screen touch zones (center = settings, left/right
-// thirds = brightness).
+// All faces share the home-screen touch zones (center = settings, lower-left/
+// lower-right corners = previous/next face, rest of the left/right thirds =
+// brightness).
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>

@@ -54,6 +54,17 @@ static void fillJson(ProjectConfig &c, JsonDocument &json)
   json[PROJECT_FLIP_DISPLAY] = c.flipDisplay;
   json[PROJECT_WEEK_START_MONDAY] = c.weekStartMonday;
   json[PROJECT_WEATHER_REFRESH_MIN] = c.weatherRefreshMin;
+
+  // Written only once a real calibration exists, so a missing key keeps
+  // meaning "never calibrated" across config backup/restore.
+  if (c.touchCalSet)
+  {
+    JsonArray cal = json.createNestedArray(PROJECT_TOUCH_CAL);
+    for (int i = 0; i < 5; i++)
+    {
+      cal.add(c.touchCal[i]);
+    }
+  }
 }
 
 // Apply json onto the settings; missing keys keep their current values and
@@ -177,6 +188,20 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
   {
     c.weatherRefreshMin = constrain(json[PROJECT_WEATHER_REFRESH_MIN].as<int>(), 5, 120);
     any = true;
+  }
+
+  if (json.containsKey(PROJECT_TOUCH_CAL))
+  {
+    JsonArray cal = json[PROJECT_TOUCH_CAL].as<JsonArray>();
+    if (cal.size() == 5)
+    {
+      for (int i = 0; i < 5; i++)
+      {
+        c.touchCal[i] = cal[i].as<uint16_t>();
+      }
+      c.touchCalSet = true;
+      any = true;
+    }
   }
 
   return any;

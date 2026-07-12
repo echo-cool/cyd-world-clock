@@ -304,6 +304,17 @@ void switchToScreen(UIScreen s)
         wifiRelayStop();
     }
 
+    // Leaving the touch calibration screen: restore the user's orientation
+    // (the screen forces the board's normal rotation while sampling corners),
+    // whatever the exit path.
+    if (uiScreen == SCREEN_TOUCH_CAL && s != SCREEN_TOUCH_CAL)
+    {
+        tft.setRotation(projectConfig.flipDisplay ? BOARD_TFT_ROTATION_FLIPPED
+                                                  : BOARD_TFT_ROTATION_NORMAL);
+        // Repaint whichever page is next in the restored orientation
+        tft.fillScreen(clockBackgroundColor);
+    }
+
     uiScreen = s;
     uiPageDrawn = false;
     touchSuppressedUntilRelease = true; // don't click through onto the new page
@@ -325,6 +336,231 @@ void openWifiLoginHelper()
     wifiRelayStart(); // bring up the helper AP + NAT before showing the screen
     switchToScreen(SCREEN_WIFI_LOGIN);
 }
+
+/*-------- Touch calibration screen ----------*/
+// Boards on TFT_eSPI's shared-SPI touch path (Hosyond 4.0") need a stored
+// calibration before tft.getTouch() maps raw panel readings onto pixels;
+// until then the library falls back to example values and touches land
+// off-target. The library's own tft.calibrateTouch() blocks the loop (and
+// with it the web server, running on the same core) until every corner is
+// tapped, so this is the same corner sampling and mapping math re-implemented
+// as a normal non-blocking UI screen: tap the four corner arrows, the result
+// is applied with tft.setTouch() and persisted in projectConfig.touchCal.
+
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+
+static const int TCAL_ARROW = 24;                       // corner arrow size
+static const int TCAL_SAMPLES = 8;                      // raw samples per corner
+static const uint16_t TCAL_Z_MIN = 200;                 // Z_THRESHOLD/2, corners read weak
+static const uint16_t TCAL_RAW_ERR = 20;                // deadband between paired reads
+static const unsigned long TCAL_TIMEOUT_MS = 60000;     // per-corner give-up
+
+// Corner order matches TFT_eSPI::calibrateTouch so its mapping math can be
+// reused verbatim: 0 = top-left, 1 = bottom-left, 2 = top-right,
+// 3 = bottom-right. touchCalRaw holds the averaged raw x,y per corner.
+static int touchCalCorner;
+static int touchCalSampleCount;
+static int32_t touchCalRaw[8];
+static bool touchCalWaitRelease;
+static unsigned long touchCalCornerStart;
+
+static void drawTouchCalArrow(int corner, uint16_t color)
+{
+    int s = TCAL_ARROW;
+    int w = screenWidth, h = screenHeight;
+    switch (corner)
+    {
+    case 0: // top-left
+        tft.drawLine(0, 0, 0, s, color);
+        tft.drawLine(0, 0, s, 0, color);
+        tft.drawLine(0, 0, s, s, color);
+        break;
+    case 1: // bottom-left
+        tft.drawLine(0, h - s - 1, 0, h - 1, color);
+        tft.drawLine(0, h - 1, s, h - 1, color);
+        tft.drawLine(0, h - 1, s, h - s - 1, color);
+        break;
+    case 2: // top-right
+        tft.drawLine(w - s - 1, 0, w - 1, 0, color);
+        tft.drawLine(w - 1, 0, w - 1, s, color);
+        tft.drawLine(w - 1, 0, w - s - 1, s, color);
+        break;
+    case 3: // bottom-right
+        tft.drawLine(w - s - 1, h - 1, w - 1, h - 1, color);
+        tft.drawLine(w - 1, h - 1 - s, w - 1, h - 1, color);
+        tft.drawLine(w - 1, h - 1, w - s - 1, h - s - 1, color);
+        break;
+    }
+}
+
+static void drawTouchCalProgress()
+{
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_YELLOW, clockBackgroundColor);
+    tft.drawString("Corner " + String(touchCalCorner + 1) + " of 4  ",
+                   screenWidth / 2, screenHeight / 2 + scaleUiY(30));
+}
+
+static void renderTouchCalPage()
+{
+    tft.fillScreen(clockBackgroundColor);
+    tft.setTextFont(4);
+    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
+    tft.drawString("TOUCH CALIBRATION", screenWidth / 2,
+                   screenHeight / 2 - scaleUiY(24));
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+    tft.drawString("Tap the tip of each green arrow",
+                   screenWidth / 2, screenHeight / 2);
+    tft.drawString("Untouched, the clock returns by itself",
+                   screenWidth / 2, screenHeight / 2 + scaleUiY(14));
+    drawTouchCalProgress();
+    drawTouchCalArrow(touchCalCorner, TFT_GREEN);
+}
+
+static void closeTouchCalibration()
+{
+    // switchToScreen restores the user's orientation when leaving this screen
+    switchToScreen(SCREEN_HOME);
+}
+
+// Port of the tail of TFT_eSPI::calibrateTouch: derive the axis swap, the
+// per-axis inversion and the raw ranges from the four corner readings.
+static void finishTouchCalibration()
+{
+    const int32_t *v = touchCalRaw;
+    int32_t x0, x1, y0, y1;
+    bool rotate = abs(v[0] - v[2]) > abs(v[1] - v[3]);
+    if (rotate)
+    {
+        x0 = (v[1] + v[3]) / 2; // raw y tracks screen x
+        x1 = (v[5] + v[7]) / 2;
+        y0 = (v[0] + v[4]) / 2;
+        y1 = (v[2] + v[6]) / 2;
+    }
+    else
+    {
+        x0 = (v[0] + v[2]) / 2;
+        x1 = (v[4] + v[6]) / 2;
+        y0 = (v[1] + v[5]) / 2;
+        y1 = (v[3] + v[7]) / 2;
+    }
+    bool invertX = x0 > x1;
+    if (invertX)
+    {
+        int32_t t = x0; x0 = x1; x1 = t;
+    }
+    bool invertY = y0 > y1;
+    if (invertY)
+    {
+        int32_t t = y0; y0 = y1; y1 = t;
+    }
+    x1 -= x0;
+    y1 -= y0;
+    if (x0 == 0) x0 = 1;
+    if (x1 == 0) x1 = 1;
+    if (y0 == 0) y0 = 1;
+    if (y1 == 0) y1 = 1;
+
+    projectConfig.touchCal[0] = (uint16_t)x0;
+    projectConfig.touchCal[1] = (uint16_t)x1;
+    projectConfig.touchCal[2] = (uint16_t)y0;
+    projectConfig.touchCal[3] = (uint16_t)y1;
+    projectConfig.touchCal[4] = (uint16_t)(rotate | (invertX << 1) | (invertY << 2));
+    projectConfig.touchCalSet = true;
+    projectConfig.saveConfigFile();
+    tft.setTouch(projectConfig.touchCal);
+
+    Log.print("Touch calibration saved: ");
+    for (int i = 0; i < 5; i++)
+    {
+        Log.print(projectConfig.touchCal[i]);
+        Log.print(i < 4 ? ", " : "\n");
+    }
+    closeTouchCalibration();
+}
+
+// Called every loop while SCREEN_TOUCH_CAL is showing (renderUiPage).
+static void serviceTouchCalScreen()
+{
+    if (millis() - touchCalCornerStart > TCAL_TIMEOUT_MS)
+    {
+        Log.println("Touch calibration timed out - keeping the previous mapping");
+        closeTouchCalibration();
+        return;
+    }
+
+    if (tft.getTouchRawZ() < TCAL_Z_MIN)
+    {
+        touchCalWaitRelease = false;
+        return;
+    }
+    if (touchCalWaitRelease)
+        return;
+
+    // Two reads a moment apart must agree (the library's validTouch
+    // deadband) so a finger sliding onto the corner doesn't skew the average.
+    uint16_t xa, ya, xb, yb;
+    tft.getTouchRaw(&xa, &ya);
+    delay(2);
+    if (tft.getTouchRawZ() < TCAL_Z_MIN)
+        return;
+    tft.getTouchRaw(&xb, &yb);
+    if (abs((int)xa - (int)xb) > TCAL_RAW_ERR ||
+        abs((int)ya - (int)yb) > TCAL_RAW_ERR)
+        return;
+
+    touchCalRaw[touchCalCorner * 2] += xa;
+    touchCalRaw[touchCalCorner * 2 + 1] += ya;
+    if (++touchCalSampleCount < TCAL_SAMPLES)
+        return;
+
+    touchCalRaw[touchCalCorner * 2] /= TCAL_SAMPLES;
+    touchCalRaw[touchCalCorner * 2 + 1] /= TCAL_SAMPLES;
+
+    if (++touchCalCorner >= 4)
+    {
+        finishTouchCalibration();
+        return;
+    }
+    drawTouchCalArrow(touchCalCorner - 1, clockBackgroundColor);
+    drawTouchCalArrow(touchCalCorner, TFT_GREEN);
+    drawTouchCalProgress();
+    touchCalSampleCount = 0;
+    touchCalWaitRelease = true;
+    touchCalCornerStart = millis();
+}
+
+void openTouchCalibration()
+{
+    // Corner raw values only line up with pixels in the board's normal
+    // rotation - readTouchPoint() mirrors flipped displays on top of the
+    // stored mapping, so calibrating under the flipped rotation would flip
+    // touches twice. Flipped mounts see this one screen upside down.
+    tft.setRotation(BOARD_TFT_ROTATION_NORMAL);
+    touchCalCorner = 0;
+    touchCalSampleCount = 0;
+    for (int i = 0; i < 8; i++)
+    {
+        touchCalRaw[i] = 0;
+    }
+    touchCalWaitRelease = true;
+    touchCalCornerStart = millis();
+    switchToScreen(SCREEN_TOUCH_CAL);
+}
+
+#else // bitbang touch drivers map raw readings to pixels themselves
+
+void openTouchCalibration()
+{
+    Log.println("Touch calibration is not used on this board");
+}
+
+#endif // BOARD_TOUCH_DRIVER
 
 /*-------- Boot-time settings button + boot console ----------*/
 // See uiPages.h: a Settings button on the "System initializing..." screen so
@@ -1427,6 +1663,12 @@ bool uiOpenScreenByName(const String &name, int page, int slot)
         }
         switchToScreen(SCREEN_WIFI_FAIL);
     }
+    else if (name == "caltouch")
+    {
+        openTouchCalibration();
+        // No-op on boards whose touch driver needs no calibration
+        return uiScreen == SCREEN_TOUCH_CAL;
+    }
     else
     {
         return false;
@@ -1445,6 +1687,7 @@ const char *uiScreenName()
     case SCREEN_LOGS: return "logs";
     case SCREEN_WIFI_LOGIN: return "wifilogin";
     case SCREEN_WIFI_FAIL: return "wififail";
+    case SCREEN_TOUCH_CAL: return "caltouch";
     default: return "home";
     }
 }
@@ -1453,6 +1696,11 @@ const char *uiScreenName()
 
 void handleUiTouch()
 {
+    // The calibration screen samples the panel raw itself (renderUiPage);
+    // calibrated getTouch() readings are meaningless while it runs.
+    if (uiScreen == SCREEN_TOUCH_CAL)
+        return;
+
     int tx = 0, ty = 0;
     if (!uiNewTouch(tx, ty))
         return;
@@ -1657,6 +1905,11 @@ void renderUiPage()
             renderWifiFailPage();
             lastStatusRefresh = millis();
             break;
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+        case SCREEN_TOUCH_CAL:
+            renderTouchCalPage();
+            break;
+#endif
         default:
             break;
         }
@@ -1753,4 +2006,12 @@ void renderUiPage()
             successAtMs = 0;
         }
     }
+#if BOARD_TOUCH_DRIVER == BOARD_TOUCH_DRIVER_TFT_ESPI
+    else if (uiScreen == SCREEN_TOUCH_CAL)
+    {
+        // Poll the raw panel every loop: collect corner samples, advance the
+        // arrows and finish or time out the calibration.
+        serviceTouchCalScreen();
+    }
+#endif
 }

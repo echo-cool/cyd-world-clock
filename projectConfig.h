@@ -30,6 +30,7 @@
 #define PROJECT_FLIP_DISPLAY "flipDisplay"
 #define PROJECT_WEEK_START_MONDAY "weekStartMonday"
 #define PROJECT_WEATHER_REFRESH_MIN "weatherRefreshMin"
+#define PROJECT_TOUCH_CAL "touchCal"
 
 // Lowercase, keep only [a-z0-9-], trim edge dashes, cap at 32 chars; falls
 // back to "esp32worldclock" when nothing usable is left. Applied to every
@@ -126,6 +127,16 @@ public:
   // Minutes between weather fetches (5-120). Failures retry sooner
   // regardless (weatherService.cpp).
   int weatherRefreshMin = 20;
+
+  // Touch panel calibration for boards on TFT_eSPI's shared-SPI touch path
+  // (Hosyond 4.0"). The five parameters come from the on-device calibration
+  // screen (uiPages.cpp) in tft.setTouch() format and are applied on boot.
+  // While touchCalSet is false the library's example calibration is in effect
+  // (touch lands in roughly the right area but not under the finger) and the
+  // calibration screen offers itself once after boot. Unused on boards whose
+  // touch driver maps to screen pixels itself (CYD bitbang XPT2046).
+  bool touchCalSet = false;
+  uint16_t touchCal[5] = {0, 0, 0, 0, 0};
 
   bool fetchConfigFile();
   bool saveConfigFile();

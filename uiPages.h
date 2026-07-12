@@ -23,7 +23,8 @@ enum UIScreen
     SCREEN_STATUS,
     SCREEN_LOGS,
     SCREEN_WIFI_LOGIN,
-    SCREEN_WIFI_FAIL // portal-configured WiFi failed to join (see below)
+    SCREEN_WIFI_FAIL, // portal-configured WiFi failed to join (see below)
+    SCREEN_TOUCH_CAL  // touch calibration (TFT_eSPI shared-SPI boards only)
 };
 
 extern UIScreen uiScreen;
@@ -86,6 +87,17 @@ const char *resetReasonText();
 // "start" trigger (via the main loop). MAIN core only.
 void openWifiLoginHelper();
 
+// Open the on-device touch calibration screen (SCREEN_TOUCH_CAL): tap the
+// four corner arrows, the resulting tft.setTouch() parameters are applied and
+// persisted in projectConfig. Offered automatically once per boot while no
+// calibration is stored, and reachable any time via the serial command
+// CALTOUCH or /api/screen?name=caltouch. Only works on boards using
+// TFT_eSPI's shared-SPI touch path (returns without switching elsewhere);
+// the CYD's bitbang driver maps raw readings to pixels itself. The screen
+// times out back to the clock after 60 seconds without a complete
+// calibration. MAIN core only.
+void openTouchCalibration();
+
 // Boot-time UI on the "System initializing..." screen. The blocking boot
 // sequence (WiFi retries -> config portal -> NTP) can take minutes on a
 // network with no usable internet, so the init screen carries a Settings
@@ -122,7 +134,7 @@ void bootOpenPendingScreen();
 
 // Remote UI driving for the /api/screen debug endpoint (otaUpdate.cpp): open
 // a page by name ("home", "settings", "zones", "tzlist", "status", "logs",
-// "wifilogin"); "page" picks the status / tz-list page and "slot" the tz-list
+// "wifilogin", "caltouch"); "page" picks the status / tz-list page and "slot" the tz-list
 // quadrant where those apply. Returns false for an unknown name.
 // uiScreenName() reports the current page for the same endpoint. Paired with
 // /screenshot this lets a developer capture any UI page without touching the
