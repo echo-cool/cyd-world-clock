@@ -9,9 +9,10 @@
 //
 // The project's code logs through the global `Log` instead of `Serial`
 // (serial *input* - the command interface - still uses Serial directly).
-// Lines in the ring get an uptime timestamp prefix; the serial byte stream
-// is forwarded unmodified. Writers run on both cores (main loop and the
-// core-0 fetch task), so the ring is guarded by a spinlock.
+// Lines in the ring get a timestamp prefix - uptime until the first NTP
+// sync, real UTC time-of-day (suffix Z) once logSetWallClock() has been fed;
+// the serial byte stream is forwarded unmodified. Writers run on both cores
+// (main loop and the core-0 fetch task), so the ring is guarded by a spinlock.
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>
@@ -37,5 +38,10 @@ uint32_t logVersion();
 // Total bytes ever written (monotonic). Unlike logVersion this also moves on
 // partial lines (progress dots), which the boot console needs to animate.
 uint32_t logBytesWritten();
+
+// Feed the logger the current UTC epoch (after an NTP sync) so subsequent
+// lines are stamped with real time-of-day instead of uptime. Call again on
+// each resync to absorb crystal drift. Main-loop context only.
+void logSetWallClock(uint32_t utcEpochNow);
 
 #endif // LOG_BUFFER_H

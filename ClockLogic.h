@@ -140,14 +140,20 @@ void drawZoneDayNightIcon(TFT_eSPI &gfx, int cx, int cy, WorldClockZone &zone);
 // crosses the horizon today (polar day/night).
 bool zoneSunTimes(WorldClockZone &zone, int &riseMin, int &setMin);
 
-// 3px daylight gradient bar: the zone's local day mapped left to right,
-// colored by real solar elevation, with a white tick at the current time.
-// No-op for zones without preset coordinates.
-void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone);
+// Daylight gradient bar: the zone's local day mapped left to right, colored
+// by real solar elevation, with a white tick at the current time. `h` is the
+// bar thickness (the quadrants use the 3px default; the big face draws it
+// taller). No-op for zones without preset coordinates.
+void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone,
+                       int h = 3);
 
 // Fraction (0..1) of the exchange's regular trading day already elapsed;
 // false outside regular hours (weekend, holiday, before open / after close).
 bool marketDayProgress(WorldClockZone &zone, float &frac);
+
+// Minutes until the REGULAR session currently in progress closes (half-day
+// early closes applied); -1 when no regular session is running.
+long marketMinutesToRegularClose(WorldClockZone &zone);
 
 // Trim text with a "..." suffix until it fits maxWidth in the current font.
 String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth);

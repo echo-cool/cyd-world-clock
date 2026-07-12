@@ -23,8 +23,20 @@ static inline void ringPut(char c)
     if (head == 0) wrapped = true;
 }
 
-// Callers hold logMux. CRs are dropped and each line gets an uptime stamp so
-// entries can be correlated without a serial monitor attached.
+// UTC epoch minus uptime seconds, set after the first NTP sync. Lines are
+// stamped with real time-of-day (suffix Z) once known; plain uptime before.
+// Word-sized so the lock-free read in ringWrite below is atomic.
+static volatile uint32_t wallClockOffset = 0;
+
+void logSetWallClock(uint32_t utcEpochNow)
+{
+    wallClockOffset = utcEpochNow - millis() / 1000UL;
+}
+
+// Callers hold logMux. CRs are dropped and each line gets a timestamp so
+// entries can be correlated without a serial monitor attached. No ezTime
+// calls here - this runs from both cores inside a spinlock, so the wall
+// clock is plain arithmetic on the cached offset.
 static void ringWrite(const uint8_t *buffer, size_t size)
 {
     for (size_t i = 0; i < size; i++)
@@ -35,8 +47,20 @@ static void ringWrite(const uint8_t *buffer, size_t size)
         {
             char stamp[14];
             unsigned long s = millis() / 1000UL;
-            snprintf(stamp, sizeof(stamp), "[%02lu:%02lu:%02lu] ",
-                     (s / 3600UL) % 100UL, (s / 60UL) % 60UL, s % 60UL);
+            uint32_t off = wallClockOffset;
+            if (off != 0)
+            {
+                uint32_t t = off + s;
+                snprintf(stamp, sizeof(stamp), "[%02lu:%02lu:%02luZ] ",
+                         (unsigned long)((t / 3600UL) % 24UL),
+                         (unsigned long)((t / 60UL) % 60UL),
+                         (unsigned long)(t % 60UL));
+            }
+            else
+            {
+                snprintf(stamp, sizeof(stamp), "[%02lu:%02lu:%02lu] ",
+                         (s / 3600UL) % 100UL, (s / 60UL) % 60UL, s % 60UL);
+            }
             for (const char *p = stamp; *p; p++) ringPut(*p);
             atLineStart = false;
         }

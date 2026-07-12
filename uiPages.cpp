@@ -527,6 +527,7 @@ bool bootUiPoll()
 static String wifiFailSsid;
 static int wifiFailStatus = 0;
 static bool wifiFailPending = false;
+static bool wifiFailPreview = false; // opened via /api/screen with demo data
 static unsigned long wifiFailShownAt = 0;
 
 // Auto-reboot the failure page after this long untouched, so an unattended
@@ -537,6 +538,7 @@ void bootReportWifiFailure(const String &ssid, int wlStatus)
 {
     wifiFailSsid = ssid;
     wifiFailStatus = wlStatus;
+    wifiFailPreview = false;
     wifiFailPending = true;
     // Cut the remaining boot network waits short, same as a Settings tap on
     // the init screen; bootOpenPendingScreen then opens the failure page.
@@ -626,7 +628,18 @@ void renderWifiFailPage()
     tft.setTextFont(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString("reboots by itself after 5 minutes", screenWidth / 2, scaleUiY(232));
+    if (wifiFailPreview)
+    {
+        // Seeded demo details, opened via /api/screen: make sure a captured
+        // screenshot can't be mistaken for a real outage, and don't let the
+        // unattended-recovery reboot fire under a developer's feet.
+        tft.setTextColor(TFT_ORANGE, clockBackgroundColor);
+        tft.drawString("PREVIEW - demo data, auto-reboot off", screenWidth / 2, scaleUiY(232));
+    }
+    else
+    {
+        tft.drawString("reboots by itself after 5 minutes", screenWidth / 2, scaleUiY(232));
+    }
 
     wifiFailShownAt = millis();
 }
@@ -962,8 +975,17 @@ static int statusRowH(int row)
 static const char *STATUS_TITLES[STATUS_PAGE_COUNT] = {
     "SYSTEM STATUS", "NETWORK & STORAGE", "CLOCK DATA"};
 
+// Row 3 is the CPU temperature where the chip has a usable sensor; on the
+// classic ESP32 (no sensor) the row advertises the web settings UI instead
+// of a permanent "no sensor on this chip".
 static const char *STATUS_LABELS_SYSTEM[] = {
-    "WiFi", "IP addr", "CPU", "CPU temp", "Flash", "Firmware",
+    "WiFi", "IP addr", "CPU",
+#if SOC_TEMP_SENSOR_SUPPORTED
+    "CPU temp",
+#else
+    "Web UI",
+#endif
+    "Flash", "Firmware",
     "Build", "Heap", "Uptime", "NTP sync", "UTC time"};
 static const char *STATUS_LABELS_NETWORK[] = {
     "Hostname", "MAC", "Gateway", "DNS", "Channel", "Drops",
@@ -1049,7 +1071,8 @@ static void fillSystemValues(String *values, uint16_t *colors)
 #if SOC_TEMP_SENSOR_SUPPORTED
     values[3] = String(temperatureRead(), 1) + " C";
 #else
-    values[3] = "no sensor on this chip";
+    values[3] = wifiUp ? "http://" + WiFi.localIP().toString() + "/"
+                       : "(offline)";
 #endif
     values[4] = String(ESP.getFlashChipSize() / (1024UL * 1024UL)) + " MB @ " +
                 String(ESP.getFlashChipSpeed() / 1000000UL) + " MHz";
@@ -1394,10 +1417,13 @@ bool uiOpenScreenByName(const String &name, int page, int slot)
     else if (name == "wififail")
     {
         // Preview support: seed demo details when no real failure is stored.
+        // Preview mode also disables the page's resume/auto-reboot behavior
+        // (renderUiPage) so it holds still for a /screenshot.
         if (wifiFailSsid.length() == 0)
         {
             wifiFailSsid = "example-network";
             wifiFailStatus = WL_CONNECT_FAILED;
+            wifiFailPreview = true;
         }
         switchToScreen(SCREEN_WIFI_FAIL);
     }
@@ -1655,21 +1681,31 @@ void renderUiPage()
     {
         lastStatusRefresh = millis();
         static unsigned long connectedAtMs = 0;
-        if (WiFi.status() == WL_CONNECTED)
+        if (wifiFailPreview)
+        {
+            // Demo data opened via /api/screen: the link is usually already
+            // up, so the resume path would dismiss the page after seconds
+            // (and the recovery path would reboot the device under a
+            // developer's feet). The page stays until navigated away.
+            connectedAtMs = 0;
+        }
+        else if (WiFi.status() == WL_CONNECTED)
         {
             // The background retries got us on after all - show the good
             // news for a few seconds, then resume the clock on our own.
             if (connectedAtMs == 0)
             {
                 connectedAtMs = millis();
-                tft.fillRect(0, scaleUiY(174), screenWidth, scaleUiY(17),
+                // The free band between the explanation text (ends at 176)
+                // and the buttons (start at 192).
+                tft.fillRect(0, scaleUiY(176), screenWidth, scaleUiY(16),
                              clockBackgroundColor);
                 tft.setTextFont(2);
                 tft.setTextSize(1);
                 tft.setTextDatum(TC_DATUM);
                 tft.setTextColor(TFT_GREEN, clockBackgroundColor);
                 tft.drawString("WiFi connected - resuming...",
-                               screenWidth / 2, scaleUiY(175));
+                               screenWidth / 2, scaleUiY(176));
                 Log.println("WiFi failure page: link came up - resuming");
             }
             else if (millis() - connectedAtMs > 6000)

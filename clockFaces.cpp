@@ -148,6 +148,8 @@ static bool drawHomePrecipChart(int x, int y, int w)
     return true;
 }
 
+static String formatMinutesOfDay(int minOfDay); // defined with the calendar face
+
 static void renderBigClockFace(bool full)
 {
     time_t local = worldZones[0].tz.now();
@@ -237,9 +239,22 @@ static void renderBigClockFace(bool full)
 
     // Daylight gradient bar: home's whole local day with a "now" tick.
     // Always on - this face has a dedicated slot for it, so it never shifts
-    // the layout the way the quadrant option does.
+    // the layout the way the quadrant option does. Drawn twice as thick as
+    // the quadrants' 3px strip and flanked by today's sunrise (left) and
+    // sunset (right) times, so the gradient reads as a day timeline instead
+    // of a mystery rainbow.
     tft.fillRect(0, sy(158), screenWidth, sy(12), clockBackgroundColor);
-    renderDaylightBar(tft, cx - sx(120), sy(161), sx(240), worldZones[0]);
+    renderDaylightBar(tft, cx - sx(120), sy(159), sx(240), worldZones[0], sy(6));
+    int riseMin, setMin;
+    if (zoneSunTimes(worldZones[0], riseMin, setMin)) {
+        tft.setTextFont(1);
+        tft.setTextSize(1);
+        tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
+        tft.setTextDatum(TR_DATUM);
+        tft.drawString(formatMinutesOfDay(riseMin), cx - sx(120) - 4, sy(159));
+        tft.setTextDatum(TL_DATUM);
+        tft.drawString(formatMinutesOfDay(setMin), cx + sx(120) + 4, sy(159));
+    }
 
     // Status area: an official NWS alert wins; otherwise the 4-hour
     // precipitation chart when rain/snow is in the 15-minute forecast (a
@@ -342,7 +357,8 @@ static void renderBigClockFace(bool full)
 static const uint16_t ADJACENT_MONTH_COLOR = 0x39E7;
 
 // "H:MM" for a minutes-of-day value, honoring the 12/24-hour setting with a
-// compact A/P suffix (footer-sized).
+// compact A/P suffix (footer-sized). Forward-declared for the big face's
+// daylight-bar labels.
 static String formatMinutesOfDay(int minOfDay)
 {
     int h = (minOfDay / 60) % 24;
@@ -588,11 +604,13 @@ static void renderWeatherFace(bool full)
 
         ZoneWeather w = getZoneWeather(i);
         if (w.valid) {
-            // Current relative humidity, small, after the local time
+            // Current relative humidity, small, after the local time. The
+            // "RH" tag is what keeps the bare percentage from reading as
+            // rain probability.
             if (w.humidity >= 0) {
                 tft.setTextFont(1);
                 tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-                tft.drawString(String(w.humidity) + "%", sx(8) + timeW + 8,
+                tft.drawString("RH " + String(w.humidity) + "%", sx(8) + timeW + 8,
                                ry + (big ? 34 : 22));
             }
 
@@ -639,7 +657,7 @@ static void renderWeatherFace(bool full)
                 tft.setTextSize(big ? 2 : 1);
                 tft.setTextDatum(TC_DATUM);
                 tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-                tft.drawString(String(displayTemp(w.tempMaxC)) + "/" +
+                tft.drawString("H" + String(displayTemp(w.tempMaxC)) + " L" +
                                    String(displayTemp(w.tempMinC)),
                                sx(158), ry + (big ? 32 : 28));
                 tft.setTextSize(1);
@@ -741,6 +759,22 @@ static void renderMarketsFace(bool full)
         // Recomputed each minute - transitions land on minute boundaries.
         String status = getMarketStatus(marketZones[i]);
         uint16_t statusColor = getMarketStatusColor(status);
+
+        // During regular hours the shared status line is a bare "NYSE OPEN";
+        // this face has the room, so count down to the close the same way
+        // closed rows count down to the open. Appended after the color is
+        // picked ("OPEN " inside the longer string reads as an opening
+        // countdown to getMarketStatusColor), and worded "CLOSES IN" so
+        // shouldMessageFlash() ignores it like the "OPENS IN" countdown.
+        if (status == marketZones[i].market.exchange + " OPEN") {
+            long m = marketMinutesToRegularClose(marketZones[i]);
+            if (m > 0) {
+                char cd[12];
+                if (m >= 60) sprintf(cd, "%ldH %02ldM", m / 60, m % 60);
+                else sprintf(cd, "%ld MIN", m);
+                status += " - CLOSES IN " + String(cd);
+            }
+        }
         tft.fillCircle(sx(11), ry + (big ? 10 : 7), big ? 4 : 3, statusColor);
 
         tft.setTextFont(big ? 4 : 2);

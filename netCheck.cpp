@@ -46,7 +46,7 @@ enum CanaryResult
     CANARY_UNREACHABLE  // DNS/connect failed - no evidence either way
 };
 
-static CanaryResult probeCanary(const Canary &c)
+static CanaryResult probeCanary(const Canary &c, int &httpCode)
 {
     WiFiClient client;
     HTTPClient http;
@@ -55,12 +55,12 @@ static CanaryResult probeCanary(const Canary &c)
     // A portal replies with a 302/200 pointing at its login page; we must SEE
     // that response, not chase it, so redirect-following stays off.
     http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    httpCode = 0;
     if (!http.begin(client, c.url))
         return CANARY_UNREACHABLE;
 
     int code = http.GET();
-    Log.println("Canary " + String(c.url) + " returned HTTP " + String(code) +
-                (code <= 0 ? " (unreachable)" : ""));
+    httpCode = code;
     if (code <= 0)
     {
         http.end();
@@ -74,17 +74,20 @@ static CanaryResult probeCanary(const Canary &c)
         ok = (http.getString().indexOf(c.mustContain) >= 0);
     }
     http.end();
-    Log.println("Canary " + String(c.url) + " returned HTTP " + String(code) +
-                (ok ? " (OK)" : " (intercepted)"));
     return ok ? CANARY_OK : CANARY_INTERCEPTED;
 }
 
 NetReachability netCheckNow()
 {
     NetReachability result;
+    // Per-probe results, logged only when reachability actually changes -
+    // the runtime re-check fires every minute, and logging every probe used
+    // to bury everything else on the Logs page under canary lines.
+    String detail;
     if (WiFi.status() != WL_CONNECTED)
     {
         result = NET_OFFLINE;
+        detail = "WiFi not associated";
     }
     else
     {
@@ -94,7 +97,13 @@ NetReachability netCheckNow()
         result = NET_OFFLINE;
         for (int i = 0; i < CANARY_COUNT; i++)
         {
-            CanaryResult r = probeCanary(CANARIES[i]);
+            int code = 0;
+            CanaryResult r = probeCanary(CANARIES[i], code);
+            if (detail.length() > 0) detail += ", ";
+            detail += String(CANARIES[i].url) + " HTTP " + String(code) +
+                      (r == CANARY_OK            ? " (OK)"
+                       : r == CANARY_INTERCEPTED ? " (intercepted)"
+                                                 : " (unreachable)");
             if (r == CANARY_OK)
             {
                 result = NET_ONLINE;
@@ -108,7 +117,15 @@ NetReachability netCheckNow()
         }
     }
 
+    NetReachability previous = g_reachability;
     g_reachability = result;
+    if (result != previous)
+    {
+        const char *name = result == NET_ONLINE    ? "online"
+                           : result == NET_CAPTIVE ? "captive portal"
+                                                   : "offline";
+        Log.println("Internet reachability now " + String(name) + " - " + detail);
+    }
     bool nowCaptive = (result == NET_CAPTIVE);
     if (nowCaptive != g_captive)
     {

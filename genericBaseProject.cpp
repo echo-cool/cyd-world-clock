@@ -109,28 +109,31 @@ Timezone myTZ;
 // unsynchronized concurrent access to ezTime's internal state.
 static void handleTimeSync() {
     static unsigned long lastStatusReport = 0;
-    static time_t lastKnownTime = 0;
-
-    // Store time before events() call
-    time_t timeBefore = UTC.now();
+    static time_t lastSeenSync = 0;
+    static bool seeded = false;
 
     // Handle ezTime events for NTP synchronization
     events();
 
-    // Check if time was updated (indicates sync occurred)
-    time_t timeAfter = UTC.now();
+    // ezTime stamps every successful NTP query in lastNtpUpdateTime(); watch
+    // that instead of looking for a clock jump. A healthy resync corrects by
+    // milliseconds and never moves the second counter, so the old >1s-jump
+    // heuristic missed every routine sync and the status pages claimed
+    // "1 sync, hours ago" on a perfectly synced clock.
+    time_t syncedAt = lastNtpUpdateTime();
+    if (!seeded) {
+        // The boot-time sync is already counted in baseProjectSetup().
+        lastSeenSync = syncedAt;
+        seeded = true;
+        if (syncedAt != 0) logSetWallClock(UTC.now());
+    } else if (syncedAt != lastSeenSync) {
+        lastSeenSync = syncedAt;
+        syncCount++;
+        lastSyncTime = millis();
+        ntpSyncStatus = true;
+        logSetWallClock(UTC.now()); // re-anchor log timestamps on every sync
 
-    // Detect if a sync just happened
-    if (timeAfter != lastKnownTime && timeAfter > 1000000000) { // Valid timestamp
-        if (lastKnownTime > 0 && abs(timeAfter - timeBefore) > 1) {
-            // Time jumped significantly - likely a sync occurred
-            syncCount++;
-            lastSyncTime = millis();
-            ntpSyncStatus = true;
-
-            Log.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
-        }
-        lastKnownTime = timeAfter;
+        Log.println("NTP Sync #" + String(syncCount) + " - " + UTC.dateTime() + " (Uptime: " + String(millis()/1000/60) + "min)");
     }
 
     // Report sync status every 30 minutes (production frequency)

@@ -229,6 +229,7 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
     JsonObject filterEntry = filter.createNestedObject();
     filterEntry["date"] = true;
     filterEntry["name"] = true;
+    filterEntry["localName"] = true;
     filterEntry["global"] = true;
     filterEntry["types"] = true;
 
@@ -262,8 +263,17 @@ static int fetchCountryYear(const char *country, int year, PublicHoliday *out, i
         }
         if (!isPublic) continue;
 
-        const char *ds = h["date"];   // "YYYY-MM-DD"
-        const char *name = h["name"]; // English name (display font is ASCII)
+        const char *ds = h["date"]; // "YYYY-MM-DD"
+        // Prefer the in-country name when the display font can render it:
+        // Nager's international "name" says e.g. "Labour Day" for the US
+        // Labor Day. Non-ASCII localNames (CJK zones) fall back to "name".
+        const char *name = h["localName"];
+        bool asciiLocal = (name != nullptr);
+        for (const char *p = name; asciiLocal && *p; p++)
+        {
+            if ((unsigned char)*p > 0x7E) asciiLocal = false;
+        }
+        if (!asciiLocal) name = h["name"];
         if (!ds || strlen(ds) < 10 || !name) continue;
         uint32_t y = (uint32_t)atoi(ds);
         uint32_t mo = (uint32_t)atoi(ds + 5);

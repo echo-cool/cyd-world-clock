@@ -701,13 +701,14 @@ static uint16_t daylightBarColor(float elevDeg)
     return tft.color565(stops[n - 1].r, stops[n - 1].g, stops[n - 1].b);
 }
 
-// 3px daylight gradient bar: the zone's local 00:00-24:00 mapped left to
+// Daylight gradient bar: the zone's local 00:00-24:00 mapped left to
 // right, each column colored by the sun's real elevation at that moment
 // today (same solar math as the day/night colors), with a white tick at the
 // current time. Shows at a glance how deep into day or night each city is.
 // Skipped for zones without preset coordinates. Shared with the big-clock
-// face (clockFaces.cpp).
-void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone)
+// face (clockFaces.cpp), which draws it thicker than the quadrants' 3px.
+void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone,
+                       int h)
 {
     float lat, lon;
     if (!getCityCoords(zone.timezone, lat, lon)) return;
@@ -719,15 +720,46 @@ void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone)
     for (int i = 0; i < w; i++) {
         long colSec = (long)i * 86400L / (w - 1);
         time_t colUtc = utcNow + (colSec - secOfDay);
-        gfx.drawFastVLine(x + i, y, 3, daylightBarColor(solarElevationDeg(lat, lon, colUtc)));
+        gfx.drawFastVLine(x + i, y, h, daylightBarColor(solarElevationDeg(lat, lon, colUtc)));
     }
 
     // "Now" tick, with background-color gaps so it reads inside the bright
     // midday section too
     int tickX = x + (int)(secOfDay * (long)(w - 1) / 86400L);
-    gfx.drawFastVLine(tickX - 1, y - 2, 7, clockBackgroundColor);
-    gfx.drawFastVLine(tickX + 1, y - 2, 7, clockBackgroundColor);
-    gfx.drawFastVLine(tickX, y - 2, 7, TFT_WHITE);
+    gfx.drawFastVLine(tickX - 1, y - 2, h + 4, clockBackgroundColor);
+    gfx.drawFastVLine(tickX + 1, y - 2, h + 4, clockBackgroundColor);
+    gfx.drawFastVLine(tickX, y - 2, h + 4, TFT_WHITE);
+}
+
+// Minutes until the REGULAR session currently in progress closes; -1 when
+// no regular session is running. Half-day early closes truncate the session,
+// matching getMarketStatus. Feeds the markets face's "CLOSES IN" detail -
+// the quadrants keep the shorter "OPEN" status line.
+long marketMinutesToRegularClose(WorldClockZone &zone)
+{
+    if (!zone.market.hasMarket) return -1;
+
+    time_t local = zone.tz.now();
+    int wd = weekday(local);
+    if (wd == 1 || wd == 7) return -1; // weekend
+    if (isMarketHoliday(zone.market.exchange, year(local), month(local), day(local))) return -1;
+
+    int early = marketEarlyCloseMinutes(zone.market.exchange, year(local), month(local), day(local));
+    int nowMin = hour(local) * 60 + minute(local);
+    for (int i = 0; i < zone.market.sessionCount; i++) {
+        const TradingSession &s = zone.market.sessions[i];
+        if (s.sessionName != "REGULAR") continue;
+        int start = s.openHour * 60 + s.openMinute;
+        int end = s.closeHour * 60 + s.closeMinute;
+        if (early >= 0) {
+            if (start >= early) continue;
+            if (end > early) end = early;
+        }
+        if (market::inSession(nowMin, start, end)) {
+            return market::minutesUntilClose(nowMin, start, end);
+        }
+    }
+    return -1;
 }
 
 // Fraction (0..1) of the exchange's regular trading day already elapsed;
