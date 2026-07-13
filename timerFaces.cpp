@@ -69,14 +69,23 @@ static const int64_t ADJ_DELTA_MS[4] = {-30LL * 60000LL, -5LL * 60000LL,
 static const TimerBtn BTN_PRIMARY = {24, 152, 148, 36};
 static const TimerBtn BTN_RESET = {200, 152, 96, 36};
 
-// Bottom row: previous face / settings / focus toggle / next face. The first
-// three are the global actions the other faces put on invisible corner and
-// center zones; HIDE SEC / SHOW SEC switches the big timer to a calm HH:MM
-// that only changes once a minute (persisted: projectConfig.timerHideSeconds).
-static const TimerBtn BTN_PREV = {6, 198, 42, 38};
-static const TimerBtn BTN_SET = {54, 198, 104, 38};
-static const TimerBtn BTN_FOCUS = {164, 198, 104, 38};
+// Bottom row: previous face / settings / focus toggle / zoom / next face.
+// The first three are the global actions the other faces put on invisible
+// corner and center zones; HIDE SEC / SHOW SEC switches the big timer to a
+// calm HH:MM that only changes once a minute (persisted:
+// projectConfig.timerHideSeconds); ZOOM hides every control and shows just
+// the timer as large as the panel fits.
+static const TimerBtn BTN_PREV = {6, 198, 40, 38};
+static const TimerBtn BTN_SET = {52, 198, 76, 38};
+static const TimerBtn BTN_FOCUS = {134, 198, 76, 38};
+static const TimerBtn BTN_ZOOM = {216, 198, 52, 38};
 static const TimerBtn BTN_NEXT = {274, 198, 40, 38};
+
+// Zoom mode: entered from [ZOOM], exited by a tap anywhere on the glass (the
+// buttons are hidden, so the whole panel is the exit control). Session-only
+// on purpose - a reboot always comes back with the buttons visible, and no
+// flash write is spent on a mode that is one tap away.
+static bool timerZoomMode = false;
 
 static bool timerBtnHit(const TimerBtn &b, int tx, int ty)
 {
@@ -458,6 +467,119 @@ static void drawBigTime(const char *text, uint16_t color)
     tft.setTextPadding(0);
 }
 
+// Time string + color for the big display, shared by the normal and zoom
+// layouts. Focus mode (timerHideSeconds) drops both to HH:MM.
+static uint16_t formatBigTimer(bool isCountdown, uint64_t now,
+                               timerlogic::TimerPhase phase, char *buf,
+                               size_t len)
+{
+    bool hideSec = projectConfig.timerHideSeconds;
+    if (isCountdown) {
+        uint64_t rem = countdown.remainingMs(now);
+        if (hideSec) {
+            // Ceil to whole minutes: full duration at start, and never 00:00
+            // while any time is actually left.
+            timerlogic::formatHM(timerlogic::displayMinutesRemaining(rem), buf, len);
+        } else {
+            // Ceil to whole seconds: shows the full duration at start and
+            // reaches exactly 00:00:00 only when the countdown really is over.
+            timerlogic::formatHMS((rem + 999ULL) / 1000ULL, buf, len);
+        }
+        return (phase == timerlogic::TIMER_FINISHED)                    ? TFT_RED
+               : (phase == timerlogic::TIMER_RUNNING && rem < 60000ULL) ? TFT_ORANGE
+                                                                        : TFT_WHITE;
+    }
+    uint64_t elapsed = stopwatch.elapsedMs(now);
+    if (hideSec) {
+        timerlogic::formatHM(timerlogic::displayMinutesElapsed(elapsed), buf, len);
+    } else {
+        timerlogic::formatHMS(elapsed / 1000ULL, buf, len);
+    }
+    return TFT_WHITE;
+}
+
+// Zoom-mode counterpart of drawBigTime: with the whole panel free, try Font 7
+// doubled (96px digits) first. "00:00:00" is 216px wide in Font 7, so the
+// doubled rendering fits HH:MM:SS on the 480px-wide panel and the focus-mode
+// HH:MM on every panel; HH:MM:SS on the 320px panel keeps the regular 48px
+// digits, just decluttered and centered (combine ZOOM with HIDE SEC there for
+// the doubled digits).
+static void drawZoomTime(const char *text, uint16_t color)
+{
+    int maxW = screenWidth - tfx(8);
+
+    tft.setTextFont(7);
+    tft.setTextSize(2);
+    uint8_t fontKey = 72;
+    if (tft.textWidth(text) > maxW) {
+        tft.setTextSize(1);
+        fontKey = 71;
+        if (tft.textWidth(text) > maxW) {
+            tft.setTextFont(4);
+            tft.setTextSize(2);
+            fontKey = 42;
+        }
+    }
+
+    int y = (screenHeight - tft.fontHeight()) / 2;
+    if (fontKey != cachedBigFont) {
+        // Font or size changed: glyph heights differ, so clear the whole band
+        // between the state line and the exit hint instead of relying on
+        // padding.
+        cachedBigFont = fontKey;
+        tft.fillRect(0, tfy(40), screenWidth, tfy(196) - tfy(40),
+                     clockBackgroundColor);
+    }
+
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(color, clockBackgroundColor);
+    tft.setTextPadding(maxW);
+    tft.drawString(text, screenWidth / 2, y);
+    tft.setTextPadding(0);
+}
+
+// Zoom layout: face title and phase up top, the timer vertically centered and
+// as big as it fits, an exit hint at the bottom - no buttons, no header.
+static void renderZoomFace(bool full, bool isCountdown)
+{
+    uint64_t now = monoMs();
+    timerlogic::TimerPhase phase = isCountdown ? countdown.phase : stopwatch.phase;
+
+    if (full) {
+        tft.fillScreen(clockBackgroundColor);
+        resetRenderCache();
+        tft.setTextFont(1);
+        tft.setTextSize(1);
+        tft.setTextDatum(TC_DATUM);
+        tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
+        tft.drawString(isCountdown ? "COUNTDOWN" : "STOPWATCH",
+                       screenWidth / 2, tfy(8));
+        tft.drawString("TAP ANYWHERE TO EXIT", screenWidth / 2,
+                       screenHeight - tfy(16));
+    }
+
+    if (full || (int)phase != cachedPhase) {
+        cachedPhase = (int)phase;
+        tft.setTextFont(2);
+        tft.setTextSize(1);
+        tft.setTextDatum(TC_DATUM);
+        tft.setTextColor(phaseColor(phase), clockBackgroundColor);
+        tft.setTextPadding(tfx(200));
+        tft.drawString(timerlogic::timerPhaseName(phase), screenWidth / 2,
+                       tfy(20));
+        tft.setTextPadding(0);
+    }
+
+    char buf[16];
+    uint16_t color = formatBigTimer(isCountdown, now, phase, buf, sizeof(buf));
+    if (full || color != cachedBigColor || strcmp(buf, cachedBig) != 0) {
+        strncpy(cachedBig, buf, sizeof(cachedBig) - 1);
+        cachedBig[sizeof(cachedBig) - 1] = '\0';
+        cachedBigColor = color;
+        drawZoomTime(buf, color);
+    }
+}
+
 static void drawPrimaryButton(timerlogic::TimerPhase phase)
 {
     const char *label;
@@ -507,6 +629,11 @@ static void drawDurationRow(timerlogic::TimerPhase phase)
 // duration row.
 static void renderTimerFace(bool full, bool isCountdown)
 {
+    if (timerZoomMode) {
+        renderZoomFace(full, isCountdown);
+        return;
+    }
+
     uint64_t now = monoMs();
     timerlogic::TimerPhase phase = isCountdown ? countdown.phase : stopwatch.phase;
 
@@ -523,6 +650,7 @@ static void renderTimerFace(bool full, bool isCountdown)
                      projectConfig.timerHideSeconds ? "SHOW SEC" : "HIDE SEC",
                      projectConfig.timerHideSeconds ? TFT_GREEN : TFT_CYAN,
                      TFT_WHITE);
+        drawTimerBtn(BTN_ZOOM, "ZOOM", TFT_CYAN, TFT_WHITE);
         drawTimerBtn(BTN_NEXT, ">", TFT_CYAN, TFT_WHITE);
         if (!isCountdown && timerlogic::reminderIntervalValid(projectConfig.timerReminderMin)) {
             // The stopwatch has no duration row; use the slot for a reminder
@@ -549,34 +677,8 @@ static void renderTimerFace(bool full, bool isCountdown)
     // Focus mode (timerHideSeconds): HH:MM only, so the big display changes
     // just once a minute instead of ticking every second - nothing on the
     // face keeps moving to pull the eye away from work.
-    bool hideSec = projectConfig.timerHideSeconds;
     char buf[16];
-    uint16_t color;
-    if (isCountdown) {
-        uint64_t rem = countdown.remainingMs(now);
-        if (hideSec) {
-            // Ceil to whole minutes: full duration at start, and never 00:00
-            // while any time is actually left.
-            timerlogic::formatHM(timerlogic::displayMinutesRemaining(rem), buf,
-                                 sizeof(buf));
-        } else {
-            // Ceil to whole seconds: shows the full duration at start and
-            // reaches exactly 00:00:00 only when the countdown really is over.
-            timerlogic::formatHMS((rem + 999ULL) / 1000ULL, buf, sizeof(buf));
-        }
-        color = (phase == timerlogic::TIMER_FINISHED)                 ? TFT_RED
-                : (phase == timerlogic::TIMER_RUNNING && rem < 60000ULL) ? TFT_ORANGE
-                                                                         : TFT_WHITE;
-    } else {
-        uint64_t elapsed = stopwatch.elapsedMs(now);
-        if (hideSec) {
-            timerlogic::formatHM(timerlogic::displayMinutesElapsed(elapsed), buf,
-                                 sizeof(buf));
-        } else {
-            timerlogic::formatHMS(elapsed / 1000ULL, buf, sizeof(buf));
-        }
-        color = TFT_WHITE;
-    }
+    uint16_t color = formatBigTimer(isCountdown, now, phase, buf, sizeof(buf));
     if (full || color != cachedBigColor || strcmp(buf, cachedBig) != 0) {
         strncpy(cachedBig, buf, sizeof(cachedBig) - 1);
         cachedBig[sizeof(cachedBig) - 1] = '\0';
@@ -621,6 +723,16 @@ void timerFaceHandleTouch(int x, int y)
     uint64_t now = monoMs();
     char buf[16];
 
+    if (timerZoomMode) {
+        // Zoom mode hides every control (brightness zones included), so the
+        // whole glass is the exit button.
+        timerZoomMode = false;
+        Log.println("Timer face - zoom off, controls restored");
+        firstDraw = true;
+        touchSuppressedUntilRelease = true;
+        return;
+    }
+
     if (timerBtnHit(BTN_SET, x, y)) {
         Log.println("Timer face - opening settings page");
         switchToScreen(SCREEN_SETTINGS); // suppresses touch until release
@@ -643,6 +755,13 @@ void timerFaceHandleTouch(int x, int y)
                         ? "Timer faces: seconds hidden (focus mode)"
                         : "Timer faces: seconds shown");
         firstDraw = true; // repaint the face with the new display + button label
+        touchSuppressedUntilRelease = true;
+        return;
+    }
+    if (timerBtnHit(BTN_ZOOM, x, y)) {
+        timerZoomMode = true;
+        Log.println("Timer face - zoom on (tap anywhere to exit)");
+        firstDraw = true; // repaint as the buttonless zoom layout
         touchSuppressedUntilRelease = true;
         return;
     }

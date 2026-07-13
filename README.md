@@ -304,10 +304,11 @@ next clock face.
 
 The stopwatch and countdown faces draw **visible buttons** for their actions:
 `<` / `>` switch faces, `SETTINGS` opens settings, `HIDE SEC` toggles the calm
-seconds-free display, and the timer controls sit above. Areas not occupied by
-a button still use the normal brightness gesture: press the left third to dim
-or the right third to brighten. The same percentage overlay appears, and all
-timer buttons take priority so brightness gestures cannot reset a timer.
+seconds-free display, `ZOOM` hides all controls for a full-screen timer, and
+the timer controls sit above. Areas not occupied by a button still use the
+normal brightness gesture: press the left third to dim or the right third to
+brighten. The same percentage overlay appears, and all timer buttons take
+priority so brightness gestures cannot reset a timer.
 
 <p align="center">
   <img src="img/homepage-brightness-adjust.jpg" alt="Brightness bar overlay while adjusting" width="45%"/>
@@ -444,6 +445,18 @@ countdown rounds up, so it shows the full duration at the start and never
 reads `00:00` while any time is actually left. Pair it with the milestone
 reminders below for a glance-free work session: the screen stays still, and
 the banner (and the final alarm) still announce the moments that matter.
+
+Both timer faces also have a **ZOOM** button: it hides every button and shows
+just the timer, vertically centered and as large as the panel fits, with only
+the face name, the timer state and a `TAP ANYWHERE TO EXIT` hint around it.
+Doubled 7-segment digits are used whenever the time string fits the panel
+width — always for the seconds-free `HH:MM` focus display, and for the full
+`HH:MM:SS` on wide (480px) panels; on 320px-wide panels the full `HH:MM:SS`
+keeps the regular digit size, just decluttered (combine `ZOOM` with `HIDE
+SEC` for the biggest digits there). The timer keeps running, milestone
+reminders and the final alarm still fire, and a tap anywhere on the glass
+brings the buttons back. Zoom is session-only: a reboot returns to the normal
+button layout.
 
 Both timer faces also show a **milestone reminder**: a short orange banner
 (`30 MINUTES ELAPSED` on the stopwatch, `30 MINUTES REMAINING` on the
