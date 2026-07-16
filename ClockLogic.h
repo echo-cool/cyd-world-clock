@@ -12,6 +12,13 @@
 #include "logBuffer.h" // the Log tee used by CLOCK_DEBUG_PRINTLN and all logging
 #include "dateMath.h"  // daysFromCivil / civilFromDays (host-tested pure math)
 
+// The clock logic is split into modules; this header stays the umbrella so
+// existing consumers keep compiling unchanged with a single include.
+#include "worldZones.h"        // TradingSession/MarketInfo/WorldClockZone + worldZones[]
+#include "marketStatus.h"      // market/trading-session status lines & colors
+#include "brightnessControl.h" // backlight, brightness bar, LDR auto-brightness
+#include "solarPhase.h"        // day/night phase, sun/moon icons, daylight bar
+
 // Set to 1 to enable verbose per-frame draw/debug logging on the serial port.
 // Kept at 0 for normal use so the hot draw path isn't flooded with Serial output.
 #ifndef DEBUG_CLOCK
@@ -23,76 +30,10 @@
 #define CLOCK_DEBUG_PRINTLN(x) do {} while (0)
 #endif
 
-const int MARKET_STATUS_MESSAGE_MIN = 10;
-
-// Manual brightness override: when the user changes brightness (touch or serial),
-// auto-brightness is suspended until manualBrightnessUntil so the two don't fight.
-const unsigned long MANUAL_BRIGHTNESS_HOLD_MS = 2UL * 60UL * 60UL * 1000UL; // 2 hours
-
-// How long the on-screen brightness bar stays visible after the last touch.
-const unsigned long BRIGHTNESS_BAR_TIMEOUT_MS = 2000; // 2 seconds
-
-// The night backlight level and the fallback dim window are configurable:
-// projectConfig.nightBrightness / nightStartHour / nightEndHour (web
-// settings page).
-
-// --- Ambient-light (LDR) auto-brightness ------------------------------------
-// The CYD has an onboard LDR on GPIO 34. Its divider circuit is unreliable on
-// some board revisions (readings that never move), so auto-brightness only
-// trusts the sensor after the smoothed reading has been seen to swing by at
-// least LDR_MIN_SWING counts; until then - or with USE_LDR_AUTOBRIGHTNESS 0 -
-// it falls back to a time-of-day schedule (the configurable night window on
-// home-zone time). Use the LDR serial command to inspect the live readings.
-#ifndef USE_LDR_AUTOBRIGHTNESS
-#define USE_LDR_AUTOBRIGHTNESS BOARD_HAS_LDR_AUTOBRIGHTNESS
-#endif
-// Most CYDs read HIGH in the dark; set to 0 if yours is wired the other way
-// (check with the LDR serial command: cover the sensor and watch the value).
-#ifndef LDR_DARK_IS_HIGH
-#define LDR_DARK_IS_HIGH 1
-#endif
-const int LDR_PIN = 34;        // input-only ADC pin, free on the CYD
-const int LDR_MIN_SWING = 400; // counts the reading must move before trusted
-
-// Stock Market Information
-struct TradingSession {
-    int openHour;
-    int openMinute;
-    int closeHour;
-    int closeMinute;
-    String sessionName;
-};
-
-struct MarketInfo {
-    String exchange;
-    bool hasMarket;
-    TradingSession sessions[5]; // Support up to 5 trading sessions per market
-    int sessionCount;
-};
-
-// World Clock Configuration
-struct WorldClockZone {
-    String name;
-    String timezone;
-    Timezone tz;
-    int lastHour;
-    int lastMinute;
-    bool lastIspm;
-    int lastDay;
-    bool initialized;
-    MarketInfo market;
-    String lastMarketStatus;
-    String weatherAlert; // cached weather-alert text for this zone ("" = none)
-    String weatherNotice; // cached rain/snow start-stop text for the date/weather row
-};
-
 // Display objects: tft is defined in cheapYellowLCD.cpp, the bit-banged
 // touch controller in ClockLogic.cpp.
 extern TFT_eSPI tft;
 extern XPT2046_Bitbang touchscreen;
-
-// The four clock quadrants (defined and initialized in ClockLogic.cpp)
-extern WorldClockZone worldZones[4];
 
 extern uint16_t clockBackgroundColor;
 extern int screenWidth;
@@ -106,58 +47,6 @@ extern bool NOT_US_DATE;
 
 // Global variables for touch and backlight control
 extern bool firstDraw;
-extern int backlightLevel; // PWM value (0-255)
-extern unsigned long manualBrightnessUntil;
-
-// Brightness bar state (globals so the touch UI can reset them cleanly)
-extern unsigned long brightnessBarShownTime;
-extern bool brightnessBarVisible;
-
-// Paint the temporary percentage overlay used by home-screen brightness
-// gestures (including the timer faces).
-void showBrightnessBar(int brightness);
-
-// Current market status line for a zone, e.g. "NYSE OPEN" (heavy String work -
-// callers outside ClockLogic.cpp should prefer zone.lastMarketStatus, which is
-// refreshed once per minute).
-String getMarketStatus(WorldClockZone &zone);
-
-// Display color for a market status string ("NYSE OPEN" -> green, ...).
-uint16_t getMarketStatusColor(String status);
-
-// Day/night-dependent colors for a zone's local time (used for time digits
-// and for labels/dates respectively). Preset cities carry coordinates, so
-// day/night follows the sun's real position (sunrise/sunset incl. seasons);
-// zones without known coordinates fall back to fixed 6AM-6PM windows.
-uint16_t getDayNightColor(WorldClockZone &zone);
-uint16_t getDayNightLabelColor(WorldClockZone &zone);
-
-// True when the sun is down in a zone (evening or night phase).
-bool zoneIsNight(WorldClockZone &zone);
-
-// ~12px sun or crescent moon showing the zone's current day/night phase,
-// centered on (cx, cy). Same glyph as the quadrant corner icons.
-void drawZoneDayNightIcon(TFT_eSPI &gfx, int cx, int cy, WorldClockZone &zone);
-
-// Today's local sunrise/sunset for a zone as minutes-of-day (e.g. 358 =
-// 05:58). False when the zone has no preset coordinates or the sun never
-// crosses the horizon today (polar day/night).
-bool zoneSunTimes(WorldClockZone &zone, int &riseMin, int &setMin);
-
-// Daylight gradient bar: the zone's local day mapped left to right, colored
-// by real solar elevation, with a white tick at the current time. `h` is the
-// bar thickness (the quadrants use the 3px default; the big face draws it
-// taller). No-op for zones without preset coordinates.
-void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone,
-                       int h = 3);
-
-// Fraction (0..1) of the exchange's regular trading day already elapsed;
-// false outside regular hours (weekend, holiday, before open / after close).
-bool marketDayProgress(WorldClockZone &zone, float &frac);
-
-// Minutes until the REGULAR session currently in progress closes (half-day
-// early closes applied); -1 when no regular session is running.
-long marketMinutesToRegularClose(WorldClockZone &zone);
 
 // Trim text with a "..." suffix until it fits maxWidth in the current font.
 String fitTextToWidth(TFT_eSPI &gfx, const String &text, int maxWidth);
@@ -191,21 +80,38 @@ TouchPoint readTouchPoint();
 // only (the web handlers run there).
 void injectTouchPoint(int x, int y, unsigned long holdMs);
 
-// Dump the ambient-light sensor state to Serial (the LDR serial command).
-void printLdrStatus();
-
-// Ambient-light sensor state for the status page / status API. Returns false
-// when the LDR is compiled out (USE_LDR_AUTOBRIGHTNESS 0); otherwise fills
-// whether the sensor has proven itself, the current dark/bright verdict and
-// the smoothed reading.
-bool getLdrState(bool &trusted, bool &dark, int &smoothed);
-
 void rollingClockSetup(bool is24Hour, bool usDate);
 void drawRollingClock();
+
+// Force the home screen to fully repaint on the next draw pass (all four
+// zones and the static frame). clearScreen also wipes the panel immediately -
+// used when arriving from another page or after an overlay painted outside
+// the quadrants; pass false when the next draw pass repaints everything
+// anyway.
+void invalidateHomeScreen(bool clearScreen);
+
+// Cycle to another clock face (step = 1 for next, FACE_COUNT - 1 for
+// previous), persist the choice and force a full home repaint. Shared by the
+// passive faces' corner taps and the timer faces' [<] / [>] buttons so the
+// two can't drift apart. `source` prefixes the log line ("LOWER-LEFT touch",
+// "Timer face button", ...).
+void cycleClockFace(int step, const char *source);
 
 // The quadrant sprite is a 38KB heap cache. HTTPS fetchers temporarily release
 // it so mbedTLS has enough contiguous memory for certificate parsing.
 bool clockReleaseRenderBufferForNetwork();
 void clockRestoreRenderBufferForNetwork(bool released);
+
+// RAII wrapper for the pair above, shared by all the fetchers: releases in
+// the constructor (pass active=false to skip, e.g. a plain-HTTP request that
+// doesn't need the contiguous heap) and restores in the destructor on every
+// exit path.
+struct RenderBufferReleaseGuard
+{
+    bool released;
+    explicit RenderBufferReleaseGuard(bool active = true)
+        : released(active ? clockReleaseRenderBufferForNetwork() : false) {}
+    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
+};
 
 #endif // CLOCK_LOGIC_H

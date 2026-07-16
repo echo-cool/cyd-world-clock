@@ -111,18 +111,6 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
     }
   }
 
-  if (json.containsKey(PROJECT_BRIGHTNESS))
-  {
-    c.brightness = clampBrightness(json[PROJECT_BRIGHTNESS].as<int>());
-    any = true;
-  }
-
-  if (json.containsKey(PROJECT_CLOCK_FACE))
-  {
-    c.clockFace = constrain(json[PROJECT_CLOCK_FACE].as<int>(), 0, FACE_COUNT - 1);
-    any = true;
-  }
-
   if (json.containsKey(PROJECT_SHOW_GRID))
   {
     c.showGrid = json[PROJECT_SHOW_GRID].as<bool>();
@@ -137,7 +125,11 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
 
   if (json.containsKey(PROJECT_MAC_OVERRIDE))
   {
-    c.staMacOverride = String(json[PROJECT_MAC_OVERRIDE].as<String>());
+    // Same canonicalisation the web settings form applies, so a restored
+    // /api/config backup can't smuggle in an un-normalized value (which
+    // would then flow into logs and the setup-hotspot SSID).
+    c.staMacOverride = String(
+        puretext::normalizeMac(json[PROJECT_MAC_OVERRIDE].as<String>().c_str()).c_str());
     any = true;
   }
 
@@ -147,22 +139,26 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
     any = true;
   }
 
-  if (json.containsKey(PROJECT_NIGHT_START))
+  // Clamped integer settings - every numeric field is range-checked here so
+  // both the settings form and a restored backup land on valid values.
+  struct { const char *key; int *value; int lo, hi; } clampedInts[] = {
+      {PROJECT_BRIGHTNESS, &c.brightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX},
+      {PROJECT_CLOCK_FACE, &c.clockFace, 0, FACE_COUNT - 1},
+      {PROJECT_NIGHT_START, &c.nightStartHour, 0, 23},
+      {PROJECT_NIGHT_END, &c.nightEndHour, 0, 23},
+      {PROJECT_NIGHT_BRIGHTNESS, &c.nightBrightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX},
+      {PROJECT_WEATHER_REFRESH_MIN, &c.weatherRefreshMin, 5, 120},
+      {PROJECT_TIMER_REMINDER_MIN, &c.timerReminderMin, 1, 1440},
+      // 5999 min = 99:59, matching the countdown's 99:59:59 ceiling
+      {PROJECT_COUNTDOWN_DEFAULT_MIN, &c.countdownDefaultMin, 1, 5999},
+  };
+  for (auto &f : clampedInts)
   {
-    c.nightStartHour = constrain(json[PROJECT_NIGHT_START].as<int>(), 0, 23);
-    any = true;
-  }
-
-  if (json.containsKey(PROJECT_NIGHT_END))
-  {
-    c.nightEndHour = constrain(json[PROJECT_NIGHT_END].as<int>(), 0, 23);
-    any = true;
-  }
-
-  if (json.containsKey(PROJECT_NIGHT_BRIGHTNESS))
-  {
-    c.nightBrightness = clampBrightness(json[PROJECT_NIGHT_BRIGHTNESS].as<int>());
-    any = true;
+    if (json.containsKey(f.key))
+    {
+      *f.value = constrain(json[f.key].as<int>(), f.lo, f.hi);
+      any = true;
+    }
   }
 
   // Bool toggles (home-screen extras + display/weather preferences)
@@ -186,25 +182,6 @@ static bool applyDoc(ProjectConfig &c, JsonDocument &json)
       *toggle.value = json[toggle.key].as<bool>();
       any = true;
     }
-  }
-
-  if (json.containsKey(PROJECT_WEATHER_REFRESH_MIN))
-  {
-    c.weatherRefreshMin = constrain(json[PROJECT_WEATHER_REFRESH_MIN].as<int>(), 5, 120);
-    any = true;
-  }
-
-  if (json.containsKey(PROJECT_TIMER_REMINDER_MIN))
-  {
-    c.timerReminderMin = constrain(json[PROJECT_TIMER_REMINDER_MIN].as<int>(), 1, 1440);
-    any = true;
-  }
-
-  if (json.containsKey(PROJECT_COUNTDOWN_DEFAULT_MIN))
-  {
-    // 5999 min = 99:59, matching the countdown's 99:59:59 ceiling
-    c.countdownDefaultMin = constrain(json[PROJECT_COUNTDOWN_DEFAULT_MIN].as<int>(), 1, 5999);
-    any = true;
   }
 
   if (json.containsKey(PROJECT_TOUCH_CAL))

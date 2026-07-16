@@ -8,12 +8,15 @@
 #include "deviceIdentity.h"
 #include "logBuffer.h"
 #include "projectConfig.h" // flipDisplay - panel orientation
+#include "uiScale.h"       // scaleDim - shared 320x240 design scaling
 
 TFT_eSPI tft = TFT_eSPI();
 
+// Uses the board macro rather than uiScale's screenHeight global: this runs
+// during display setup, before ClockLogic publishes the panel size.
 static int displayScaleY(int value)
 {
-  return (value * BOARD_DISPLAY_HEIGHT + 120) / 240;
+  return scaleDim(value, BOARD_DISPLAY_HEIGHT, UI_DESIGN_HEIGHT);
 }
 
 void CheapYellowDisplay::displaySetup()

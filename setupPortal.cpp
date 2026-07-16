@@ -1,20 +1,17 @@
 #include "setupPortal.h"
 
-// Needs to match the DRD storage used when the detector is created.
-#define ESP_DRD_USE_SPIFFS true
-
 #include <DNSServer.h>
-#include <ESP_DoubleResetDetector.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
 
+#include "apNat.h"              // shared softAP NAT + DHCP-DNS plumbing
 #include "ClockLogic.h"         // tft - on-device status screen (as otaUpdate does)
 #include "deviceIdentity.h"     // setup SSID + display identity
 #include "logBuffer.h"          // Log
-#include "genericBaseProject.h" // drd - stop it before the success/timeout reboot
+#include "drdGuard.h"           // rebootCleanly - success/timeout reboots
 #include "netCheck.h"           // netCheckNow / NetReachability - online vs captive
 #include "projectConfig.h"      // save the picked network's extras
 
@@ -77,37 +74,7 @@ static bool g_dnsListenUp = false; // g_dnsFromPhone has a bound socket
 static unsigned long g_dnsListenRetryMs = 0;
 static const unsigned long DNS_LISTEN_RETRY_MS = 5000;
 
-// ---------------------------------------------------------------------------
-// NAT + DNS plumbing (mirrors wifiRelay.cpp - NAPT must go through esp_netif,
-// not the raw lwIP ip_napt_enable(), or IDF 5.x's thread-safety assert reboots
-// the clock).
-// ---------------------------------------------------------------------------
-static esp_netif_t *apNetif()
-{
-    return esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-}
-
-// Hand the helper-AP DHCP clients the upstream DNS so a phone that renews its
-// lease (most do after the STA-connect channel hop below) resolves names out
-// through NAT without needing our forwarder.
-static void offerUpstreamDnsToClients()
-{
-    esp_netif_t *ap = apNetif();
-    if (!ap) return;
-    IPAddress up = WiFi.dnsIP();
-    if ((uint32_t)up == 0) up = IPAddress(8, 8, 8, 8);
-
-    esp_netif_dns_info_t dns = {};
-    dns.ip.type = ESP_IPADDR_TYPE_V4;
-    dns.ip.u_addr.ip4.addr = (uint32_t)up;
-
-    esp_netif_dhcps_stop(ap);
-    esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
-    uint8_t offerDns = 0x02; // OFFER_DNS
-    esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
-                           &offerDns, sizeof(offerDns));
-    esp_netif_dhcps_start(ap);
-}
+// NAT + DHCP-DNS plumbing is shared with wifiRelay.cpp - see apNat.h.
 
 // Turn the AP into a NAT gateway out through the STA link, and switch DNS from
 // "hijack to our page" to "reach the real network" so the phone can load the
@@ -131,10 +98,9 @@ static void startRelay()
         Log.println("Setup portal: phone-DNS forwarder could not bind :53 - "
                     "will keep retrying (phones that renew their DHCP lease "
                     "use the upstream DNS directly)");
-    offerUpstreamDnsToClients();
+    apOfferUpstreamDns();
 
-    esp_netif_t *ap = apNetif();
-    esp_err_t err = ap ? esp_netif_napt_enable(ap) : ESP_ERR_INVALID_STATE;
+    esp_err_t err = apNaptEnable();
     if (err != ESP_OK)
         Log.println("Setup portal: enabling NAT failed (err " + String((int)err) +
                     ") - captive login relay will not work");
@@ -146,8 +112,7 @@ static void startRelay()
 
 static void stopRelayAndAp()
 {
-    esp_netif_t *ap = apNetif();
-    if (ap) esp_netif_napt_disable(ap);
+    apNaptDisable();
     delete g_dns;
     g_dns = nullptr;
     g_dnsFromPhone.stop();
@@ -517,9 +482,7 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
         {
             Log.println("Setup portal: timed out - rebooting to retry saved creds");
             stopRelayAndAp();
-            if (drd) drd->stop();
-            delay(500);
-            ESP.restart();
+            rebootCleanly(500);
         }
 
         if (g_beginPending)
@@ -572,7 +535,6 @@ void runSetupPortal(bool forceConfig, ProjectConfig &config)
     config.saveConfigFile();
     Log.println("Setup portal: setup complete - rebooting into the clock");
     stopRelayAndAp();
-    if (drd) drd->stop();
-    delay(1500); // let the phone's "/status" poll show "complete" first
-    ESP.restart();
+    // 1500 ms lets the phone's "/status" poll show "complete" first.
+    rebootCleanly(1500);
 }

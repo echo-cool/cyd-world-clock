@@ -23,6 +23,10 @@
 //
 // Set OTA_PASSWORD in secrets.h to require authentication everywhere
 // (HTTP Basic auth on the web pages, username "admin").
+//
+// The implementation is split across three files sharing one WebServer
+// (webPortal.h): otaUpdate.cpp (ArduinoOTA + /update firmware upload),
+// webSettings.cpp (the HTML pages) and webApi.cpp (the JSON API).
 // ---------------------------------------------------------------------------
 
 // True while an update is being received; background work (the weather fetch

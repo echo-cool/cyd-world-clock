@@ -20,4 +20,10 @@ namespace puretime
 std::string formatHHMM(int hour24, int minute, bool show24, bool &pm);
 } // namespace puretime
 
+// Three-letter uppercase weekday names indexed by the Arduino/ezTime
+// weekday() convention (1 = Sunday); index 0 is unused. One shared copy for
+// every face renderer.
+constexpr const char *DAY_NAMES[8] = {"",    "SUN", "MON", "TUE",
+                                      "WED", "THU", "FRI", "SAT"};
+
 #endif // TIME_FORMAT_H

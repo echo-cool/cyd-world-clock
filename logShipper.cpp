@@ -88,13 +88,6 @@ static volatile bool taskStarted = false;
 static String shipDeviceLabel; // hostname + MAC suffix snapshot (changes need a reboot)
 static char bootId[9];
 
-struct RenderBufferReleaseGuard
-{
-    bool released;
-    RenderBufferReleaseGuard(bool active) : released(active ? clockReleaseRenderBufferForNetwork() : false) {}
-    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
-};
-
 // millis() wraps at ~49.7 days; extend to 64 bits. Call under shipMux only
 // (the wrap detection needs serialized callers).
 static uint64_t millis64Locked()

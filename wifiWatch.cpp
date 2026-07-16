@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 
+#include "drdGuard.h"  // rebootCleanly - the self-heal reboot
 #include "logBuffer.h" // Log
 #include "otaUpdate.h" // otaInProgress - never reboot mid-update
 #include "wifiRelay.h" // wifiRelayActive - never reboot mid-login
@@ -93,8 +94,7 @@ void wifiWatchService()
     {
         Log.println("WiFi offline for " + String((ms - downSinceMs) / 60000UL) +
                     " min - rebooting to run the boot recovery sequence");
-        delay(200); // let the log line reach the serial port
-        ESP.restart();
+        rebootCleanly(200); // 200 ms lets the log line reach the serial port
     }
 
     if (ms - lastKickMs >= WIFI_KICK_EVERY_MS)

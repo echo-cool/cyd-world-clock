@@ -3,11 +3,12 @@
 #include "ClockLogic.h"
 #include "holidayService.h" // holiday markers on the calendar face
 #include "projectConfig.h"
+#include "timeFormat.h" // DAY_NAMES - shared weekday table
 #include "timerFaces.h" // stopwatch / countdown face renderers
 #include "uiPages.h"    // getMarketInfoForTimezone, getPosixFallback
+#include "uiScale.h"    // scaleUiX/Y - shared 320x240 design scaling
 #include "weatherService.h"
 
-static const char *DAY_NAMES[8] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 static const char *MONTH_ABBR[13] = {"", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
 
@@ -46,22 +47,11 @@ static int daysInMonth(int y, int m)
 }
 
 /*-------- Screen scaling ----------*/
-// The alternate faces were laid out on the 320x240 CYD. sx()/sy() map those
-// design coordinates onto the actual panel - identity on the CYD, 1.5x/1.33x
-// on the Hosyond 4.0" 480x320 - with the same round-half-up the touch UI's
-// scaleUiX/Y uses. largeFace() gates the font-size upgrades that keep the
-// scaled layouts from looking sparse; same screen class as the quad face's
-// large layout (useLargeQuadrantLayout).
-
-static int sx(int v)
-{
-    return (v * screenWidth + 160) / 320;
-}
-
-static int sy(int v)
-{
-    return (v * screenHeight + 120) / 240;
-}
+// The alternate faces were laid out on the 320x240 CYD; scaleUiX/Y (uiScale.h,
+// shared with the touch UI and the timer faces) map those design coordinates
+// onto the actual panel. largeFace() gates the font-size upgrades that keep
+// the scaled layouts from looking sparse; same screen class as the quad
+// face's large layout (useLargeQuadrantLayout).
 
 static bool largeFace()
 {
@@ -116,7 +106,7 @@ static bool drawHomePrecipChart(int x, int y, int w)
     }
     if (maxV < 0.1f) return false; // dry (or trace) window - no chart
 
-    const int plotH = sy(18);
+    const int plotH = scaleUiY(18);
     int baseline = y + plotH;
     int step = w / PRECIP_FORECAST_STEPS;
     float scale = max(maxV, 1.0f); // mm that fills the plot height
@@ -168,24 +158,24 @@ static void renderBigClockFace(bool full)
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        if (tft.textWidth(worldZones[0].name) <= sx(150)) {
+        if (tft.textWidth(worldZones[0].name) <= scaleUiX(150)) {
             tft.drawString(worldZones[0].name, cx, 6);
         } else {
             tft.setTextFont(2);
-            tft.drawString(fitTextToWidth(tft, worldZones[0].name, sx(150)), cx, 10);
+            tft.drawString(fitTextToWidth(tft, worldZones[0].name, scaleUiX(150)), cx, 10);
         }
 
-        tft.drawFastHLine(sx(10), sy(196), sx(300), TFT_DARKGREY);
+        tft.drawFastHLine(scaleUiX(10), scaleUiY(196), scaleUiX(300), TFT_DARKGREY);
     }
 
     // Header left corner: sun/moon phase icon. Always on for this face - the
     // corner is dedicated space, unlike the quadrants where the icon is an
     // opt-in extra.
-    tft.fillRect(0, 0, sx(70), sy(36), clockBackgroundColor);
-    drawZoneDayNightIcon(tft, sx(18), sy(18), worldZones[0]);
+    tft.fillRect(0, 0, scaleUiX(70), scaleUiY(36), clockBackgroundColor);
+    drawZoneDayNightIcon(tft, scaleUiX(18), scaleUiY(18), worldZones[0]);
 
     // Header right corner: current temperature + condition icon for home
-    tft.fillRect(sx(236), 0, screenWidth - sx(236), sy(40), clockBackgroundColor);
+    tft.fillRect(scaleUiX(236), 0, screenWidth - scaleUiX(236), scaleUiY(40), clockBackgroundColor);
     ZoneWeather homeWx = getZoneWeather(0);
     if (projectConfig.quadWeather && homeWx.valid) {
         String temp = String(displayTemp(homeWx.tempC));
@@ -193,9 +183,9 @@ static void renderBigClockFace(bool full)
         tft.setTextSize(1);
         tft.setTextDatum(TR_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        tft.drawString(temp, sx(306), 6);
-        tft.drawCircle(sx(306) + 5, 12, 3, TFT_WHITE); // degree mark
-        drawWeatherIcon(tft, sx(306) - tft.textWidth(temp) - 16, sy(18),
+        tft.drawString(temp, scaleUiX(306), 6);
+        tft.drawCircle(scaleUiX(306) + 5, 12, 3, TFT_WHITE); // degree mark
+        drawWeatherIcon(tft, scaleUiX(306) - tft.textWidth(temp) - 16, scaleUiY(18),
                         homeWx.weatherCode, zoneIsNight(worldZones[0]));
     }
 
@@ -204,8 +194,8 @@ static void renderBigClockFace(bool full)
     // large screen's taller slot so they stay visually centered.
     bool pm;
     String hhmm = formatHHMM(local, pm);
-    int timeY = sy(46) + (largeFace() ? 14 : 0);
-    tft.fillRect(0, sy(44), screenWidth, sy(80), clockBackgroundColor);
+    int timeY = scaleUiY(46) + (largeFace() ? 14 : 0);
+    tft.fillRect(0, scaleUiY(44), screenWidth, scaleUiY(80), clockBackgroundColor);
     tft.setTextFont(8);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
@@ -221,7 +211,7 @@ static void renderBigClockFace(bool full)
 
     // Day + date; a public holiday turns the line gold with the holiday's
     // name appended, like the quadrant day line.
-    tft.fillRect(0, sy(130), screenWidth, sy(28), clockBackgroundColor);
+    tft.fillRect(0, scaleUiY(130), screenWidth, scaleUiY(28), clockBackgroundColor);
     String dayDate = String(DAY_NAMES[weekday(local)]) + " " + formatDate(local);
     char holidayName[32];
     uint32_t todayYmd = (uint32_t)year(local) * 10000u +
@@ -231,13 +221,13 @@ static void renderBigClockFace(bool full)
         tft.setTextFont(2);
         tft.setTextSize(1);
         tft.setTextColor(TFT_GOLD, clockBackgroundColor);
-        tft.drawString(fitTextToWidth(tft, dayDate + " - " + holidayName, sx(312)),
-                       cx, sy(136));
+        tft.drawString(fitTextToWidth(tft, dayDate + " - " + holidayName, scaleUiX(312)),
+                       cx, scaleUiY(136));
     } else {
         tft.setTextFont(4);
         tft.setTextSize(1);
         tft.setTextColor(getDayNightLabelColor(worldZones[0]), clockBackgroundColor);
-        tft.drawString(dayDate, cx, sy(132));
+        tft.drawString(dayDate, cx, scaleUiY(132));
     }
 
     // Daylight gradient bar: home's whole local day with a "now" tick.
@@ -246,17 +236,17 @@ static void renderBigClockFace(bool full)
     // the quadrants' 3px strip and flanked by today's sunrise (left) and
     // sunset (right) times, so the gradient reads as a day timeline instead
     // of a mystery rainbow.
-    tft.fillRect(0, sy(158), screenWidth, sy(12), clockBackgroundColor);
-    renderDaylightBar(tft, cx - sx(120), sy(159), sx(240), worldZones[0], sy(6));
+    tft.fillRect(0, scaleUiY(158), screenWidth, scaleUiY(12), clockBackgroundColor);
+    renderDaylightBar(tft, cx - scaleUiX(120), scaleUiY(159), scaleUiX(240), worldZones[0], scaleUiY(6));
     int riseMin, setMin;
     if (zoneSunTimes(worldZones[0], riseMin, setMin)) {
         tft.setTextFont(1);
         tft.setTextSize(1);
         tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
         tft.setTextDatum(TR_DATUM);
-        tft.drawString(formatMinutesOfDay(riseMin), cx - sx(120) - 4, sy(159));
+        tft.drawString(formatMinutesOfDay(riseMin), cx - scaleUiX(120) - 4, scaleUiY(159));
         tft.setTextDatum(TL_DATUM);
-        tft.drawString(formatMinutesOfDay(setMin), cx + sx(120) + 4, sy(159));
+        tft.drawString(formatMinutesOfDay(setMin), cx + scaleUiX(120) + 4, scaleUiY(159));
     }
 
     // Status area: an official NWS alert wins; otherwise the 4-hour
@@ -267,29 +257,29 @@ static void renderBigClockFace(bool full)
     // the market status of the home zone (computed fresh - the
     // once-per-minute cache in hasTimeChanged only runs while the quad face
     // is active).
-    tft.fillRect(0, sy(168), screenWidth, sy(27), clockBackgroundColor);
+    tft.fillRect(0, scaleUiY(168), screenWidth, scaleUiY(27), clockBackgroundColor);
     String alert = projectConfig.weatherAlerts ? getZoneAlert(0) : String("");
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     if (alert.length() > 0 && getZoneAlertOfficial(0)) {
         tft.setTextColor(WX_ALERT_COLOR, clockBackgroundColor);
-        tft.drawString(fitTextToWidth(tft, alert, sx(312)), cx, sy(174));
+        tft.drawString(fitTextToWidth(tft, alert, scaleUiX(312)), cx, scaleUiY(174));
     } else if (projectConfig.quadWeather &&
-               drawHomePrecipChart(cx - sx(120), sy(168), sx(240))) {
+               drawHomePrecipChart(cx - scaleUiX(120), scaleUiY(168), scaleUiX(240))) {
         // chart drawn
     } else if (alert.length() > 0) {
         tft.setTextColor(WX_ALERT_COLOR, clockBackgroundColor);
-        tft.drawString(fitTextToWidth(tft, alert, sx(312)), cx, sy(174));
+        tft.drawString(fitTextToWidth(tft, alert, scaleUiX(312)), cx, scaleUiY(174));
     } else {
         String notice = projectConfig.quadWeather ? getZonePrecipNotice(0) : String("");
         if (notice.length() > 0) {
             tft.setTextColor(weatherNoticeColor(notice), clockBackgroundColor);
-            tft.drawString(notice, cx, sy(174));
+            tft.drawString(notice, cx, scaleUiY(174));
         } else if (worldZones[0].market.hasMarket) {
             String status = getMarketStatus(worldZones[0]);
             tft.setTextColor(getMarketStatusColor(status), clockBackgroundColor);
-            tft.drawString(status, cx, sy(174));
+            tft.drawString(status, cx, scaleUiY(174));
         }
     }
 
@@ -297,11 +287,11 @@ static void renderBigClockFace(bool full)
     // The large screen bumps the name/time fonts a step so the strip doesn't
     // read as fine print on the 4" panel.
     bool big = largeFace();
-    int nameY = sy(204) + (big ? -2 : 0);
+    int nameY = scaleUiY(204) + (big ? -2 : 0);
     int stripTimeY = big ? nameY + 19 : 216;
-    tft.fillRect(0, sy(202), screenWidth, screenHeight - sy(202), clockBackgroundColor);
+    tft.fillRect(0, scaleUiY(202), screenWidth, screenHeight - scaleUiY(202), clockBackgroundColor);
     for (int k = 1; k < 4; k++) {
-        int colCx = sx(60 + (k - 1) * 100);
+        int colCx = scaleUiX(60 + (k - 1) * 100);
         String name = worldZones[k].name;
         if (name.length() > 12) name = name.substring(0, 12);
         String offset = zoneDayOffset(k);
@@ -406,7 +396,7 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         tft.setTextSize(1);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        tft.drawString(String(MONTH_ABBR[mo]) + " " + String(yr), sx(8), 4);
+        tft.drawString(String(MONTH_ABBR[mo]) + " " + String(yr), scaleUiX(8), 4);
 
         static const char *WD_SUN[7] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
         static const char *WD_MON[7] = {"MO", "TU", "WE", "TH", "FR", "SA", "SU"};
@@ -417,9 +407,9 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         tft.setTextColor(TFT_CYAN, clockBackgroundColor);
         // On the large screen the taller (size 2) header sits a touch higher
         // so it clears a row-0 today box (whose top is 3px above the row).
-        int weekdayY = big ? sy(33) : sy(36);
+        int weekdayY = big ? scaleUiY(33) : scaleUiY(36);
         for (int c = 0; c < 7; c++) {
-            tft.drawString(WD[c], sx(6 + c * 44 + 22), weekdayY);
+            tft.drawString(WD[c], scaleUiX(6 + c * 44 + 22), weekdayY);
         }
 
         // 1970-01-01 (daysFromCivil == 0) was a Thursday, so +4 lands the
@@ -440,25 +430,25 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         int prevDim = daysInMonth((mo == 1) ? yr - 1 : yr, prevMo);
         for (int c = 0; c < firstDow; c++) {
             tft.drawString(String(prevDim - firstDow + 1 + c),
-                           sx(6 + c * 44 + 22), sy(48));
+                           scaleUiX(6 + c * 44 + 22), scaleUiY(48));
         }
         int gridRows = (firstDow + dim + 6) / 7;
         for (int cell = firstDow + dim; cell < gridRows * 7; cell++) {
             tft.drawString(String(cell - (firstDow + dim) + 1),
-                           sx(6 + (cell % 7) * 44 + 22), sy(48 + (cell / 7) * 30));
+                           scaleUiX(6 + (cell % 7) * 44 + 22), scaleUiY(48 + (cell / 7) * 30));
         }
 
         for (int d = 1; d <= dim; d++) {
             int cell = firstDow + d - 1;
             int col = cell % 7;
             int row = cell / 7;
-            int cellCx = sx(6 + col * 44 + 22);
-            int cy = sy(48 + row * 30);
+            int cellCx = scaleUiX(6 + col * 44 + 22);
+            int cy = scaleUiY(48 + row * 30);
             uint32_t ymd = (uint32_t)yr * 10000u + (uint32_t)mo * 100u + (uint32_t)d;
             bool holiday = holidayInList(hols, holCount, ymd) != nullptr;
             if (d == dd) {
                 uint16_t boxColor = holiday ? TFT_GOLD : TFT_ORANGE;
-                tft.fillRoundRect(sx(6 + col * 44 + 4), cy - 3, sx(36),
+                tft.fillRoundRect(scaleUiX(6 + col * 44 + 4), cy - 3, scaleUiX(36),
                                   big ? 30 : 22, big ? 7 : 5, boxColor);
                 tft.setTextColor(TFT_BLACK, boxColor);
             } else if (holiday) {
@@ -498,21 +488,21 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
         if (footer.length() > 0) {
             tft.setTextDatum(TC_DATUM);
             tft.setTextColor(footerColor, clockBackgroundColor);
-            tft.drawString(fitTextToWidth(tft, footer, sx(190)), screenWidth / 2, sy(230));
+            tft.drawString(fitTextToWidth(tft, footer, scaleUiX(190)), screenWidth / 2, scaleUiY(230));
         }
 
         // Home zone's sunrise (left) and sunset (right) in the footer
         // corners. The sun/moon glyphs are the clear-sky weather icons.
         int riseMin, setMin;
         if (zoneSunTimes(worldZones[0], riseMin, setMin)) {
-            drawWeatherIcon(tft, sx(14), sy(230) + 2, 0, false); // sun
+            drawWeatherIcon(tft, scaleUiX(14), scaleUiY(230) + 2, 0, false); // sun
             tft.setTextDatum(TL_DATUM);
             tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-            tft.drawString(formatMinutesOfDay(riseMin), sx(26), sy(230));
+            tft.drawString(formatMinutesOfDay(riseMin), scaleUiX(26), scaleUiY(230));
 
-            drawWeatherIcon(tft, sx(306), sy(230) + 2, 0, true); // moon
+            drawWeatherIcon(tft, scaleUiX(306), scaleUiY(230) + 2, 0, true); // moon
             tft.setTextDatum(TR_DATUM);
-            tft.drawString(formatMinutesOfDay(setMin), sx(296), sy(230));
+            tft.drawString(formatMinutesOfDay(setMin), scaleUiX(296), scaleUiY(230));
         }
     }
 
@@ -520,7 +510,7 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
     bool pm;
     String hhmm = formatHHMM(local, pm);
     if (!SHOW_24HOUR) hhmm += pm ? " PM" : " AM";
-    tft.fillRect(sx(196), 2, screenWidth - sx(196), 30, clockBackgroundColor);
+    tft.fillRect(scaleUiX(196), 2, screenWidth - scaleUiX(196), 30, clockBackgroundColor);
     tft.setTextFont(4);
     tft.setTextSize(1);
     tft.setTextDatum(TR_DATUM);
@@ -528,16 +518,16 @@ static void renderCalendarFace(bool redrawGrid, time_t local)
     tft.drawString(hhmm, screenWidth - 6, 4);
 
     // Home's current weather between the month name and the clock
-    tft.fillRect(sx(138), 2, sx(58), 30, clockBackgroundColor);
+    tft.fillRect(scaleUiX(138), 2, scaleUiX(58), 30, clockBackgroundColor);
     ZoneWeather w = getZoneWeather(0);
     if (projectConfig.quadWeather && w.valid) {
-        drawWeatherIcon(tft, sx(148), 16, w.weatherCode, zoneIsNight(worldZones[0]));
+        drawWeatherIcon(tft, scaleUiX(148), 16, w.weatherCode, zoneIsNight(worldZones[0]));
         String temp = String(displayTemp(w.tempC));
         tft.setTextFont(2);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        tft.drawString(temp, sx(162), 8);
-        tft.drawCircle(sx(162) + 2 + tft.textWidth(temp) + 2, 10, 2, TFT_WHITE);
+        tft.drawString(temp, scaleUiX(162), 8);
+        tft.drawCircle(scaleUiX(162) + 2 + tft.textWidth(temp) + 2, 10, 2, TFT_WHITE);
     }
 }
 
@@ -551,23 +541,23 @@ static void renderWeatherFace(bool full)
 
     if (full) {
         tft.fillScreen(clockBackgroundColor);
-        tft.drawFastHLine(sx(10), sy(58), sx(300), TFT_DARKGREY);
+        tft.drawFastHLine(scaleUiX(10), scaleUiY(58), scaleUiX(300), TFT_DARKGREY);
     }
 
     // Header: home time on the left, date + data age on the right
-    tft.fillRect(0, 0, screenWidth, sy(56), clockBackgroundColor);
+    tft.fillRect(0, 0, screenWidth, scaleUiY(56), clockBackgroundColor);
     bool pm;
     String hhmm = formatHHMM(local, pm);
     tft.setTextFont(4);
     tft.setTextSize(2);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(getDayNightColor(worldZones[0]), clockBackgroundColor);
-    tft.drawString(hhmm, sx(8), 2);
+    tft.drawString(hhmm, scaleUiX(8), 2);
     if (!SHOW_24HOUR) {
         int hhmmW = tft.textWidth(hhmm); // measured while font 4 size 2 is active
         tft.setTextFont(2);
         tft.setTextSize(1);
-        tft.drawString(pm ? "PM" : "AM", sx(8) + hhmmW + 8, 8);
+        tft.drawString(pm ? "PM" : "AM", scaleUiX(8) + hhmmW + 8, 8);
     }
 
     tft.setTextFont(2);
@@ -588,21 +578,21 @@ static void renderWeatherFace(bool full)
     // notice) in the middle, temp + condition (or an active weather alert)
     // on the right. The large screen bumps the name/high-low fonts a step.
     for (int i = 0; i < 4; i++) {
-        int ry = sy(64 + i * 44);
-        tft.fillRect(0, ry, screenWidth, sy(40), clockBackgroundColor);
+        int ry = scaleUiY(64 + i * 44);
+        tft.fillRect(0, ry, screenWidth, scaleUiY(40), clockBackgroundColor);
 
         tft.setTextFont(big ? 4 : 2);
         tft.setTextSize(1);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(getDayNightLabelColor(worldZones[i]), clockBackgroundColor);
-        tft.drawString(worldZones[i].name, sx(8), ry);
+        tft.drawString(worldZones[i].name, scaleUiX(8), ry);
 
         bool zonePm;
         String zoneTime = formatHHMM(worldZones[i].tz.now(), zonePm);
         if (!SHOW_24HOUR) zoneTime += zonePm ? " PM" : " AM";
         tft.setTextFont(2);
         tft.setTextColor(getDayNightColor(worldZones[i]), clockBackgroundColor);
-        tft.drawString(zoneTime, sx(8), ry + (big ? 30 : 18));
+        tft.drawString(zoneTime, scaleUiX(8), ry + (big ? 30 : 18));
         int timeW = tft.textWidth(zoneTime);
 
         ZoneWeather w = getZoneWeather(i);
@@ -613,7 +603,7 @@ static void renderWeatherFace(bool full)
             if (w.humidity >= 0) {
                 tft.setTextFont(1);
                 tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-                tft.drawString("RH " + String(w.humidity) + "%", sx(8) + timeW + 8,
+                tft.drawString("RH " + String(w.humidity) + "%", scaleUiX(8) + timeW + 8,
                                ry + (big ? 34 : 22));
             }
 
@@ -622,11 +612,11 @@ static void renderWeatherFace(bool full)
             tft.setTextFont(4);
             tft.setTextDatum(TR_DATUM);
             tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-            tft.drawString(String(displayTemp(w.tempC)), sx(284), ry);
-            tft.drawCircle(sx(284) + 7, ry + 7, 3, TFT_WHITE);
+            tft.drawString(String(displayTemp(w.tempC)), scaleUiX(284), ry);
+            tft.drawCircle(scaleUiX(284) + 7, ry + 7, 3, TFT_WHITE);
             tft.setTextFont(2);
             tft.setTextDatum(TL_DATUM);
-            tft.drawString(String(tempUnitLetter()), sx(284) + 13, ry + 2);
+            tft.drawString(String(tempUnitLetter()), scaleUiX(284) + 13, ry + 2);
 
             // Right bottom: an active weather alert wins, else a near-term
             // precipitation notice ("RAIN IN 30M"), else the condition text.
@@ -637,12 +627,12 @@ static void renderWeatherFace(bool full)
             if (alert.length() > 0) {
                 tft.setTextFont(1);
                 tft.setTextColor(WX_ALERT_COLOR, clockBackgroundColor);
-                tft.drawString(fitTextToWidth(tft, alert, sx(130)),
+                tft.drawString(fitTextToWidth(tft, alert, scaleUiX(130)),
                                screenWidth - 8, ry + (big ? 32 : 26));
             } else if (notice.length() > 0) {
                 tft.setTextFont(1);
                 tft.setTextColor(weatherNoticeColor(notice), clockBackgroundColor);
-                tft.drawString(fitTextToWidth(tft, notice, sx(130)),
+                tft.drawString(fitTextToWidth(tft, notice, scaleUiX(130)),
                                screenWidth - 8, ry + (big ? 32 : 26));
             } else {
                 tft.setTextFont(2);
@@ -653,7 +643,7 @@ static void renderWeatherFace(bool full)
 
             // Middle: condition glyph (same night-aware icons as the quadrant
             // badges) over today's forecast high/low.
-            drawWeatherIcon(tft, sx(158), ry + (big ? 14 : 10), w.weatherCode,
+            drawWeatherIcon(tft, scaleUiX(158), ry + (big ? 14 : 10), w.weatherCode,
                             zoneIsNight(worldZones[i]));
             if (w.hasMinMax) {
                 tft.setTextFont(1);
@@ -662,7 +652,7 @@ static void renderWeatherFace(bool full)
                 tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
                 tft.drawString("H" + String(displayTemp(w.tempMaxC)) + " L" +
                                    String(displayTemp(w.tempMinC)),
-                               sx(158), ry + (big ? 32 : 28));
+                               scaleUiX(158), ry + (big ? 32 : 28));
                 tft.setTextSize(1);
             }
         } else {
@@ -723,8 +713,8 @@ static void renderMarketsFace(bool full)
         tft.setTextSize(1);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        tft.drawString("MARKETS", sx(8), 4);
-        tft.drawFastHLine(sx(10), sy(34), sx(300), TFT_DARKGREY);
+        tft.drawString("MARKETS", scaleUiX(8), 4);
+        tft.drawFastHLine(scaleUiX(10), scaleUiY(34), scaleUiX(300), TFT_DARKGREY);
     }
 
     // Home-zone date + clock in the header, refreshed every minute
@@ -732,7 +722,7 @@ static void renderMarketsFace(bool full)
     bool pm;
     String hhmm = formatHHMM(homeLocal, pm);
     if (!SHOW_24HOUR) hhmm += pm ? " PM" : " AM";
-    tft.fillRect(sx(126), 2, screenWidth - sx(126), 30, clockBackgroundColor);
+    tft.fillRect(scaleUiX(126), 2, screenWidth - scaleUiX(126), 30, clockBackgroundColor);
     tft.setTextFont(4);
     tft.setTextSize(1);
     tft.setTextDatum(TR_DATUM);
@@ -748,15 +738,15 @@ static void renderMarketsFace(bool full)
     tft.setTextFont(2);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
-    tft.drawString(String(DAY_NAMES[weekday(homeLocal)]) + " " + headerDate, sx(170), 10);
+    tft.drawString(String(DAY_NAMES[weekday(homeLocal)]) + " " + headerDate, scaleUiX(170), 10);
 
     // One row per exchange: status dot + exchange/city and the colored status
     // line on the left, local time with its weekday on the right, and a
     // trading-day progress bar along the bottom during regular hours. The
     // large screen bumps the exchange/city/weekday fonts a step.
     for (int i = 0; i < MARKET_DEF_COUNT; i++) {
-        int ry = sy(42 + i * 40);
-        tft.fillRect(0, ry, screenWidth, sy(38), clockBackgroundColor);
+        int ry = scaleUiY(42 + i * 40);
+        tft.fillRect(0, ry, screenWidth, scaleUiY(38), clockBackgroundColor);
 
         // Status first: its color also feeds the row's at-a-glance dot.
         // Recomputed each minute - transitions land on minute boundaries.
@@ -778,17 +768,17 @@ static void renderMarketsFace(bool full)
                 status += " - CLOSES IN " + String(cd);
             }
         }
-        tft.fillCircle(sx(11), ry + (big ? 10 : 7), big ? 4 : 3, statusColor);
+        tft.fillCircle(scaleUiX(11), ry + (big ? 10 : 7), big ? 4 : 3, statusColor);
 
         tft.setTextFont(big ? 4 : 2);
         tft.setTextSize(1);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-        tft.drawString(MARKET_DEFS[i].exchange, sx(20), ry);
+        tft.drawString(MARKET_DEFS[i].exchange, scaleUiX(20), ry);
 
         tft.setTextFont(big ? 2 : 1);
         tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-        tft.drawString(MARKET_DEFS[i].city, sx(76) + (big ? 24 : 0), ry + (big ? 7 : 4));
+        tft.drawString(MARKET_DEFS[i].city, scaleUiX(76) + (big ? 24 : 0), ry + (big ? 7 : 4));
 
         time_t zoneLocal = marketZones[i].tz.now();
         bool zonePm;
@@ -809,15 +799,15 @@ static void renderMarketsFace(bool full)
         tft.setTextFont(2);
         tft.setTextDatum(TL_DATUM);
         tft.setTextColor(statusColor, clockBackgroundColor);
-        tft.drawString(status, sx(20), ry + (big ? 28 : 18));
+        tft.drawString(status, scaleUiX(20), ry + (big ? 28 : 18));
 
         // Trading-day progress while inside regular hours, like the quadrant
         // market progress bar.
         float frac;
         if (marketDayProgress(marketZones[i], frac)) {
             int barY = ry + (big ? 46 : 35);
-            tft.fillRect(sx(20), barY, sx(200), big ? 3 : 2, 0x39E7 /* dim grey track */);
-            tft.fillRect(sx(20), barY, (int)(sx(200) * frac + 0.5f), big ? 3 : 2, TFT_GREEN);
+            tft.fillRect(scaleUiX(20), barY, scaleUiX(200), big ? 3 : 2, 0x39E7 /* dim grey track */);
+            tft.fillRect(scaleUiX(20), barY, (int)(scaleUiX(200) * frac + 0.5f), big ? 3 : 2, TFT_GREEN);
         }
     }
 }

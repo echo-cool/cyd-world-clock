@@ -5,11 +5,12 @@
 #include "brightness.h"
 #include "ClockLogic.h" // tft, worldZones, readTouchPoint, formatHHMM
 #include "clockFaces.h" // ClockFace enum, clockFaceName
-#include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "otaUpdate.h"  // otaInProgress - defer the banner during updates
 #include "projectConfig.h"
+#include "timeFormat.h" // DAY_NAMES - shared weekday table
 #include "timerLogic.h"
 #include "uiPages.h" // uiScreen, switchToScreen, touchSuppressedUntilRelease
+#include "uiScale.h" // scaleUiX/Y - shared 320x240 design scaling
 
 // renderUiPage's "page needs a full repaint" flag (uiPages.cpp); the banner
 // cleanup uses it to restore whatever settings/status page it painted over.
@@ -19,27 +20,11 @@ static timerlogic::Stopwatch stopwatch;
 static timerlogic::Countdown countdown;
 static bool timersInited = false;
 
-static const char *DAY_NAMES[8] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-
 // Monotonic milliseconds since boot, 64-bit (esp_timer_get_time is us). Never
 // wraps and never jumps when NTP adjusts the wall clock.
 static uint64_t monoMs()
 {
     return (uint64_t)(esp_timer_get_time() / 1000LL);
-}
-
-/*-------- Screen scaling ----------*/
-// Same 320x240 design-coordinate mapping as the other alternate faces
-// (clockFaces.cpp sx/sy) and the touch UI's scaleUiX/Y.
-
-static int tfx(int v)
-{
-    return (v * screenWidth + 160) / 320;
-}
-
-static int tfy(int v)
-{
-    return (v * screenHeight + 120) / 240;
 }
 
 static bool largeTimerFace()
@@ -89,14 +74,14 @@ static bool timerZoomMode = false;
 
 static bool timerBtnHit(const TimerBtn &b, int tx, int ty)
 {
-    int x = tfx(b.x), y = tfy(b.y), w = tfx(b.w), h = tfy(b.h);
+    int x = scaleUiX(b.x), y = scaleUiY(b.y), w = scaleUiX(b.w), h = scaleUiY(b.h);
     return tx >= x && tx < x + w && ty >= y && ty < y + h;
 }
 
 static void drawTimerBtn(const TimerBtn &b, const char *label, uint16_t border,
                          uint16_t textColor)
 {
-    int x = tfx(b.x), y = tfy(b.y), w = tfx(b.w), h = tfy(b.h);
+    int x = scaleUiX(b.x), y = scaleUiY(b.y), w = scaleUiX(b.w), h = scaleUiY(b.h);
     tft.fillRect(x, y, w, h, clockBackgroundColor); // erase the previous label
     tft.drawRoundRect(x, y, w, h, 6, border);
     tft.setTextFont(2);
@@ -251,22 +236,28 @@ static void drawAlarmFrame()
     tft.setTextFont(4);
     tft.setTextSize(2);
     tft.setTextColor(fg, bg);
-    tft.drawString("TIME'S UP", screenWidth / 2, tfy(66));
+    tft.drawString("TIME'S UP", screenWidth / 2, scaleUiY(66));
 
     tft.setTextFont(7);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
-    tft.drawString("00:00:00", screenWidth / 2, tfy(102));
+    tft.drawString("00:00:00", screenWidth / 2, scaleUiY(102));
 
     tft.setTextFont(2);
     tft.setTextSize(1);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("TAP TO DISMISS", screenWidth / 2, tfy(190));
+    tft.drawString("TAP TO DISMISS", screenWidth / 2, scaleUiY(190));
 }
 
 bool timerAlarmService()
 {
     if (!alarmActive) return false;
+
+    // Never fight an in-progress firmware update for the screen (or write to
+    // SPIFFS while OTA streams to flash). Keep alarmActive set - the alarm
+    // raises normally once the update finishes or fails; a completed update
+    // reboots and clears it anyway.
+    if (otaInProgress) return false;
 
     TouchPoint t = readTouchPoint();
     bool down = (t.zRaw > 800);
@@ -319,10 +310,7 @@ void timerOverlayService()
         if (overlayShown) {
             overlayShown = false;
             if (uiScreen == SCREEN_HOME) {
-                firstDraw = true;
-                for (int i = 0; i < 4; i++) {
-                    worldZones[i].initialized = false;
-                }
+                invalidateHomeScreen(false);
             } else {
                 uiPageDrawn = false;
             }
@@ -341,7 +329,7 @@ void timerOverlayService()
     if (!overlayShown || nowMs - overlayLastDrawMs >= 250) {
         overlayLastDrawMs = nowMs;
         overlayShown = true;
-        int h = tfy(24);
+        int h = scaleUiY(24);
         tft.fillRect(0, 0, screenWidth, h, TFT_ORANGE);
         tft.setTextFont(2);
         tft.setTextSize(1);
@@ -390,7 +378,7 @@ static void drawTimerHeader(bool full, const char *title)
     if (!full && minute(local) == cachedHeaderMinute) return;
     cachedHeaderMinute = minute(local);
 
-    tft.fillRect(0, 0, screenWidth, tfy(28), clockBackgroundColor);
+    tft.fillRect(0, 0, screenWidth, scaleUiY(28), clockBackgroundColor);
 
     bool pm;
     String hhmm = formatHHMM(local, pm);
@@ -399,7 +387,7 @@ static void drawTimerHeader(bool full, const char *title)
     tft.setTextSize(1);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(getDayNightColor(worldZones[0]), clockBackgroundColor);
-    tft.drawString(hhmm, tfx(8), 2);
+    tft.drawString(hhmm, scaleUiX(8), 2);
 
     char dateBuf[8];
     if (NOT_US_DATE) {
@@ -411,13 +399,13 @@ static void drawTimerHeader(bool full, const char *title)
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, clockBackgroundColor);
     tft.drawString(String(DAY_NAMES[weekday(local)]) + " " + dateBuf,
-                   screenWidth - tfx(6), 6);
+                   screenWidth - scaleUiX(6), 6);
 
     tft.setTextFont(1);
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-    tft.drawString(title, screenWidth / 2, tfy(10));
+    tft.drawString(title, screenWidth / 2, scaleUiY(10));
 }
 
 static void drawStateLine(timerlogic::TimerPhase phase)
@@ -427,8 +415,8 @@ static void drawStateLine(timerlogic::TimerPhase phase)
     tft.setTextSize(1);
     tft.setTextDatum(TC_DATUM);
     tft.setTextColor(phaseColor(phase), clockBackgroundColor);
-    tft.setTextPadding(tfx(200));
-    tft.drawString(timerlogic::timerPhaseName(phase), screenWidth / 2, tfy(34));
+    tft.setTextPadding(scaleUiX(200));
+    tft.drawString(timerlogic::timerPhaseName(phase), screenWidth / 2, scaleUiY(34));
     tft.setTextPadding(0);
 }
 
@@ -438,7 +426,7 @@ static void drawStateLine(timerlogic::TimerPhase phase)
 // 7-segment rendering no longer fits the panel.
 static void drawBigTime(const char *text, uint16_t color)
 {
-    int maxW = screenWidth - tfx(8);
+    int maxW = screenWidth - scaleUiX(8);
 
     // Font 7 stays at size 1 on both panels: its 48px glyphs are the tallest
     // that fit the band between the state line and the button rows (the band
@@ -452,12 +440,12 @@ static void drawBigTime(const char *text, uint16_t color)
         fontKey = 4;
     }
 
-    int y = tfy(58);
+    int y = scaleUiY(58);
     if (fontKey != cachedBigFont) {
         // Font or size changed: glyph heights differ, so clear the whole
         // band once instead of relying on padding.
         cachedBigFont = fontKey;
-        tft.fillRect(0, y, screenWidth, tfy(112) - y, clockBackgroundColor);
+        tft.fillRect(0, y, screenWidth, scaleUiY(112) - y, clockBackgroundColor);
     }
 
     tft.setTextDatum(TC_DATUM);
@@ -506,7 +494,7 @@ static uint16_t formatBigTimer(bool isCountdown, uint64_t now,
 // the doubled digits).
 static void drawZoomTime(const char *text, uint16_t color)
 {
-    int maxW = screenWidth - tfx(8);
+    int maxW = screenWidth - scaleUiX(8);
 
     tft.setTextFont(7);
     tft.setTextSize(2);
@@ -527,7 +515,7 @@ static void drawZoomTime(const char *text, uint16_t color)
         // between the state line and the exit hint instead of relying on
         // padding.
         cachedBigFont = fontKey;
-        tft.fillRect(0, tfy(40), screenWidth, tfy(196) - tfy(40),
+        tft.fillRect(0, scaleUiY(40), screenWidth, scaleUiY(196) - scaleUiY(40),
                      clockBackgroundColor);
     }
 
@@ -553,9 +541,9 @@ static void renderZoomFace(bool full, bool isCountdown)
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
         tft.drawString(isCountdown ? "COUNTDOWN" : "STOPWATCH",
-                       screenWidth / 2, tfy(8));
+                       screenWidth / 2, scaleUiY(8));
         tft.drawString("TAP ANYWHERE TO EXIT", screenWidth / 2,
-                       screenHeight - tfy(16));
+                       screenHeight - scaleUiY(16));
     }
 
     if (full || (int)phase != cachedPhase) {
@@ -564,9 +552,9 @@ static void renderZoomFace(bool full, bool isCountdown)
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(phaseColor(phase), clockBackgroundColor);
-        tft.setTextPadding(tfx(200));
+        tft.setTextPadding(scaleUiX(200));
         tft.drawString(timerlogic::timerPhaseName(phase), screenWidth / 2,
-                       tfy(20));
+                       scaleUiY(20));
         tft.setTextPadding(0);
     }
 
@@ -609,7 +597,7 @@ static void drawPrimaryButton(timerlogic::TimerPhase phase)
 // (read-only) while running or paused.
 static void drawDurationRow(timerlogic::TimerPhase phase)
 {
-    tft.fillRect(0, tfy(112), screenWidth, tfy(148) - tfy(112), clockBackgroundColor);
+    tft.fillRect(0, scaleUiY(112), screenWidth, scaleUiY(148) - scaleUiY(112), clockBackgroundColor);
     if (phase == timerlogic::TIMER_RUNNING || phase == timerlogic::TIMER_PAUSED) {
         char buf[16];
         timerlogic::formatHMS(countdown.durationMs / 1000ULL, buf, sizeof(buf));
@@ -617,7 +605,7 @@ static void drawDurationRow(timerlogic::TimerPhase phase)
         tft.setTextSize(1);
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
-        tft.drawString("TOTAL " + String(buf), screenWidth / 2, tfy(122));
+        tft.drawString("TOTAL " + String(buf), screenWidth / 2, scaleUiY(122));
     } else {
         for (int i = 0; i < 4; i++) {
             drawTimerBtn(BTN_ADJ[i], ADJ_LABELS[i], TFT_CYAN, TFT_WHITE);
@@ -640,7 +628,7 @@ static void renderTimerFace(bool full, bool isCountdown)
     if (full) {
         tft.fillScreen(clockBackgroundColor);
         resetRenderCache();
-        tft.drawFastHLine(tfx(10), tfy(30), tfx(300), TFT_DARKGREY);
+        tft.drawFastHLine(scaleUiX(10), scaleUiY(30), scaleUiX(300), TFT_DARKGREY);
         drawTimerBtn(BTN_RESET, "RESET", TFT_RED, TFT_WHITE);
         drawTimerBtn(BTN_PREV, "<", TFT_CYAN, TFT_WHITE);
         drawTimerBtn(BTN_SET, "SETTINGS", TFT_CYAN, TFT_WHITE);
@@ -661,7 +649,7 @@ static void renderTimerFace(bool full, bool isCountdown)
             tft.setTextColor(TFT_DARKGREY, clockBackgroundColor);
             tft.drawString("REMINDER EVERY " + String(projectConfig.timerReminderMin) +
                                " MIN",
-                           screenWidth / 2, tfy(124));
+                           screenWidth / 2, scaleUiY(124));
         }
     }
 
@@ -699,24 +687,6 @@ void renderCountdownFace(bool full)
 
 /*-------- Touch ----------*/
 
-// Face cycling from the [<] / [>] buttons - same behavior as the corner taps
-// on the passive faces (persist + full repaint + suppress until release).
-static void switchFaceBy(int step)
-{
-    projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
-    projectConfig.brightness = backlightLevel; // fold any pending level in
-    projectConfig.saveConfigFile();
-    Log.println("Timer face button - clock face: " +
-                String(clockFaceName(projectConfig.clockFace)));
-    tft.fillScreen(clockBackgroundColor);
-    firstDraw = true;
-    for (int i = 0; i < 4; i++) {
-        worldZones[i].initialized = false;
-    }
-    brightnessBarVisible = false;
-    touchSuppressedUntilRelease = true;
-}
-
 void timerFaceHandleTouch(int x, int y)
 {
     bool isCountdown = (projectConfig.clockFace == FACE_COUNTDOWN);
@@ -738,12 +708,15 @@ void timerFaceHandleTouch(int x, int y)
         switchToScreen(SCREEN_SETTINGS); // suppresses touch until release
         return;
     }
+    // Face cycling from the [<] / [>] buttons - same shared behavior as the
+    // corner taps on the passive faces (persist + full repaint + suppress
+    // until release).
     if (timerBtnHit(BTN_PREV, x, y)) {
-        switchFaceBy(FACE_COUNT - 1);
+        cycleClockFace(FACE_COUNT - 1, "Timer face button");
         return;
     }
     if (timerBtnHit(BTN_NEXT, x, y)) {
-        switchFaceBy(1);
+        cycleClockFace(1, "Timer face button");
         return;
     }
     if (timerBtnHit(BTN_FOCUS, x, y)) {
@@ -822,20 +795,7 @@ void timerFaceHandleTouch(int x, int y)
     int leftThird = screenWidth / 3;
     int rightThird = (screenWidth * 2) / 3;
     if (x < leftThird || x > rightThird) {
-        static unsigned long lastBrightnessTouch = 0;
-        unsigned long currentTime = millis();
-        if (currentTime - lastBrightnessTouch > 10) {
-            backlightLevel = clampBrightness(backlightLevel + (x < leftThird ? -1 : 1));
-            analogWrite(BACKLIGHT_PIN, backlightLevel);
-            manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
-            showBrightnessBar(backlightLevel);
-            brightnessBarVisible = true;
-            brightnessBarShownTime = currentTime;
-            lastBrightnessTouch = currentTime;
-            Log.println(String(x < leftThird ? "Timer face - Dimmer: "
-                                             : "Timer face - Brighter: ") +
-                        String(backlightLevel));
-        }
+        brightnessGestureStep(x < leftThird ? -1 : +1);
     }
 }
 

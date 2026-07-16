@@ -26,13 +26,6 @@ static unsigned long weatherRefreshMs()
     return (unsigned long)constrain(projectConfig.weatherRefreshMin, 5, 120) * 60000UL;
 }
 
-struct RenderBufferReleaseGuard
-{
-    bool released;
-    RenderBufferReleaseGuard() : released(clockReleaseRenderBufferForNetwork()) {}
-    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
-};
-
 // City coordinates the fetch task works from. Snapshotted from worldZones on
 // the MAIN core (weatherBegin / weatherInvalidate), so the task never reads
 // the zones' Strings while the touch UI might be reassigning them.

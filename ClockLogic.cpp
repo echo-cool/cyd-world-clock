@@ -6,9 +6,7 @@
 
 #include "brightness.h"
 #include "clockFaces.h"
-#include "genericBaseProject.h" // BACKLIGHT_PIN
 #include "holidayService.h"     // holidaysBegin, getHolidayName
-#include "marketHolidays.h"
 #include "fontTimeDigits.h" // anti-aliased VLW digits for the quadrant times
 #include "projectConfig.h"  // home-screen extras toggles
 #include "serialCommands.h"
@@ -20,7 +18,6 @@
 #include "netCheck.h"       // captivePortalActive - login-required indicator
 #include "wifiRelay.h"      // wifiRelayRequested - web-triggered login helper
 #include "timeFormat.h"     // puretime::formatHHMM - host-tested 12/24h formatting
-#include "marketSession.h"  // host-tested trading-session membership math
 
 // Off-screen buffer for one full clock quadrant (160x120 on CYD, 240x160 on
 // Hosyond 4.0). Each
@@ -77,15 +74,6 @@ WorldClockZone worldZones[4] = {
 
 // Global variables for touch and backlight control
 bool firstDraw = true;
-int backlightLevel = 80; // PWM value (0-255)
-
-// Brightness bar state (globals so the touch UI can reset them cleanly)
-unsigned long brightnessBarShownTime = 0;
-bool brightnessBarVisible = false;
-
-// Manual brightness override: when the user changes brightness (touch or serial),
-// auto-brightness is suspended until this timestamp so the two don't fight.
-unsigned long manualBrightnessUntil = 0;
 
 // Global variables for flashing market status messages
 unsigned long lastFlashTime = 0;
@@ -105,13 +93,11 @@ static bool wxAlertPhaseJustChanged = false;
 static unsigned long wxAlertPhaseSince = 0;
 
 // Function declarations for flashing functionality
-bool shouldMessageFlash(String message);
 void updateFlashState();
 void updateWeatherAlertPhase();
 void resetFlashChangeFlag();
 void updateDynamicQuadrantArea(WorldClockZone &zone, int quadrantIndex);
 bool needsDynamicQuadrantAreaUpdate(WorldClockZone &zone);
-void adjustBrightnessAuto();
 
 void SetupCYD()
 {
@@ -160,150 +146,8 @@ String formatHHMM(time_t local, bool &pm)
     return String(puretime::formatHHMM(hour(local), minute(local), SHOW_24HOUR, pm).c_str());
 }
 
-// Sun elevation in degrees above the horizon at utc for a site, via NOAA's
-// simplified solar position algorithm (Fourier-series equation of time and
-// declination). Accurate to ~0.1 degrees - plenty for picking display colors.
-static float solarElevationDeg(float latDeg, float lonDeg, time_t utc)
-{
-    int doy = (int)(daysFromCivil(year(utc), month(utc), day(utc)) -
-                    daysFromCivil(year(utc), 1, 1)) + 1;
-    float hourUtc = hour(utc) + minute(utc) / 60.0f;
-    float g = 2.0f * PI / 365.0f * (doy - 1 + (hourUtc - 12.0f) / 24.0f);
-    float eqtimeMin = 229.18f * (0.000075f + 0.001868f * cosf(g) - 0.032077f * sinf(g)
-                                 - 0.014615f * cosf(2 * g) - 0.040849f * sinf(2 * g));
-    float declRad = 0.006918f - 0.399912f * cosf(g) + 0.070257f * sinf(g)
-                    - 0.006758f * cosf(2 * g) + 0.000907f * sinf(2 * g)
-                    - 0.002697f * cosf(3 * g) + 0.00148f * sinf(3 * g);
-    float trueSolarMin = hourUtc * 60.0f + eqtimeMin + 4.0f * lonDeg;
-    float hourAngleDeg = trueSolarMin / 4.0f - 180.0f;
-    while (hourAngleDeg < -180.0f) hourAngleDeg += 360.0f;
-    while (hourAngleDeg > 180.0f) hourAngleDeg -= 360.0f;
-    float latRad = latDeg * DEG_TO_RAD;
-    float cosZen = sinf(latRad) * sinf(declRad) +
-                   cosf(latRad) * cosf(declRad) * cosf(hourAngleDeg * DEG_TO_RAD);
-    if (cosZen > 1.0f) cosZen = 1.0f;
-    if (cosZen < -1.0f) cosZen = -1.0f;
-    return 90.0f - acosf(cosZen) * RAD_TO_DEG;
-}
-
-enum DayPhase
-{
-    PHASE_DAY,     // sun above the horizon
-    PHASE_EVENING, // sun down, before local midnight
-    PHASE_NIGHT    // sun down, small hours
-};
-
-static DayPhase zoneDayPhase(WorldClockZone &zone)
-{
-    time_t local = zone.tz.now();
-    int hr = hour(local);
-
-    float lat, lon;
-    if (getCityCoords(zone.timezone, lat, lon)) {
-        // True day/night from the sun's actual position (so London reads as
-        // night at 4:30 PM in December and as day at 9 PM in June). -0.833
-        // degrees is the standard sunrise/sunset threshold: the sun's upper
-        // limb on the horizon, corrected for atmospheric refraction.
-        if (solarElevationDeg(lat, lon, UTC.now()) > -0.833f) {
-            return PHASE_DAY;
-        }
-        return hr >= 12 ? PHASE_EVENING : PHASE_NIGHT;
-    }
-
-    // Zone outside the preset list (no coordinates): fixed windows, as before
-    if (hr >= 6 && hr < 18) return PHASE_DAY;
-    return hr >= 18 ? PHASE_EVENING : PHASE_NIGHT;
-}
-
-// Cool "night sky" blues used for evening/night text when the readable
-// night-colors option (projectConfig.dayNightIcons) is on. The legacy greys
-// encoded the phase in brightness, but dark grey digits on the black
-// background - on top of the auto-dimmed backlight - made the time hardest
-// to read exactly when it's glanced at half-awake. With the option on, the
-// sun/moon icon carries the day/night meaning instead, so the text can stay
-// readable: warm by day, cool blue at night.
-static const uint16_t EVENING_TEXT_COLOR = 0x965F; // light ice blue
-static const uint16_t NIGHT_TEXT_COLOR = 0x7D5D;   // dimmer steel blue
-
-uint16_t getDayNightColor(WorldClockZone &zone)
-{
-    bool readable = projectConfig.dayNightIcons;
-    switch (zoneDayPhase(zone)) {
-    case PHASE_DAY: return TFT_ORANGE;
-    case PHASE_EVENING: return readable ? EVENING_TEXT_COLOR : TFT_LIGHTGREY;
-    default: return readable ? NIGHT_TEXT_COLOR : TFT_DARKGREY;
-    }
-}
-
-uint16_t getDayNightLabelColor(WorldClockZone &zone)
-{
-    bool readable = projectConfig.dayNightIcons;
-    switch (zoneDayPhase(zone)) {
-    case PHASE_DAY: return TFT_YELLOW;
-    case PHASE_EVENING: return readable ? EVENING_TEXT_COLOR : TFT_LIGHTGREY;
-    default: return readable ? NIGHT_TEXT_COLOR : TFT_DARKGREY;
-    }
-}
-
-bool zoneIsNight(WorldClockZone &zone)
-{
-    return zoneDayPhase(zone) != PHASE_DAY;
-}
-
-// ~12px sun (day) or crescent moon (evening/night) so the day/night state
-// doesn't ride on text color alone. Sized/positioned to clear the longest
-// centered city names (e.g. SANTA CLARA starts at quadrant x=14).
-static void drawDayNightIcon(TFT_eSPI &gfx, int cx, int cy, DayPhase phase)
-{
-    if (phase == PHASE_DAY) {
-        gfx.fillCircle(cx, cy, 3, TFT_YELLOW);
-        static const int8_t rays[8][4] = {
-            {5, 0, 6, 0}, {-5, 0, -6, 0}, {0, 5, 0, 6}, {0, -5, 0, -6},
-            {4, 4, 5, 5}, {-4, 4, -5, 5}, {4, -4, 5, -5}, {-4, -4, -5, -5}};
-        for (int i = 0; i < 8; i++) {
-            gfx.drawLine(cx + rays[i][0], cy + rays[i][1],
-                         cx + rays[i][2], cy + rays[i][3], TFT_YELLOW);
-        }
-    } else {
-        uint16_t c = (phase == PHASE_EVENING) ? EVENING_TEXT_COLOR : NIGHT_TEXT_COLOR;
-        gfx.fillCircle(cx, cy, 4, c);
-        gfx.fillCircle(cx + 3, cy - 1, 4, clockBackgroundColor); // carve the crescent
-    }
-}
-
-// Public wrapper for the alternate faces: the same sun/moon glyph keyed by
-// the zone's current phase, without exporting the DayPhase enum.
-void drawZoneDayNightIcon(TFT_eSPI &gfx, int cx, int cy, WorldClockZone &zone)
-{
-    drawDayNightIcon(gfx, cx, cy, zoneDayPhase(zone));
-}
-
-// Today's local sunrise/sunset for a zone as minutes-of-day, found by
-// scanning the sun's elevation across the local day in 2-minute steps (the
-// same -0.833 degree horizon the day/night colors use). False when the zone
-// has no preset coordinates or the sun never crosses the horizon today
-// (polar day/night). Cheap enough for once-a-day repaints, not per frame.
-bool zoneSunTimes(WorldClockZone &zone, int &riseMin, int &setMin)
-{
-    float lat, lon;
-    if (!getCityCoords(zone.timezone, lat, lon)) return false;
-
-    time_t local = zone.tz.now();
-    time_t utcNow = UTC.now();
-    long secOfDay = (long)hour(local) * 3600 + (long)minute(local) * 60 + second(local);
-
-    riseMin = -1;
-    setMin = -1;
-    bool prevUp = solarElevationDeg(lat, lon, utcNow - secOfDay) > -0.833f;
-    for (int m = 2; m <= 1440; m += 2) {
-        time_t colUtc = utcNow + ((long)m * 60 - secOfDay);
-        bool up = solarElevationDeg(lat, lon, colUtc) > -0.833f;
-        if (up && !prevUp && riseMin < 0) riseMin = m;
-        if (!up && prevUp && setMin < 0) setMin = m;
-        prevUp = up;
-    }
-    return riseMin >= 0 && setMin >= 0;
-}
+// The sun-position / day-night logic (solar elevation, DayPhase, day/night
+// colors and icons, sunrise/sunset, daylight bar) moved to solarPhase.cpp.
 
 static void drawMiniSun(TFT_eSPI &gfx, int cx, int cy, uint16_t color)
 {
@@ -454,349 +298,8 @@ void drawWeatherIcon(TFT_eSPI &gfx, int cx, int cy, int code, bool night)
 }
 
 
-// Days since 1970-01-01 for a given civil date (Howard Hinnant's algorithm).
-// Used to compare calendar dates between timezones robustly across month/year
-// boundaries instead of comparing bare day-of-month numbers.
-// Show the countdown to the next open only when the open is less than a day
-// away. Longer waits used to render as "OPENS IN 2D 8H", which reads too much
-// like a time ("20 8H") at a glance - those now show a plain red "CLOSED".
-static const long MARKET_COUNTDOWN_MAX_MIN = 24 * 60;
-
-// Format a sub-24h countdown as "5H 03M" or "45 MIN" depending on magnitude.
-static String formatOpenCountdown(long minutes)
-{
-    char buf[12];
-    if (minutes >= 60) {
-        sprintf(buf, "%ldH %02ldM", minutes / 60, minutes % 60);
-    } else {
-        sprintf(buf, "%ld MIN", minutes);
-    }
-    return String(buf);
-}
-
-// Minutes until the next REGULAR session opens, walking real calendar dates
-// so weekends AND full-day exchange holidays (marketHolidays.cpp) are skipped.
-// The scan covers 30 days so long closures (SSE Spring Festival / golden
-// week) still resolve. DST shifts between now and the open are ignored (at
-// most an hour off around a transition weekend); half-day early closes don't
-// move the opens, so they don't matter here.
-static long minutesToNextRegularOpen(const WorldClockZone &zone, int y, int mo, int dd, int totalMinutes)
-{
-    long today = daysFromCivil(y, mo, dd);
-    for (int d = 0; d <= 30; d++) {
-        long days = today + d;
-        int wd = (int)((days + 4) % 7) + 1; // 1=Sunday ... 7=Saturday
-        if (wd == 1 || wd == 7) continue;   // markets closed on weekends
-        int fy, fm, fd;
-        civilFromDays(days, fy, fm, fd);
-        if (isMarketHoliday(zone.market.exchange, fy, fm, fd)) continue;
-        long best = -1;
-        for (int i = 0; i < zone.market.sessionCount; i++) {
-            const TradingSession &session = zone.market.sessions[i];
-            if (session.sessionName != "REGULAR") continue;
-            int start = session.openHour * 60 + session.openMinute;
-            if (d == 0 && start <= totalMinutes) continue; // already past today
-            long m = d * 1440L + start - totalMinutes;
-            if (best < 0 || m < best) best = m;
-        }
-        if (best >= 0) return best;
-    }
-    return -1;
-}
-
-// Status line for a market that is closed: when the next regular open is
-// under 24 hours away, count down to it; further out (long holidays,
-// weekends viewed early) show a plain "CLOSED". Worded "OPENS IN" (not
-// "OPEN IN") so shouldMessageFlash() doesn't treat this always-on countdown
-// as one of the <=10 minute flashing alerts.
-static String closedStatusWithCountdown(const WorldClockZone &zone, int y, int mo, int dd, int totalMinutes)
-{
-    long m = minutesToNextRegularOpen(zone, y, mo, dd, totalMinutes);
-    if (m < 0 || m >= MARKET_COUNTDOWN_MAX_MIN) return zone.market.exchange + " CLOSED";
-    return zone.market.exchange + " OPENS IN " + formatOpenCountdown(m);
-}
-
-String getMarketStatus(WorldClockZone &zone)
-{
-    if (!zone.market.hasMarket) {
-        return ""; // No market for this zone
-    }
-
-    time_t local = zone.tz.now();
-    int currentHour = hour(local);
-    int currentMinute = minute(local);
-    int currentDayOfWeek = weekday(local); // 1=Sunday, 2=Monday, ..., 7=Saturday
-    int currentTotalMinutes = currentHour * 60 + currentMinute;
-    int currentYear = year(local);
-    int currentMonth = month(local);
-    int currentDayOfMonth = day(local);
-
-    // Full-day exchange holiday: closed all day, countdown to the next open
-    // (the countdown itself skips holidays too).
-    if (isMarketHoliday(zone.market.exchange, currentYear, currentMonth, currentDayOfMonth)) {
-        return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
-    }
-
-    // Half-day early close (e.g. NYSE Black Friday 1 PM): the session loop
-    // below truncates sessions at this time and skips the ones that would
-    // start after it. -1 on a normal day.
-    int earlyCloseMinutes = marketEarlyCloseMinutes(zone.market.exchange, currentYear,
-                                                    currentMonth, currentDayOfMonth);
-
-    // Weekend logic - NYSE is closed on Saturday and Sunday
-    if (currentDayOfWeek == 7 || currentDayOfWeek == 1) { // Saturday or Sunday
-        // Check for Sunday evening futures/overnight trading starting at 6 PM ET
-        if (currentDayOfWeek == 1 && zone.market.exchange == "NYSE" && currentTotalMinutes >= 18 * 60) { // Sunday after 6 PM
-            // Check if we have overnight sessions that start Sunday evening
-            for (int i = 0; i < zone.market.sessionCount; i++) {
-                TradingSession session = zone.market.sessions[i];
-                if (session.sessionName == "OVERNIGHT") {
-                    // Sunday 6 PM ET start time for futures markets
-                    int sundayStart = 18 * 60; // 6 PM Sunday
-                    int mondayEnd = session.closeHour * 60 + session.closeMinute; // Monday 4 AM
-
-                    if (currentTotalMinutes >= sundayStart) {
-                        // Calculate minutes until Monday 4 AM close
-                        int minutesToClose = (24 * 60) - currentTotalMinutes + mondayEnd;
-                        if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
-                            return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
-                        }
-                        return zone.market.exchange + " " + session.sessionName + " OPEN";
-                    }
-                }
-            }
-        }
-        return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
-    } else if (currentDayOfWeek == 6) { // Friday
-        // Friday may have extended evening hours - check if overnight sessions
-        // extend into the weekend. Not on a half day (e.g. the day after
-        // Thanksgiving is always a Friday): the evening sessions don't run.
-        if (zone.market.exchange == "NYSE" && earlyCloseMinutes < 0) {
-            for (int i = 0; i < zone.market.sessionCount; i++) {
-                TradingSession session = zone.market.sessions[i];
-                if (session.sessionName == "OVERNIGHT" && currentTotalMinutes >= 20 * 60) { // After 8 PM Friday
-                    // Overnight session continues into weekend (Friday 8 PM to Sunday)
-                    return zone.market.exchange + " OVERNIGHT OPEN";
-                }
-            }
-        }
-        // Otherwise check normal sessions below
-    }
-
-    // Check each trading session
-    for (int i = 0; i < zone.market.sessionCount; i++) {
-        TradingSession session = zone.market.sessions[i];
-        if (session.sessionName.length() == 0) continue; // Skip empty sessions
-
-        int sessionStart = session.openHour * 60 + session.openMinute;
-        int sessionEnd = session.closeHour * 60 + session.closeMinute;
-
-        // On a half day the exchange stops at earlyCloseMinutes: sessions
-        // that would start at/after it don't run, the one in progress ends
-        // there instead.
-        if (earlyCloseMinutes >= 0) {
-            if (sessionEnd < sessionStart) {
-                // Spans midnight: tonight's session won't start. Keep only the
-                // after-midnight tail, which belongs to the previous
-                // (full-length) trading day.
-                if (currentTotalMinutes >= sessionEnd) continue;
-            } else {
-                if (sessionStart >= earlyCloseMinutes) continue;
-                if (sessionEnd > earlyCloseMinutes) sessionEnd = earlyCloseMinutes;
-            }
-        }
-
-        // Membership + countdown math (incl. the midnight-spanning cases)
-        // lives in market::* so it is unit-tested on the host.
-        if (market::inSession(currentTotalMinutes, sessionStart, sessionEnd)) {
-            // Currently in this session - check if closing soon
-            int minutesToClose = market::minutesUntilClose(currentTotalMinutes, sessionStart, sessionEnd);
-
-            if (minutesToClose <= MARKET_STATUS_MESSAGE_MIN) {
-                if (session.sessionName == "REGULAR") {
-                    return zone.market.exchange + " CLOSE IN " + String(minutesToClose) + " MIN";
-                } else {
-                    return zone.market.exchange + " " + session.sessionName + " CLOSE IN " + String(minutesToClose) + " MIN";
-                }
-            }
-
-            if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN";
-            } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN";
-            }
-        }
-
-        // Check if next session is opening soon. A negative result means a
-        // normal same-day session whose open is already past - look to the
-        // next day (handled by later sessions / the closed-countdown below).
-        int minutesToOpen = market::minutesUntilOpen(currentTotalMinutes, sessionStart, sessionEnd);
-        if (minutesToOpen < 0) {
-            continue;
-        }
-
-        if (minutesToOpen <= MARKET_STATUS_MESSAGE_MIN) {
-            if (session.sessionName == "REGULAR") {
-                return zone.market.exchange + " OPEN IN " + String(minutesToOpen) + " MIN";
-            } else {
-                return zone.market.exchange + " " + session.sessionName + " OPEN IN " + String(minutesToOpen) + " MIN";
-            }
-        }
-    }
-
-    return closedStatusWithCountdown(zone, currentYear, currentMonth, currentDayOfMonth, currentTotalMinutes);
-}
-
-uint16_t getMarketStatusColor(String status)
-{
-    // Countdown to the next regular open ("NYSE OPENS IN 5H 03M") - checked
-    // first because it would otherwise match the generic " OPEN" case below.
-    // Yellow: "about to open" sits between closed (red) and open (green).
-    if (status.indexOf("OPENS IN") != -1) {
-        return TFT_YELLOW;
-    }
-
-    // Check for specific session types first (before generic OPEN check)
-    if (status.indexOf("AFTER-HRS OPEN") != -1) {
-        return TFT_CYAN;    // Cyan for extended/after-hours trading
-    } else if (status.indexOf("OVERNIGHT OPEN") != -1 || status.indexOf("PRE-MARKET OPEN") != -1) {
-        return TFT_BLUE;    // Blue for overnight/pre-market
-    } else if (status.indexOf("CLOSING OPEN") != -1) {
-        return TFT_YELLOW;  // Yellow for closing auction period
-    } else if (status.indexOf("CLOSED") != -1) {
-        return TFT_RED;     // Red for closed market
-    } else if (status.indexOf(" OPEN") != -1 && status.indexOf("OPEN ") == -1) {
-        return TFT_GREEN;   // Bright green for regular trading (e.g. "NYSE OPEN")
-    } else if (status.indexOf("OPEN ") != -1) {
-        return TFT_YELLOW;  // Yellow for opening soon countdown (e.g. "NYSE OPEN 15MIN")
-    } else if (status.indexOf("CLOSE ") != -1) {
-        return TFT_ORANGE;  // Orange for closing soon countdown (e.g. "NYSE CLOSE 10MIN")
-    } else {
-        return TFT_WHITE;   // Default color
-    }
-}
-
-// Color for the daylight bar at a given solar elevation: deep blue night,
-// dark blue twilight, orange around the horizon, warm yellow midday.
-// Piecewise-linear blend between the anchor stops.
-static uint16_t daylightBarColor(float elevDeg)
-{
-    static const struct { float e; uint8_t r, g, b; } stops[] = {
-        {-18.0f, 8, 10, 35},    // astronomical night
-        {-6.0f, 30, 40, 90},    // civil twilight
-        {0.0f, 200, 90, 25},    // sunrise / sunset
-        {12.0f, 255, 160, 30},  // low sun
-        {40.0f, 255, 225, 90},  // high sun
-    };
-    const int n = sizeof(stops) / sizeof(stops[0]);
-    if (elevDeg <= stops[0].e) return tft.color565(stops[0].r, stops[0].g, stops[0].b);
-    for (int i = 1; i < n; i++) {
-        if (elevDeg <= stops[i].e) {
-            float f = (elevDeg - stops[i - 1].e) / (stops[i].e - stops[i - 1].e);
-            uint8_t r = stops[i - 1].r + f * (stops[i].r - stops[i - 1].r);
-            uint8_t g = stops[i - 1].g + f * (stops[i].g - stops[i - 1].g);
-            uint8_t b = stops[i - 1].b + f * (stops[i].b - stops[i - 1].b);
-            return tft.color565(r, g, b);
-        }
-    }
-    return tft.color565(stops[n - 1].r, stops[n - 1].g, stops[n - 1].b);
-}
-
-// Daylight gradient bar: the zone's local 00:00-24:00 mapped left to
-// right, each column colored by the sun's real elevation at that moment
-// today (same solar math as the day/night colors), with a white tick at the
-// current time. Shows at a glance how deep into day or night each city is.
-// Skipped for zones without preset coordinates. Shared with the big-clock
-// face (clockFaces.cpp), which draws it thicker than the quadrants' 3px.
-void renderDaylightBar(TFT_eSPI &gfx, int x, int y, int w, WorldClockZone &zone,
-                       int h)
-{
-    float lat, lon;
-    if (!getCityCoords(zone.timezone, lat, lon)) return;
-
-    time_t local = zone.tz.now();
-    time_t utcNow = UTC.now();
-    long secOfDay = (long)hour(local) * 3600 + (long)minute(local) * 60 + second(local);
-
-    for (int i = 0; i < w; i++) {
-        long colSec = (long)i * 86400L / (w - 1);
-        time_t colUtc = utcNow + (colSec - secOfDay);
-        gfx.drawFastVLine(x + i, y, h, daylightBarColor(solarElevationDeg(lat, lon, colUtc)));
-    }
-
-    // "Now" tick, with background-color gaps so it reads inside the bright
-    // midday section too
-    int tickX = x + (int)(secOfDay * (long)(w - 1) / 86400L);
-    gfx.drawFastVLine(tickX - 1, y - 2, h + 4, clockBackgroundColor);
-    gfx.drawFastVLine(tickX + 1, y - 2, h + 4, clockBackgroundColor);
-    gfx.drawFastVLine(tickX, y - 2, h + 4, TFT_WHITE);
-}
-
-// Minutes until the REGULAR session currently in progress closes; -1 when
-// no regular session is running. Half-day early closes truncate the session,
-// matching getMarketStatus. Feeds the markets face's "CLOSES IN" detail -
-// the quadrants keep the shorter "OPEN" status line.
-long marketMinutesToRegularClose(WorldClockZone &zone)
-{
-    if (!zone.market.hasMarket) return -1;
-
-    time_t local = zone.tz.now();
-    int wd = weekday(local);
-    if (wd == 1 || wd == 7) return -1; // weekend
-    if (isMarketHoliday(zone.market.exchange, year(local), month(local), day(local))) return -1;
-
-    int early = marketEarlyCloseMinutes(zone.market.exchange, year(local), month(local), day(local));
-    int nowMin = hour(local) * 60 + minute(local);
-    for (int i = 0; i < zone.market.sessionCount; i++) {
-        const TradingSession &s = zone.market.sessions[i];
-        if (s.sessionName != "REGULAR") continue;
-        int start = s.openHour * 60 + s.openMinute;
-        int end = s.closeHour * 60 + s.closeMinute;
-        if (early >= 0) {
-            if (start >= early) continue;
-            if (end > early) end = early;
-        }
-        if (market::inSession(nowMin, start, end)) {
-            return market::minutesUntilClose(nowMin, start, end);
-        }
-    }
-    return -1;
-}
-
-// Fraction (0..1) of the exchange's regular trading day already elapsed;
-// false when the exchange is outside it (weekend, holiday, before open /
-// after close). The span runs from the first REGULAR open to the last
-// REGULAR close - the SSE lunch break stays inside the span - and half-day
-// early closes truncate it, matching getMarketStatus. Shared with the
-// markets face (clockFaces.cpp).
-bool marketDayProgress(WorldClockZone &zone, float &frac)
-{
-    if (!zone.market.hasMarket) return false;
-
-    time_t local = zone.tz.now();
-    int wd = weekday(local);
-    if (wd == 1 || wd == 7) return false; // weekend
-    if (isMarketHoliday(zone.market.exchange, year(local), month(local), day(local))) return false;
-
-    int openMin = -1, closeMin = -1;
-    for (int i = 0; i < zone.market.sessionCount; i++) {
-        const TradingSession &s = zone.market.sessions[i];
-        if (s.sessionName != "REGULAR") continue;
-        int start = s.openHour * 60 + s.openMinute;
-        int end = s.closeHour * 60 + s.closeMinute;
-        if (openMin < 0 || start < openMin) openMin = start;
-        if (end > closeMin) closeMin = end;
-    }
-    if (openMin < 0) return false;
-
-    int early = marketEarlyCloseMinutes(zone.market.exchange, year(local), month(local), day(local));
-    if (early >= 0 && early < closeMin) closeMin = early;
-
-    int nowMin = hour(local) * 60 + minute(local);
-    if (closeMin <= openMin || nowMin < openMin || nowMin >= closeMin) return false;
-    frac = (float)(nowMin - openMin) / (float)(closeMin - openMin);
-    return true;
-}
+// The market/trading-session status logic (getMarketStatus and friends)
+// moved to marketStatus.cpp.
 
 // What the quadrant's bottom status line should show right now: the market
 // status only. Weather alerts use the larger weekday line above the date.
@@ -1012,8 +515,7 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     // Day name with the day-offset vs home (top-left quadrant). Compare actual
     // calendar dates (not bare day-of-month) so it stays correct across month
     // and year boundaries.
-    static const char *dayNames[8] = {"", "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-    String dayText = dayNames[weekday(local)];
+    String dayText = DAY_NAMES[weekday(local)];
     time_t homeTime = worldZones[0].tz.now();
     long dayDiff = daysFromCivil(year(local), month(local), day(local)) -
                    daysFromCivil(year(homeTime), month(homeTime), day(homeTime));
@@ -1198,11 +700,6 @@ static void renderQuadrantContent(TFT_eSPI &gfx, int ox, int oy, WorldClockZone 
     }
 }
 
-bool shouldMessageFlash(String message)
-{
-    return (message.indexOf("CLOSE IN") != -1 || message.indexOf("OPEN IN") != -1);
-}
-
 void updateFlashState()
 {
     unsigned long currentTime = millis();
@@ -1267,6 +764,15 @@ void updateDynamicQuadrantArea(WorldClockZone &zone, int quadrantIndex)
     tft.resetViewport();
 }
 
+void invalidateHomeScreen(bool clearScreen)
+{
+    if (clearScreen) tft.fillScreen(clockBackgroundColor);
+    firstDraw = true;
+    for (int i = 0; i < 4; i++) {
+        worldZones[i].initialized = false;
+    }
+}
+
 bool hasTimeChanged(WorldClockZone &zone)
 {
     time_t local = zone.tz.now();
@@ -1275,16 +781,25 @@ bool hasTimeChanged(WorldClockZone &zone)
 
     // Check if timezone is returning valid time
     if (local < 1000000000) { // Before year 2001 - invalid timestamp
-        // Force reinitialize timezone if it's giving invalid time
-        if (zone.timezone.length() > 0) {
+        // Retry the timezone setup, but never more than once per zone per
+        // minute and only while WiFi is up: setLocation() blocks on UDP with
+        // multi-second timeouts, and this runs in the draw path - unthrottled
+        // retries (4 zones, every loop) freeze the touch UI exactly when NTP
+        // cannot sync.
+        if (zone.timezone.length() > 0 && WiFi.status() == WL_CONNECTED &&
+            (zone.lastTzReinitMs == 0 ||
+             currentMillis - zone.lastTzReinitMs >= TZ_REINIT_RETRY_MS)) {
+            zone.lastTzReinitMs = currentMillis;
             Log.println("Invalid time detected for " + zone.name + ", reinitializing timezone...");
             zone.tz.setLocation(zone.timezone);
             local = zone.tz.now();
+            if (local < 1000000000) {
+                Log.println("Still invalid time for " + zone.name + ", forcing update");
+            }
         }
 
         // If still invalid, force update anyway to show something
         if (local < 1000000000) {
-            Log.println("Still invalid time for " + zone.name + ", forcing update");
             zone.initialized = false; // Force redraw
             return true;
         }
@@ -1362,157 +877,8 @@ bool needsDynamicQuadrantAreaUpdate(WorldClockZone &zone)
     return false;
 }
 
-/*-------- Ambient-light auto-brightness ----------*/
-// Primary source: the CYD's onboard LDR (self-calibrating, see below).
-// Fallback while the sensor is unproven (or disabled): the old fixed schedule
-// on home-zone time. Manual changes (touch / settings / serial) always win
-// for MANUAL_BRIGHTNESS_HOLD_MS via manualBrightnessUntil.
-
-#if USE_LDR_AUTOBRIGHTNESS
-static int ldrLastRaw = 0;    // last raw sample, normalized so higher = darker
-static float ldrEma = -1.0f;  // smoothed reading (-1 until first sample)
-static int ldrMinSeen = 4095; // observed range since boot - used both to
-static int ldrMaxSeen = 0;    // self-calibrate and to prove the sensor works
-static bool ldrDark = false;
-
-// Sample every couple of seconds and classify the room as dark/bright with
-// hysteresis around the midpoint of the observed range. The LDR circuit on
-// some CYD revisions is broken (flat readings); until the range has swung by
-// LDR_MIN_SWING the sensor is not trusted and ldrIsTrusted() stays false.
-static void ldrSample(unsigned long now)
-{
-    static unsigned long lastSample = 0;
-    if (now - lastSample < 2000) return;
-    lastSample = now;
-
-    int raw = analogRead(LDR_PIN);
-#if !LDR_DARK_IS_HIGH
-    raw = 4095 - raw; // normalize: higher = darker
-#endif
-    ldrLastRaw = raw;
-    ldrEma = (ldrEma < 0) ? raw : ldrEma + 0.2f * (raw - ldrEma);
-
-    int e = (int)ldrEma;
-    if (e < ldrMinSeen) ldrMinSeen = e;
-    if (e > ldrMaxSeen) ldrMaxSeen = e;
-
-    if (ldrMaxSeen - ldrMinSeen >= LDR_MIN_SWING) {
-        int mid = (ldrMinSeen + ldrMaxSeen) / 2;
-        int band = (ldrMaxSeen - ldrMinSeen) / 8; // hysteresis, no flapping
-        if (!ldrDark && e > mid + band) {
-            ldrDark = true;
-            Log.println("Auto brightness: room went dark (LDR " + String(e) + ")");
-        } else if (ldrDark && e < mid - band) {
-            ldrDark = false;
-            Log.println("Auto brightness: room went bright (LDR " + String(e) + ")");
-        }
-    }
-}
-
-static bool ldrIsTrusted()
-{
-    return ldrMaxSeen - ldrMinSeen >= LDR_MIN_SWING;
-}
-#endif // USE_LDR_AUTOBRIGHTNESS
-
-void printLdrStatus()
-{
-#if USE_LDR_AUTOBRIGHTNESS
-    Log.println("=== LDR (ambient light sensor, GPIO " + String(LDR_PIN) + ") ===");
-    Log.println("Raw (normalized, higher = darker): " + String(ldrLastRaw));
-    Log.println("Smoothed: " + String((int)ldrEma));
-    Log.println("Range seen since boot: " + String(ldrMinSeen) + " - " + String(ldrMaxSeen));
-    if (ldrIsTrusted()) {
-        Log.println("Sensor trusted: yes | Room: " + String(ldrDark ? "DARK" : "BRIGHT"));
-    } else {
-        Log.println("Sensor trusted: not yet (swing < " + String(LDR_MIN_SWING) +
-                       " counts; using the " + String(projectConfig.nightStartHour) +
-                       "-" + String(projectConfig.nightEndHour) +
-                       "h night window fallback). Cover the sensor");
-        Log.println("or shine a light at it - if the value never moves, this board's");
-        Log.println("LDR circuit is one of the known-bad CYD revisions.");
-    }
-#else
-    Log.println("LDR auto-brightness disabled at compile time (USE_LDR_AUTOBRIGHTNESS=0)");
-#endif
-}
-
-bool getLdrState(bool &trusted, bool &dark, int &smoothed)
-{
-#if USE_LDR_AUTOBRIGHTNESS
-    trusted = ldrIsTrusted();
-    dark = ldrDark;
-    smoothed = (int)ldrEma;
-    return true;
-#else
-    trusted = false;
-    dark = false;
-    smoothed = -1;
-    return false;
-#endif
-}
-
-void adjustBrightnessAuto()
-{
-    unsigned long currentTime = millis();
-
-    // Don't fight a manual brightness change (touch / serial) - let it hold first
-    if (currentTime < manualBrightnessUntil) {
-        return;
-    }
-
-    static unsigned long lastUpdate = 0;
-    if (currentTime - lastUpdate < 250) return;
-    lastUpdate = currentTime;
-
-    int target = -1;
-    int nightTarget = clampBrightness(projectConfig.nightBrightness);
-    int dayTarget = clampBrightness(projectConfig.brightness);
-
-#if USE_LDR_AUTOBRIGHTNESS
-    // Sample even while auto-brightness is switched off so the sensor stays
-    // calibrated (and the status pages stay live) for when it's re-enabled.
-    ldrSample(currentTime);
-#endif
-
-    // Master switch (web settings page): off = ignore the light sensor and
-    // the night schedule, hold the user's set brightness (fading back to it
-    // if a dim was in effect when the switch was flipped).
-    if (!projectConfig.autoBrightness) {
-        target = dayTarget;
-    }
-#if USE_LDR_AUTOBRIGHTNESS
-    else if (ldrIsTrusted()) {
-        target = ldrDark ? nightTarget : dayTarget;
-    }
-#endif
-
-    // Fallback: schedule on home-zone time. The window is configurable from
-    // the web settings page (default 1-7 AM) and may wrap midnight; equal
-    // start/end hours disable it.
-    if (target < 0) {
-        if (!worldZones[0].initialized) return;
-        int currentHour = hour(worldZones[0].tz.now());
-        int s = projectConfig.nightStartHour;
-        int e = projectConfig.nightEndHour;
-        bool night = (s != e) &&
-                     (s < e ? (currentHour >= s && currentHour < e)
-                            : (currentHour >= s || currentHour < e));
-        target = night ? nightTarget : dayTarget;
-    }
-
-    // Fade toward the target instead of jumping (full sweep in a few seconds)
-    if (backlightLevel != target) {
-        int step = 8;
-        if (backlightLevel < target) {
-            backlightLevel = min(backlightLevel + step, target);
-        } else {
-            backlightLevel = max(backlightLevel - step, target);
-        }
-        analogWrite(BACKLIGHT_PIN, backlightLevel);
-    }
-}
-
+// The backlight/brightness control (manual hold, LDR auto-brightness,
+// brightness bar, gesture step) moved to brightnessControl.cpp.
 
 void DrawSingleTimeZone(WorldClockZone &zone, int quadrantIndex)
 {
@@ -1559,54 +925,6 @@ void clockRestoreRenderBufferForNetwork(bool released)
     if (!ok) {
         Log.println("WARNING: quadrant sprite restore failed after network fetch");
     }
-}
-
-void showBrightnessBar(int brightness)
-{
-    // Draw brightness bar in center of screen
-    int barWidth = min(260, screenWidth - 80);
-    int barHeight = 20;
-    int centerX = screenWidth / 2;
-    int barX = (screenWidth - barWidth) / 2;
-    int barY = (screenHeight - barHeight) / 2;
-
-    // Clear area around the bar
-    tft.fillRect(barX - 10, barY - 30, barWidth + 20, barHeight + 60, clockBackgroundColor);
-
-    // Draw "BRIGHTNESS" label
-    tft.setTextFont(1);
-    tft.setTextSize(1);
-    tft.setTextDatum(TC_DATUM);
-    tft.setTextColor(TFT_WHITE, clockBackgroundColor);
-    tft.drawString("BRIGHTNESS", centerX, barY - 20);
-
-    // Draw outer border
-    tft.drawRect(barX - 2, barY - 2, barWidth + 4, barHeight + 4, TFT_WHITE);
-
-    // Fill background (empty part)
-    tft.fillRect(barX, barY, barWidth, barHeight, TFT_BLACK);
-
-    // Calculate fill width based on the supported brightness range.
-    int fillWidth = map(clampBrightness(brightness), BRIGHTNESS_MIN, BRIGHTNESS_MAX, 0, barWidth);
-
-    // Draw filled portion with gradient-like effect
-    uint16_t fillColor;
-    if (brightness < 85) {
-        fillColor = TFT_RED;     // Low brightness - red
-    } else if (brightness < 170) {
-        fillColor = TFT_YELLOW;  // Medium brightness - yellow
-    } else {
-        fillColor = TFT_GREEN;   // High brightness - green
-    }
-
-    if (fillWidth > 0) {
-        tft.fillRect(barX, barY, fillWidth, barHeight, fillColor);
-    }
-
-    // Draw percentage text
-    int percentage = brightnessPercent(brightness);
-    tft.setTextDatum(TC_DATUM);
-    tft.drawString(String(percentage) + "%", centerX, barY + barHeight + 10);
 }
 
 void rollingClockSetup(bool is24Hour, bool usDate)
@@ -1668,8 +986,8 @@ void rollingClockSetup(bool is24Hour, bool usDate)
 
     // Initialize backlight pin with PWM, restoring the saved brightness
     backlightLevel = clampBrightness(projectConfig.brightness);
-    pinMode(BACKLIGHT_PIN, OUTPUT);
-    analogWrite(BACKLIGHT_PIN, backlightLevel);
+    backlightPinSetup();
+    setBacklight(backlightLevel);
 
     Log.println(WiFi.status() == WL_CONNECTED
                     ? "Setting up the 4 time zones..."
@@ -1845,10 +1163,23 @@ TouchPoint readTouchPoint()
     return t;
 }
 
+void cycleClockFace(int step, const char *source)
+{
+    projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
+    // A brightness adjustment may still be pending its bar-timeout save;
+    // fold it into this write instead of dropping it.
+    projectConfig.brightness = backlightLevel;
+    projectConfig.saveConfigFile();
+    Log.println(String(source) + " - clock face: " +
+                clockFaceName(projectConfig.clockFace));
+    // Full repaint, same as returning home from a settings page.
+    invalidateHomeScreen(true);
+    brightnessBarVisible = false;
+    touchSuppressedUntilRelease = true;
+}
+
 void handleTouch()
 {
-    static unsigned long lastTouchTime = 0;
-
     TouchPoint touch = readTouchPoint();
     bool down = (touch.zRaw > 800); // zRaw indicates pressure
 
@@ -1858,8 +1189,6 @@ void handleTouch()
     }
     else if (!touchSuppressedUntilRelease)
     {
-        unsigned long currentTime = millis();
-
         // The timer faces draw visible buttons and retain brightness gestures
         // in otherwise-unused left/right areas. Route their taps there, then
         // continue to the shared brightness-overlay timeout below.
@@ -1891,68 +1220,14 @@ void handleTouch()
             {
                 // Corner tap cycles the clock face; one step per tap (input stays
                 // suppressed until the finger is lifted, like a screen switch).
-                int step = (touch.x < leftThird) ? FACE_COUNT - 1 : 1;
-                projectConfig.clockFace = (projectConfig.clockFace + step) % FACE_COUNT;
-                // A brightness adjustment may still be pending its bar-timeout
-                // save; fold it into this write instead of dropping it.
-                projectConfig.brightness = backlightLevel;
-                projectConfig.saveConfigFile();
-                Log.print(touch.x < leftThird ? "LOWER-LEFT" : "LOWER-RIGHT");
-                Log.print(" touch - clock face: ");
-                Log.println(clockFaceName(projectConfig.clockFace));
-
-                // Full repaint, same as returning home from a settings page
-                tft.fillScreen(clockBackgroundColor);
-                firstDraw = true;
-                for (int i = 0; i < 4; i++)
-                {
-                    worldZones[i].initialized = false;
-                }
-                brightnessBarVisible = false;
-                touchSuppressedUntilRelease = true;
+                cycleClockFace(touch.x < leftThird ? FACE_COUNT - 1 : 1,
+                               touch.x < leftThird ? "LOWER-LEFT touch"
+                                                   : "LOWER-RIGHT touch");
                 return;
             }
 
-            // Debounce - only allow one touch every 10ms for brightness control
-            if (currentTime - lastTouchTime > 10)
-            {
-                if (touch.x < leftThird) // Left third - make dimmer
-                {
-                    backlightLevel = clampBrightness(backlightLevel - 1);
-
-                    Log.print("LEFT touch - Dimmer: ");
-                    Log.println(backlightLevel);
-                }
-                else // Right third - make brighter
-                {
-                    backlightLevel = clampBrightness(backlightLevel + 1);
-
-                    Log.print("RIGHT touch - Brighter: ");
-                    Log.println(backlightLevel);
-                }
-
-                // Apply PWM to backlight pin
-                analogWrite(BACKLIGHT_PIN, backlightLevel);
-
-                // Hold this manual setting before auto-brightness resumes
-                manualBrightnessUntil = currentTime + MANUAL_BRIGHTNESS_HOLD_MS;
-
-                // Show brightness bar
-                showBrightnessBar(backlightLevel);
-                brightnessBarVisible = true;
-                brightnessBarShownTime = currentTime;
-
-                lastTouchTime = currentTime;
-
-                Log.print("Touch at X: ");
-                Log.print(touch.x);
-                Log.print(", Y: ");
-                Log.print(touch.y);
-                Log.print(", Pressure: ");
-                Log.print(touch.zRaw);
-                Log.print(", Brightness: ");
-                Log.println(backlightLevel);
-            }
+            // Left/right third: held-finger dimmer/brighter gesture.
+            brightnessGestureStep(touch.x < leftThird ? -1 : +1);
         }
     }
 
@@ -1966,11 +1241,7 @@ void handleTouch()
             projectConfig.saveConfigFile();
         }
         // Clear the brightness bar area and force a full screen redraw
-        tft.fillScreen(clockBackgroundColor);
-        firstDraw = true; // This will force a complete redraw in the next cycle
-        for (int i = 0; i < 4; i++) {
-            worldZones[i].initialized = false;
-        }
+        invalidateHomeScreen(true);
     }
 }
 
@@ -2012,10 +1283,7 @@ static void serviceWifiIndicator()
         if (labelChanged) {
             // Wipe the previous (possibly wider) label before the new one, via
             // a full repaint so no stray pixels are left behind.
-            firstDraw = true;
-            for (int i = 0; i < 4; i++) {
-                worldZones[i].initialized = false;
-            }
+            invalidateHomeScreen(false);
         }
         if (!drawn || labelChanged || millis() - lastDrawMs >= 250) {
             tft.setTextFont(1);
@@ -2036,10 +1304,8 @@ static void serviceWifiIndicator()
     } else if (drawn) {
         drawn = false;
         shownLabel = nullptr;
-        firstDraw = true; // full repaint to restore what the label covered
-        for (int i = 0; i < 4; i++) {
-            worldZones[i].initialized = false;
-        }
+        // Full repaint to restore what the label covered.
+        invalidateHomeScreen(false);
     }
 }
 

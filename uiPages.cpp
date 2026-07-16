@@ -3,16 +3,19 @@
 #include <SPIFFS.h>       // filesystem usage row on the status page
 #include <WiFi.h>
 #include <esp_system.h>   // esp_reset_reason - reset reason row
+#include <esp_timer.h>    // 64-bit uptime for formatUptime (no 49.7-day wrap)
 #include <soc/soc_caps.h> // SOC_TEMP_SENSOR_SUPPORTED - CPU temp row
 
 #include "brightness.h"
 #include "clockFaces.h"         // ClockFace enum, clockFaceName
 #include "deviceIdentity.h"     // startup device label + MAC
+#include "drdGuard.h"           // rebootCleanly - reboot button / auto-reboot
 #include "firmwareInfo.h"       // firmwareGitHash
-#include "genericBaseProject.h" // BACKLIGHT_PIN, NTP sync state
+#include "genericBaseProject.h" // NTP sync state - status page rows
 #include "holidayService.h"     // holidaysInvalidate, holidayZonesLoaded
 #include "marketHolidays.h"     // marketHolidaysFetchedInfo - status page
 #include "projectConfig.h"
+#include "uiScale.h"            // scaleUiX/Y - shared 320x240 design scaling
 #include "weatherService.h"     // weatherInvalidate
 #include "wifiWatch.h"          // outage history rows on the status page
 #include "netCheck.h"           // captivePortalActive - Wi-Fi login helper
@@ -176,16 +179,6 @@ bool buttonContains(const UIButton &b, int tx, int ty)
     return tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h;
 }
 
-static int scaleUiX(int value)
-{
-    return (value * screenWidth + 160) / 320;
-}
-
-static int scaleUiY(int value)
-{
-    return (value * screenHeight + 120) / 240;
-}
-
 static UIButton scaleUiButton(const UIButton &base)
 {
     UIButton b = {
@@ -323,12 +316,7 @@ void switchToScreen(UIScreen s)
     if (s == SCREEN_HOME)
     {
         // Force a full clock redraw when returning home
-        tft.fillScreen(clockBackgroundColor);
-        firstDraw = true;
-        for (int i = 0; i < 4; i++)
-        {
-            worldZones[i].initialized = false;
-        }
+        invalidateHomeScreen(true);
     }
 }
 
@@ -456,6 +444,15 @@ static void finishTouchCalibration()
         x1 = (v[4] + v[6]) / 2;
         y0 = (v[1] + v[5]) / 2;
         y1 = (v[3] + v[7]) / 2;
+    }
+    // Same sanity check as the bitbang branch below: four taps in roughly the
+    // same spot produce a near-zero raw span, and persisting that mapping
+    // makes touch unusable until recalibrated via serial/web.
+    if (abs(x0 - x1) < 100 || abs(y0 - y1) < 100)
+    {
+        Log.println("Touch calibration rejected - corner readings are too close");
+        closeTouchCalibration();
+        return;
     }
     bool invertX = x0 > x1;
     if (invertX)
@@ -945,9 +942,9 @@ void drawSettingsBrightnessLabel()
 void adjustBacklightFromUi(int delta)
 {
     backlightLevel = clampBrightness(backlightLevel + delta);
-    analogWrite(BACKLIGHT_PIN, backlightLevel);
+    setBacklight(backlightLevel);
     // Hold this manual setting before auto-brightness resumes
-    manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
+    markManualBrightness();
     // Persist so the level survives a reboot (taps are discrete, so this
     // stays well within SPIFFS write-endurance territory)
     projectConfig.brightness = backlightLevel;
@@ -1307,7 +1304,9 @@ const char *resetReasonText()
 
 String formatUptime()
 {
-    unsigned long s = millis() / 1000;
+    // 64-bit microsecond counter: unlike millis(), it doesn't wrap at 49.7
+    // days, so the uptime shown on the status page stays truthful.
+    unsigned long s = (unsigned long)(esp_timer_get_time() / 1000000LL);
     char buf[24];
     sprintf(buf, "%lud %02lu:%02lu:%02lu",
             s / 86400UL, (s / 3600UL) % 24UL, (s / 60UL) % 60UL, s % 60UL);
@@ -1484,10 +1483,9 @@ static void fillDataValues(String *values, uint16_t *colors)
         values[7] = "schedule (LDR unproven)";
     }
 
-    unsigned long nowMs = millis();
-    values[8] = (manualBrightnessUntil > nowMs)
-                    ? "manual, " +
-                          String((manualBrightnessUntil - nowMs + 59999UL) / 60000UL) +
+    unsigned long manualLeftMs = manualBrightnessRemainingMs();
+    values[8] = (manualLeftMs > 0)
+                    ? "manual, " + String((manualLeftMs + 59999UL) / 60000UL) +
                           " min left"
                     : "none";
 
@@ -1830,8 +1828,7 @@ void handleUiTouch()
         if (buttonContains(scaleUiButton(BTN_FAIL_REBOOT), tx, ty))
         {
             Log.println("WiFi failure page: Reboot tapped - restarting");
-            delay(300); // let the log line reach the serial port
-            ESP.restart();
+            rebootCleanly(300); // 300 ms lets the log line reach the serial port
         }
         else if (buttonContains(scaleUiButton(BTN_FAIL_SET), tx, ty))
         {
@@ -2019,8 +2016,7 @@ void renderUiPage()
             {
                 Log.println("WiFi failure page: untouched for 5 min - "
                             "rebooting to rerun the boot recovery sequence");
-                delay(300);
-                ESP.restart();
+                rebootCleanly(300);
             }
         }
     }

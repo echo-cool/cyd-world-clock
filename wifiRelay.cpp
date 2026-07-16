@@ -1,8 +1,8 @@
 #include "wifiRelay.h"
 
 #include <WiFi.h>
-#include <esp_netif.h>
 
+#include "apNat.h"         // shared softAP NAT + DHCP-DNS plumbing
 #include "logBuffer.h"     // Log
 #include "netCheck.h"      // netCheckNow - success detection
 #include "projectConfig.h" // hostname - helper AP SSID
@@ -33,38 +33,10 @@ bool wifiRelayRequested()
     return r;
 }
 
-// Offer the upstream DNS server to helper-AP DHCP clients so the phone can
-// resolve names (and fire its own captive-portal check) with the queries NAT'd
-// upstream. Without this the softAP hands out only itself as DNS and nothing
-// answers, so the phone never sees the portal. Best-effort.
-static void configureApDns()
-{
-    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (!ap) return;
-
-    IPAddress up = WiFi.dnsIP();
-    if ((uint32_t)up == 0) up = IPAddress(8, 8, 8, 8); // fallback if none learned
-
-    esp_netif_dns_info_t dns = {};
-    dns.ip.type = ESP_IPADDR_TYPE_V4;
-    dns.ip.u_addr.ip4.addr = (uint32_t)up;
-
-    esp_netif_dhcps_stop(ap);
-    esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
-    uint8_t offerDns = 0x02; // OFFER_DNS: include the DNS option in DHCP leases
-    esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
-                           &offerDns, sizeof(offerDns));
-    esp_netif_dhcps_start(ap);
-}
-
 static void teardown()
 {
     // Disable NAT on the AP interface, drop the AP, and go back to STA-only.
-    // NAT must be toggled through esp_netif (which hops onto the lwIP task):
-    // the raw ip_napt_enable() trips IDF 5.x's LWIP_CHECK_THREAD_SAFETY
-    // assert when called from this task and reboots the clock.
-    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (ap) esp_netif_napt_disable(ap);
+    apNaptDisable();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
 }
@@ -81,13 +53,11 @@ void wifiRelayStart()
     WiFi.softAPConfig(AP_IP, AP_IP, AP_MASK);
     WiFi.softAP(wifiRelayApSsid().c_str(), AP_PASSWORD);
     delay(100); // let the AP netif come up before touching DHCP / NAPT
-    configureApDns();
+    apOfferUpstreamDns();
 
     // NAT AP-side clients out through the STA interface, so their portal login
-    // is attributed to the clock's (STA) MAC (see teardown() for why this
-    // must use esp_netif rather than the raw lwIP call).
-    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    esp_err_t naptErr = ap ? esp_netif_napt_enable(ap) : ESP_ERR_INVALID_STATE;
+    // is attributed to the clock's (STA) MAC.
+    esp_err_t naptErr = apNaptEnable();
     if (naptErr != ESP_OK)
     {
         // Keep the helper up anyway - the AP still shows the instructions -

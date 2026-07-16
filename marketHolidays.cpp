@@ -224,13 +224,6 @@ static const int MAX_DYN_EXCHANGES = 8;
 static const int MAX_DYN_DATES = 88;
 static const int MAX_DYN_EARLY = 12;
 
-struct RenderBufferReleaseGuard
-{
-    bool released;
-    RenderBufferReleaseGuard() : released(clockReleaseRenderBufferForNetwork()) {}
-    ~RenderBufferReleaseGuard() { clockRestoreRenderBufferForNetwork(released); }
-};
-
 struct DynHolidayTable
 {
     char exchange[8];

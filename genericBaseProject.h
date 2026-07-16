@@ -8,9 +8,6 @@
 #include "projectConfig.h"
 #include "projectDisplay.h"
 
-// Backlight control pin for the selected board profile.
-#define BACKLIGHT_PIN BOARD_BACKLIGHT_PIN
-
 // NTP sync monitoring variables (updated by handleTimeSync in genericBaseProject.cpp)
 extern unsigned long lastSyncTime;
 extern unsigned long syncCount;
@@ -25,12 +22,8 @@ extern ProjectDisplay *projectDisplay;
 
 extern Timezone myTZ;
 
-// Double-reset detector: created in baseProjectSetup(), polled by
-// baseProjectLoop(), and stopped before any reboot so the restart isn't read as
-// a double reset. Two resets within DRD_TIMEOUT force the setup portal open.
-// (Defined in genericBaseProject.cpp; used by setupPortal.cpp too.)
-class DoubleResetDetector;
-extern DoubleResetDetector *drd;
+// The double-reset detector now lives in drdGuard.h - deliberate reboots must
+// go through rebootCleanly() so they are not read as a double reset.
 
 void baseProjectSetup();
 void baseProjectLoop();

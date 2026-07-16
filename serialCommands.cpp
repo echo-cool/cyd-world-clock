@@ -4,9 +4,9 @@
 #include <ezTime.h>
 
 #include "brightness.h"
-#include "ClockLogic.h"         // backlightLevel, worldZones, manualBrightnessUntil
+#include "ClockLogic.h"         // backlightLevel, worldZones, markManualBrightness
 #include "factoryReset.h"       // factoryReset - FACTORYRESET command
-#include "genericBaseProject.h" // BACKLIGHT_PIN
+#include "genericBaseProject.h" // currentNtpServer - SYNC command
 #include "holidayService.h"     // public holiday status
 #include "logShipper.h"         // remote log push status
 #include "marketHolidays.h"     // holiday calendar status / refresh
@@ -29,9 +29,9 @@ void handleSerialCommands()
 
                 if (newBrightness >= BRIGHTNESS_MIN && newBrightness <= BRIGHTNESS_MAX) {
                     backlightLevel = newBrightness;
-                    analogWrite(BACKLIGHT_PIN, backlightLevel);
+                    setBacklight(backlightLevel);
                     // Respect this manual setting before auto-brightness resumes
-                    manualBrightnessUntil = millis() + MANUAL_BRIGHTNESS_HOLD_MS;
+                    markManualBrightness();
                     // Persist so the level survives a reboot
                     projectConfig.brightness = backlightLevel;
                     projectConfig.saveConfigFile();

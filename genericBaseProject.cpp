@@ -1,10 +1,4 @@
 // ----------------------------
-// Library Defines - Need to be defined before library import
-// ----------------------------
-
-#define ESP_DRD_USE_SPIFFS true
-
-// ----------------------------
 // Configuration
 // ----------------------------
 
@@ -40,12 +34,6 @@
 // Additional Libraries - each one of these will need to be installed.
 // ----------------------------
 
-#include <ESP_DoubleResetDetector.h>
-// A library for checking if the reset button has been pressed twice
-// Can be used to enable config mode
-// Can be installed from the library manager (Search for "ESP_DoubleResetDetector")
-// https://github.com/khoih-prog/ESP_DoubleResetDetector
-
 #include <ezTime.h>
 // Library used for getting the time and converting session time
 // to users timezone
@@ -79,16 +67,7 @@
 
 #include "wifiCredentials.h" // host-tested saved-vs-built-in ordering (the boot bug)
 
-// Number of seconds after reset during which a
-// subseqent reset will be considered a double reset.
-#define DRD_TIMEOUT 10
-
-// RTC Memory Address for the DoubleResetDetector to use
-#define DRD_ADDRESS 0
-
-// The double-reset detector instance (declared extern in genericBaseProject.h).
-// Created in baseProjectSetup(); the setup portal stops it before rebooting.
-DoubleResetDetector *drd = nullptr;
+#include "drdGuard.h" // double-reset detector + rebootCleanly()
 
 // NTP sync monitoring variables
 unsigned long lastSyncTime = 0;
@@ -238,8 +217,7 @@ void baseProjectSetup()
     bool wifiConnected = false;
 
     // Initialize double reset detector
-    drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
-    if (drd->detectDoubleReset())
+    if (drdSetupDetect())
     {
         Log.println(F("Forcing config mode as there was a Double reset detected"));
         forceConfig = true;
@@ -404,9 +382,7 @@ void baseProjectSetup()
         if (millis() - wifiWaitStart > 30000UL)
         {
             Log.println("\nStill no WiFi after portal/connect - rebooting to retry");
-            drd->stop(); // avoid the reboot registering as a double reset
-            delay(1000);
-            ESP.restart();
+            rebootCleanly(1000);
         }
         if (++waitTicks % 10 == 0)
         {
@@ -553,7 +529,7 @@ void baseProjectSetup()
 
 void baseProjectLoop()
 {
-    drd->loop();
+    drdLoop();
     // Handle ezTime NTP events on the main core (ezTime is not thread-safe).
     handleTimeSync();
     // Until the first real sync lands, walk the NTP server pool so ezTime's
